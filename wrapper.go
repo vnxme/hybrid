@@ -16,6 +16,7 @@ package hybrid
 
 import (
 	"net"
+	"time"
 )
 
 // fakeAddressPacketConn is a PacketConn wrapper that has
@@ -96,13 +97,125 @@ func (w *fakeAddressStreamConn) RemoteAddr() net.Addr {
 
 func (w *fakeAddressStreamConn) Unwrap() StreamConn { return w.StreamConn }
 
+// idleTimeoutPacketConn is a PacketConn wrapper that closes
+// the underlying connection when its idle timeout has occurred.
+type idleTimeoutPacketConn struct {
+	PacketConn
+
+	deadline Deadline
+	timeout  time.Duration
+}
+
+// IdleTimeoutPacketConn returns a PacketConn implementation that closes itself
+// asynchronously from a separate goroutine once its idle timeout has occurred.
+//
+// The timeout is completely ignored if its value is nil or negative. The timer is
+// reset on each successful read and write operation, i.e. when n > 0 or err == nil.
+//
+// The timer launches when the underlying connection is wrapped, i.e. before this
+// function returns, and stops when the underlying connection is returned by Unwrap,
+// or closed by Close, or closed by the timer itself.
+func IdleTimeoutPacketConn(pc PacketConn, timeout time.Duration) PacketConn {
+	w := &idleTimeoutPacketConn{PacketConn: pc, deadline: HookDeadline(func() { _ = pc.Close() }), timeout: timeout}
+	w.deadline.Set(time.Now().Add(timeout))
+	return w
+}
+
+func (w *idleTimeoutPacketConn) Close() (err error) {
+	if w.timeout > 0 {
+		w.deadline.Set(time.Time{})
+	}
+	return w.PacketConn.Close()
+}
+
+func (w *idleTimeoutPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	n, addr, err = w.PacketConn.ReadFrom(p)
+	if w.timeout > 0 && (n > 0 || err == nil) {
+		w.deadline.Set(time.Now().Add(w.timeout))
+	}
+	return
+}
+
+func (w *idleTimeoutPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	n, err = w.PacketConn.WriteTo(p, addr)
+	if w.timeout > 0 && (n > 0 || err == nil) {
+		w.deadline.Set(time.Now().Add(w.timeout))
+	}
+	return
+}
+
+func (w *idleTimeoutPacketConn) Unwrap() PacketConn {
+	if w.timeout > 0 {
+		w.deadline.Set(time.Time{})
+	}
+	return w.PacketConn
+}
+
+// idleTimeoutStreamConn is a StreamConn wrapper that closes
+// the underlying connection when its idle timeout has occurred.
+type idleTimeoutStreamConn struct {
+	StreamConn
+
+	deadline Deadline
+	timeout  time.Duration
+}
+
+// IdleTimeoutStreamConn returns a StreamConn implementation that closes itself
+// asynchronously from a separate goroutine once its idle timeout has occurred.
+//
+// The timeout is completely ignored if its value is nil or negative. The timer is
+// reset on each successful read and write operation, i.e. when n > 0 or err == nil.
+//
+// The timer launches when the underlying connection is wrapped, i.e. before this
+// function returns, and stops when the underlying connection is returned by Unwrap,
+// or closed by Close, or closed by the timer itself.
+func IdleTimeoutStreamConn(sc StreamConn, timeout time.Duration) StreamConn {
+	w := &idleTimeoutStreamConn{StreamConn: sc, deadline: HookDeadline(func() { _ = sc.Close() }), timeout: timeout}
+	w.deadline.Set(time.Now().Add(timeout))
+	return w
+}
+
+func (w *idleTimeoutStreamConn) Close() (err error) {
+	if w.timeout > 0 {
+		w.deadline.Set(time.Time{})
+	}
+	return w.StreamConn.Close()
+}
+
+func (w *idleTimeoutStreamConn) Read(b []byte) (n int, err error) {
+	n, err = w.StreamConn.Read(b)
+	if w.timeout > 0 && (n > 0 || err == nil) {
+		w.deadline.Set(time.Now().Add(w.timeout))
+	}
+	return
+}
+
+func (w *idleTimeoutStreamConn) Write(b []byte) (n int, err error) {
+	n, err = w.StreamConn.Write(b)
+	if w.timeout > 0 && (n > 0 || err == nil) {
+		w.deadline.Set(time.Now().Add(w.timeout))
+	}
+	return
+}
+
+func (w *idleTimeoutStreamConn) Unwrap() StreamConn {
+	if w.timeout > 0 {
+		w.deadline.Set(time.Time{})
+	}
+	return w.StreamConn
+}
+
 // Interface guards
 var (
 	_ PacketConn = (*fakeAddressPacketConn)(nil)
+	_ PacketConn = (*idleTimeoutPacketConn)(nil)
 
 	_ PacketConnWrapper = (*fakeAddressPacketConn)(nil)
+	_ PacketConnWrapper = (*idleTimeoutPacketConn)(nil)
 
 	_ StreamConn = (*fakeAddressStreamConn)(nil)
+	_ StreamConn = (*idleTimeoutStreamConn)(nil)
 
 	_ StreamConnWrapper = (*fakeAddressStreamConn)(nil)
+	_ StreamConnWrapper = (*idleTimeoutStreamConn)(nil)
 )
