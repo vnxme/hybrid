@@ -44,26 +44,22 @@ import (
 type pipeCtor func() (net.Conn, net.Conn)
 
 func BenchmarkPipe(b *testing.B) {
-	b.Run("StandardUnbufferedSync", func(b *testing.B) {
-		ctor := net.Pipe
-		b.Run(benchmarkPipeChunkedReadName, func(b *testing.B) { benchmarkPipeChunkedRead(b, ctor) })
-		b.Run(benchmarkPipeChunkedWriteName, func(b *testing.B) { benchmarkPipeChunkedWrite(b, ctor) })
-	})
-	b.Run("HybridUnbufferedSync", func(b *testing.B) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(0, false) }
-		b.Run(benchmarkPipeChunkedReadName, func(b *testing.B) { benchmarkPipeChunkedRead(b, ctor) })
-		b.Run(benchmarkPipeChunkedWriteName, func(b *testing.B) { benchmarkPipeChunkedWrite(b, ctor) })
-	})
-	b.Run("HybridUnbufferedSemi", func(b *testing.B) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(0, true) }
-		b.Run(benchmarkPipeChunkedReadName, func(b *testing.B) { benchmarkPipeChunkedRead(b, ctor) })
-		b.Run(benchmarkPipeChunkedWriteName, func(b *testing.B) { benchmarkPipeChunkedWrite(b, ctor) })
-	})
-	b.Run("HybridBufferedAsync", func(b *testing.B) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(10, true) }
-		b.Run(benchmarkPipeChunkedReadName, func(b *testing.B) { benchmarkPipeChunkedRead(b, ctor) })
-		b.Run(benchmarkPipeChunkedWriteName, func(b *testing.B) { benchmarkPipeChunkedWrite(b, ctor) })
-	})
+	benchmarks := []struct {
+		name string
+		ctor pipeCtor
+	}{
+		{"StandardUnbufferedSync", net.Pipe},
+		{"HybridUnbufferedSync", func() (net.Conn, net.Conn) { return Pipe(0, false) }},
+		{"HybridUnbufferedSemi", func() (net.Conn, net.Conn) { return Pipe(0, true) }},
+		{"HybridBufferedAsync", func() (net.Conn, net.Conn) { return Pipe(10, true) }},
+	}
+
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			b.Run(benchmarkPipeChunkedReadName, func(b *testing.B) { benchmarkPipeChunkedRead(b, benchmark.ctor) })
+			b.Run(benchmarkPipeChunkedWriteName, func(b *testing.B) { benchmarkPipeChunkedWrite(b, benchmark.ctor) })
+		})
+	}
 }
 
 func benchmarkPipeChunkedRead(b *testing.B, ctor pipeCtor) {
@@ -147,34 +143,24 @@ func benchmarkPipeChunkedWrite(b *testing.B, ctor pipeCtor) {
 }
 
 func TestPipe(t *testing.T) {
-	t.Run("StandardUnbufferedSync", func(t *testing.T) {
-		ctor := net.Pipe
-		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
-		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
-		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
-		t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, ctor) })
-	})
-	t.Run("HybridUnbufferedSync", func(t *testing.T) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(0, false) }
-		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
-		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
-		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
-		t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, ctor) })
-	})
-	t.Run("HybridUnbufferedSemi", func(t *testing.T) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(0, true) }
-		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
-		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
-		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
-		t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, ctor) })
-	})
-	t.Run("HybridBufferedAsync", func(t *testing.T) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(10, true) }
-		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
-		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
-		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
-		t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, ctor) })
-	})
+	tests := []struct {
+		name string
+		ctor pipeCtor
+	}{
+		{"StandardUnbufferedSync", net.Pipe},
+		{"HybridUnbufferedSync", func() (net.Conn, net.Conn) { return Pipe(0, false) }},
+		{"HybridUnbufferedSemi", func() (net.Conn, net.Conn) { return Pipe(0, true) }},
+		{"HybridBufferedAsync", func() (net.Conn, net.Conn) { return Pipe(10, true) }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, test.ctor) })
+			t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, test.ctor) })
+			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
+			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor) })
+		})
+	}
 }
 
 func testPipeBundle(t *testing.T, ctor pipeCtor) {
