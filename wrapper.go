@@ -205,17 +205,76 @@ func (w *idleTimeoutStreamConn) Unwrap() StreamConn {
 	return w.StreamConn
 }
 
+// packetToStreamConn is a PacketConnWrapper that implements StreamConn.
+type packetToStreamConn struct {
+	PacketConn
+
+	remote net.Addr
+}
+
+// PacketToStreamConn returns a StreamConn implementation based on
+// the underlying PacketConn with the given remote address.
+//
+// The pre-defined remote address is used by the RemoteAddr and Write methods.
+// The Read method is unsafe because no filters apply to the remote address.
+func PacketToStreamConn(pc PacketConn, remote net.Addr) StreamConn {
+	return &packetToStreamConn{pc, remote}
+}
+
+func (w *packetToStreamConn) Read(b []byte) (n int, err error) {
+	n, _, err = w.ReadFrom(b)
+	return
+}
+
+func (w *packetToStreamConn) Write(b []byte) (n int, err error) {
+	return w.WriteTo(b, w.remote)
+}
+
+func (w *packetToStreamConn) RemoteAddr() net.Addr { return w.remote }
+
+func (w *packetToStreamConn) Unwrap() PacketConn { return w.PacketConn }
+
+// streamToPacketConn is a StreamConnWrapper that implements PacketConn.
+type streamToPacketConn struct {
+	StreamConn
+}
+
+// StreamToPacketConn returns a PacketConn implementation based on
+// the underlying StreamConn with the given remote address.
+//
+// The underlying remote address is used by the Read method. The Write method
+// is unsafe because the remote address argument is completely ignored.
+func StreamToPacketConn(sc StreamConn) PacketConn {
+	return &streamToPacketConn{sc}
+}
+
+func (w *streamToPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	n, err = w.Read(p)
+	addr = w.RemoteAddr()
+	return
+}
+
+func (w *streamToPacketConn) WriteTo(p []byte, _ net.Addr) (n int, err error) {
+	return w.Write(p)
+}
+
+func (w *streamToPacketConn) Unwrap() StreamConn { return w.StreamConn }
+
 // Interface guards
 var (
 	_ PacketConn = (*fakeAddressPacketConn)(nil)
 	_ PacketConn = (*idleTimeoutPacketConn)(nil)
+	_ PacketConn = (*streamToPacketConn)(nil)
 
 	_ PacketConnWrapper = (*fakeAddressPacketConn)(nil)
 	_ PacketConnWrapper = (*idleTimeoutPacketConn)(nil)
+	_ PacketConnWrapper = (*packetToStreamConn)(nil)
 
 	_ StreamConn = (*fakeAddressStreamConn)(nil)
 	_ StreamConn = (*idleTimeoutStreamConn)(nil)
+	_ StreamConn = (*packetToStreamConn)(nil)
 
 	_ StreamConnWrapper = (*fakeAddressStreamConn)(nil)
 	_ StreamConnWrapper = (*idleTimeoutStreamConn)(nil)
+	_ StreamConnWrapper = (*streamToPacketConn)(nil)
 )
