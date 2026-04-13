@@ -41,7 +41,7 @@ import (
 	"golang.org/x/net/nettest"
 )
 
-type pipeCtor func() (net.Conn, net.Conn)
+type pipeCtor func() (StreamConn, StreamConn)
 
 func BenchmarkPipe(b *testing.B) {
 	benchmarks := []struct {
@@ -49,9 +49,9 @@ func BenchmarkPipe(b *testing.B) {
 		ctor pipeCtor
 	}{
 		{"StandardUnbufferedSync", net.Pipe},
-		{"HybridUnbufferedSync", func() (net.Conn, net.Conn) { return Pipe(0, false) }},
-		{"HybridUnbufferedSemi", func() (net.Conn, net.Conn) { return Pipe(0, true) }},
-		{"HybridBufferedAsync", func() (net.Conn, net.Conn) { return Pipe(10, true) }},
+		{"HybridUnbufferedSync", func() (StreamConn, StreamConn) { return Pipe(0, false) }},
+		{"HybridUnbufferedSemi", func() (StreamConn, StreamConn) { return Pipe(0, true) }},
+		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return Pipe(10, true) }},
 	}
 
 	for _, benchmark := range benchmarks {
@@ -148,9 +148,9 @@ func TestPipe(t *testing.T) {
 		ctor pipeCtor
 	}{
 		{"StandardUnbufferedSync", net.Pipe},
-		{"HybridUnbufferedSync", func() (net.Conn, net.Conn) { return Pipe(0, false) }},
-		{"HybridUnbufferedSemi", func() (net.Conn, net.Conn) { return Pipe(0, true) }},
-		{"HybridBufferedAsync", func() (net.Conn, net.Conn) { return Pipe(10, true) }},
+		{"HybridUnbufferedSync", func() (StreamConn, StreamConn) { return Pipe(0, false) }},
+		{"HybridUnbufferedSemi", func() (StreamConn, StreamConn) { return Pipe(0, true) }},
+		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return Pipe(10, true) }},
 	}
 
 	for _, test := range tests {
@@ -165,7 +165,7 @@ func TestPipe(t *testing.T) {
 
 func testPipeBundle(t *testing.T, ctor pipeCtor) {
 	t.Helper()
-	nettest.TestConn(t, func() (c1, c2 net.Conn, stop func(), err error) {
+	nettest.TestConn(t, func() (c1, c2 StreamConn, stop func(), err error) {
 		c1, c2 = ctor()
 		stop = func() {
 			_ = c1.Close()
@@ -256,7 +256,7 @@ func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
 	_ = c2.Close()
 }
 
-func testPipeSliceAlias(t *testing.T, ctor func() (net.Conn, net.Conn)) {
+func testPipeSliceAlias(t *testing.T, ctor func() (StreamConn, StreamConn)) {
 	t.Helper()
 	c1, c2 := ctor()
 

@@ -14,7 +14,10 @@
 
 package hybrid
 
-import "time"
+import (
+	"net"
+	"time"
+)
 
 // Deadline is an abstraction for handling timeouts.
 type Deadline interface {
@@ -26,3 +29,6 @@ type Deadline interface {
 	// Wait returns a channel that is closed when the deadline is exceeded.
 	Wait() chan struct{}
 }
+
+// StreamConn is an alias for net.Conn, i.e. a generic stream-oriented network connection.
+type StreamConn = net.Conn

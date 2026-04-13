@@ -78,7 +78,7 @@ type pipe struct {
 }
 
 // Pipe creates an in-memory, full duplex network connection;
-// both ends implement the [net.Conn] interface. It can be:
+// both ends implement the StreamConn interface. It can be:
 //
 // (a) Unbuffered and synchronous.
 // Reads on one end are matched with writes on the other,
@@ -98,7 +98,7 @@ type pipe struct {
 // Note: when the remote end is closed, (a) returns io.EOF immediately
 // after that, but (b) and (c) return io.EOF only once there are no more
 // packets left in the read channel and no more bytes partially unread.
-func Pipe(queueSize int, partialRead bool) (net.Conn, net.Conn) {
+func Pipe(queueSize int, partialRead bool) (StreamConn, StreamConn) {
 	cb1 := make(chan []byte, queueSize)
 	cb2 := make(chan []byte, queueSize)
 	cn1 := make(chan int)
@@ -282,6 +282,6 @@ const pipeNetwork = "pipe"
 
 // Interface guards
 var (
-	_ net.Addr = (*pipeAddr)(nil)
-	_ net.Conn = (*pipe)(nil)
+	_ net.Addr   = (*pipeAddr)(nil)
+	_ StreamConn = (*pipe)(nil)
 )
