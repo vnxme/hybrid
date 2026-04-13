@@ -37,6 +37,11 @@ import (
 type pipeCtor func() (net.Conn, net.Conn)
 
 func TestPipe(t *testing.T) {
+	t.Run("StandardUnbufferedSync", func(t *testing.T) {
+		ctor := net.Pipe
+		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
+		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
+	})
 	t.Run("HybridUnbufferedSync", func(t *testing.T) {
 		ctor := Pipe
 		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
