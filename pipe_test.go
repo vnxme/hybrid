@@ -38,8 +38,8 @@ func TestPipe(t *testing.T) {
 	nettest.TestConn(t, func() (c1, c2 net.Conn, stop func(), err error) {
 		c1, c2 = Pipe()
 		stop = func() {
-			c1.Close()
-			c2.Close()
+			_ = c1.Close()
+			_ = c2.Close()
 		}
 		return
 	})
@@ -47,7 +47,7 @@ func TestPipe(t *testing.T) {
 
 func TestPipeCloseError(t *testing.T) {
 	c1, c2 := Pipe()
-	c1.Close()
+	_ = c1.Close()
 
 	if _, err := c1.Read(nil); !errors.Is(err, io.ErrClosedPipe) {
 		t.Errorf("c1.Read() = %v, want io.ErrClosedPipe", err)
