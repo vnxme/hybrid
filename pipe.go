@@ -37,65 +37,6 @@ import (
 	"time"
 )
 
-// pipeDeadline is an abstraction for handling timeouts.
-type pipeDeadline struct {
-	timer  *time.Timer
-	cancel chan struct{} // Must be non-nil
-	mu     sync.Mutex    // Guards timer and cancel
-}
-
-func makePipeDeadline() pipeDeadline {
-	return pipeDeadline{cancel: make(chan struct{})}
-}
-
-// set sets the point in time when the deadline will time out.
-// A timeout event is signaled by closing the channel returned by waiter.
-// Once a timeout has occurred, the deadline can be refreshed by specifying a
-// t value in the future.
-//
-// A zero value for t prevents timeout.
-func (d *pipeDeadline) set(t time.Time) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if d.timer != nil && !d.timer.Stop() {
-		<-d.cancel // Wait for the timer callback to finish and close cancel
-	}
-	d.timer = nil
-
-	// Time is zero, then there is no deadline.
-	closed := isClosedChan(d.cancel)
-	if t.IsZero() {
-		if closed {
-			d.cancel = make(chan struct{})
-		}
-		return
-	}
-
-	// Time in the future, set up a timer to cancel in the future.
-	if dur := time.Until(t); dur > 0 {
-		if closed {
-			d.cancel = make(chan struct{})
-		}
-		d.timer = time.AfterFunc(dur, func() {
-			close(d.cancel)
-		})
-		return
-	}
-
-	// Time in the past, so close immediately.
-	if !closed {
-		close(d.cancel)
-	}
-}
-
-// wait returns a channel that is closed when the deadline is exceeded.
-func (d *pipeDeadline) wait() chan struct{} {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.cancel
-}
-
 func isClosedChan(c <-chan struct{}) bool {
 	select {
 	case <-c:
@@ -111,8 +52,8 @@ func (pipeAddr) Network() string { return pipeNetwork }
 func (pipeAddr) String() string  { return pipeNetwork }
 
 type pipe struct {
-	readDeadline  pipeDeadline
-	writeDeadline pipeDeadline
+	rdDeadline Deadline
+	wrDeadline Deadline
 
 	// Used by local Read to interact with remote Write.
 	// For a sync/semi-sync pipe, receive on rdRx is always followed by send on rdTx
@@ -169,17 +110,17 @@ func Pipe(queueSize int, partialRead bool) (net.Conn, net.Conn) {
 		rdRx: cb1, rdTx: cn1,
 		wrTx: cb2, wrRx: cn2,
 		localDone: done1, remoteDone: done2,
-		readDeadline:  makePipeDeadline(),
-		writeDeadline: makePipeDeadline(),
-		rdPart:        partialRead,
+		rdDeadline: HookDeadline(nil),
+		wrDeadline: HookDeadline(nil),
+		rdPart:     partialRead,
 	}
 	p2 := &pipe{
 		rdRx: cb2, rdTx: cn2,
 		wrTx: cb1, wrRx: cn1,
 		localDone: done2, remoteDone: done1,
-		readDeadline:  makePipeDeadline(),
-		writeDeadline: makePipeDeadline(),
-		rdPart:        partialRead,
+		rdDeadline: HookDeadline(nil),
+		wrDeadline: HookDeadline(nil),
+		rdPart:     partialRead,
 	}
 	return p1, p2
 }
@@ -201,7 +142,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 		return 0, io.ErrClosedPipe
 	case isClosedChan(p.remoteDone) && p.rdBuf == nil && len(p.rdRx) == 0:
 		return 0, io.EOF
-	case isClosedChan(p.readDeadline.wait()):
+	case isClosedChan(p.rdDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
 	}
 
@@ -212,7 +153,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 		return 0, io.ErrClosedPipe
 	case isClosedChan(p.remoteDone) && p.rdBuf == nil && len(p.rdRx) == 0:
 		return 0, io.EOF
-	case isClosedChan(p.readDeadline.wait()):
+	case isClosedChan(p.rdDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
 	case p.rdPart && p.rdBuf != nil:
 		nr := copy(b, p.rdBuf)
@@ -258,7 +199,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 			}
 		}
 		return 0, io.EOF
-	case <-p.readDeadline.wait():
+	case <-p.rdDeadline.Wait():
 		return 0, os.ErrDeadlineExceeded
 	}
 }
@@ -277,7 +218,7 @@ func (p *pipe) write(b []byte) (n int, err error) {
 		return 0, io.ErrClosedPipe
 	case isClosedChan(p.remoteDone):
 		return 0, io.ErrClosedPipe
-	case isClosedChan(p.writeDeadline.wait()):
+	case isClosedChan(p.wrDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
 	}
 
@@ -300,7 +241,7 @@ func (p *pipe) write(b []byte) (n int, err error) {
 			return n, io.ErrClosedPipe
 		case <-p.remoteDone:
 			return n, io.ErrClosedPipe
-		case <-p.writeDeadline.wait():
+		case <-p.wrDeadline.Wait():
 			return n, os.ErrDeadlineExceeded
 		}
 	}
@@ -311,8 +252,8 @@ func (p *pipe) SetDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
 		return io.ErrClosedPipe
 	}
-	p.readDeadline.set(t)
-	p.writeDeadline.set(t)
+	p.rdDeadline.Set(t)
+	p.wrDeadline.Set(t)
 	return nil
 }
 
@@ -320,7 +261,7 @@ func (p *pipe) SetReadDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
 		return io.ErrClosedPipe
 	}
-	p.readDeadline.set(t)
+	p.rdDeadline.Set(t)
 	return nil
 }
 
@@ -328,7 +269,7 @@ func (p *pipe) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
 		return io.ErrClosedPipe
 	}
-	p.writeDeadline.set(t)
+	p.wrDeadline.Set(t)
 	return nil
 }
 
