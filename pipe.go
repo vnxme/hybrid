@@ -68,7 +68,7 @@ func (d *pipeDeadline) set(t time.Time) {
 		return
 	}
 
-	// Time in the future, setup a timer to cancel in the future.
+	// Time in the future, set up a timer to cancel in the future.
 	if dur := time.Until(t); dur > 0 {
 		if closed {
 			d.cancel = make(chan struct{})
