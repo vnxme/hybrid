@@ -103,8 +103,8 @@ func isClosedChan(c <-chan struct{}) bool {
 
 type pipeAddr struct{}
 
-func (pipeAddr) Network() string { return "pipe" }
-func (pipeAddr) String() string  { return "pipe" }
+func (pipeAddr) Network() string { return pipeNetwork }
+func (pipeAddr) String() string  { return pipeNetwork }
 
 type pipe struct {
 	wrMu sync.Mutex // Serialize Write operations
@@ -163,7 +163,7 @@ func (*pipe) RemoteAddr() net.Addr { return pipeAddr{} }
 func (p *pipe) Read(b []byte) (int, error) {
 	n, err := p.read(b)
 	if err != nil && err != io.EOF && !errors.Is(err, io.ErrClosedPipe) {
-		err = &net.OpError{Op: "read", Net: "pipe", Err: err}
+		err = &net.OpError{Op: "read", Net: pipeNetwork, Err: err}
 	}
 	return n, err
 }
@@ -195,7 +195,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 func (p *pipe) Write(b []byte) (int, error) {
 	n, err := p.write(b)
 	if err != nil && !errors.Is(err, io.ErrClosedPipe) {
-		err = &net.OpError{Op: "write", Net: "pipe", Err: err}
+		err = &net.OpError{Op: "write", Net: pipeNetwork, Err: err}
 	}
 	return n, err
 }
@@ -258,3 +258,5 @@ func (p *pipe) Close() error {
 	p.once.Do(func() { close(p.localDone) })
 	return nil
 }
+
+const pipeNetwork = "pipe"
