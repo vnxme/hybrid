@@ -34,9 +34,20 @@ import (
 	"golang.org/x/net/nettest"
 )
 
+type pipeCtor func() (net.Conn, net.Conn)
+
 func TestPipe(t *testing.T) {
+	t.Run("HybridUnbufferedSync", func(t *testing.T) {
+		ctor := Pipe
+		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
+		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
+	})
+}
+
+func testPipeBundle(t *testing.T, ctor pipeCtor) {
+	t.Helper()
 	nettest.TestConn(t, func() (c1, c2 net.Conn, stop func(), err error) {
-		c1, c2 = Pipe()
+		c1, c2 = ctor()
 		stop = func() {
 			_ = c1.Close()
 			_ = c2.Close()
@@ -45,8 +56,9 @@ func TestPipe(t *testing.T) {
 	})
 }
 
-func TestPipeCloseError(t *testing.T) {
-	c1, c2 := Pipe()
+func testPipeCloseError(t *testing.T, ctor pipeCtor) {
+	t.Helper()
+	c1, c2 := ctor()
 	_ = c1.Close()
 
 	if _, err := c1.Read(nil); !errors.Is(err, io.ErrClosedPipe) {
@@ -68,3 +80,8 @@ func TestPipeCloseError(t *testing.T) {
 		t.Errorf("c2.SetDeadline() = %v, want io.ErrClosedPipe", err)
 	}
 }
+
+const (
+	testPipeBundleName     = "Bundle"
+	testPipeCloseErrorName = "CloseError"
+)
