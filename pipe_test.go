@@ -23,7 +23,6 @@
 // license that can be found in the LICENSE file.
 
 // Major changes to the standard pipe implementation:
-// - local and remote addresses are optionally customizable
 // - read and write channels can be buffered or unbuffered
 // - pipes can be sync, semi-sync or async
 
@@ -51,17 +50,17 @@ func BenchmarkPipe(b *testing.B) {
 		b.Run(benchmarkPipeChunkedWriteName, func(b *testing.B) { benchmarkPipeChunkedWrite(b, ctor) })
 	})
 	b.Run("HybridUnbufferedSync", func(b *testing.B) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(0, false, nil, nil) }
+		ctor := func() (net.Conn, net.Conn) { return Pipe(0, false) }
 		b.Run(benchmarkPipeChunkedReadName, func(b *testing.B) { benchmarkPipeChunkedRead(b, ctor) })
 		b.Run(benchmarkPipeChunkedWriteName, func(b *testing.B) { benchmarkPipeChunkedWrite(b, ctor) })
 	})
 	b.Run("HybridUnbufferedSemi", func(b *testing.B) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(0, true, nil, nil) }
+		ctor := func() (net.Conn, net.Conn) { return Pipe(0, true) }
 		b.Run(benchmarkPipeChunkedReadName, func(b *testing.B) { benchmarkPipeChunkedRead(b, ctor) })
 		b.Run(benchmarkPipeChunkedWriteName, func(b *testing.B) { benchmarkPipeChunkedWrite(b, ctor) })
 	})
 	b.Run("HybridBufferedAsync", func(b *testing.B) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(10, true, nil, nil) }
+		ctor := func() (net.Conn, net.Conn) { return Pipe(10, true) }
 		b.Run(benchmarkPipeChunkedReadName, func(b *testing.B) { benchmarkPipeChunkedRead(b, ctor) })
 		b.Run(benchmarkPipeChunkedWriteName, func(b *testing.B) { benchmarkPipeChunkedWrite(b, ctor) })
 	})
@@ -156,30 +155,21 @@ func TestPipe(t *testing.T) {
 		t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, ctor) })
 	})
 	t.Run("HybridUnbufferedSync", func(t *testing.T) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(0, false, nil, nil) }
+		ctor := func() (net.Conn, net.Conn) { return Pipe(0, false) }
 		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
 		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
-		t.Run(testPipeEmptyAddrName, func(t *testing.T) {
-			t.Run("NoAddresses", func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
-			addr, _ := net.ResolveTCPAddr("tcp", "localhost:0")
-			ctor = func() (net.Conn, net.Conn) { return Pipe(0, false, addr, nil) }
-			t.Run("LocalOnly", func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
-			ctor = func() (net.Conn, net.Conn) { return Pipe(0, false, nil, addr) }
-			t.Run("RemoteOnly", func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
-			ctor = func() (net.Conn, net.Conn) { return Pipe(0, false, addr, addr) }
-			t.Run("BothAddresses", func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
-		})
+		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
 		t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, ctor) })
 	})
 	t.Run("HybridUnbufferedSemi", func(t *testing.T) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(0, true, nil, nil) }
+		ctor := func() (net.Conn, net.Conn) { return Pipe(0, true) }
 		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
 		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
 		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
 		t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, ctor) })
 	})
 	t.Run("HybridBufferedAsync", func(t *testing.T) {
-		ctor := func() (net.Conn, net.Conn) { return Pipe(10, true, nil, nil) }
+		ctor := func() (net.Conn, net.Conn) { return Pipe(10, true) }
 		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
 		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
 		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
