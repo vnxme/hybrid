@@ -41,11 +41,13 @@ func TestPipe(t *testing.T) {
 		ctor := net.Pipe
 		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
 		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
+		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
 	})
 	t.Run("HybridUnbufferedSync", func(t *testing.T) {
 		ctor := Pipe
 		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
 		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
+		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
 	})
 }
 
@@ -86,7 +88,64 @@ func testPipeCloseError(t *testing.T, ctor pipeCtor) {
 	}
 }
 
+func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
+	t.Helper()
+	c1, c2 := ctor()
+
+	l1 := c1.LocalAddr()
+	if l1 == nil {
+		t.Errorf("c1.LocalAddr() = nil, want non-nil")
+	} else {
+		if len(l1.Network()) == 0 {
+			t.Errorf("c1.LocalAddr().Network() is empty, want non-empty")
+		}
+		if len(l1.String()) == 0 {
+			t.Errorf("c1.LocalAddr().String() is empty, want non-empty")
+		}
+	}
+
+	r1 := c1.RemoteAddr()
+	if r1 == nil {
+		t.Errorf("c1.RemoteAddr() = nil, want non-nil")
+	} else {
+		if len(r1.Network()) == 0 {
+			t.Errorf("c1.RemoteAddr().Network() is empty, want non-empty")
+		}
+		if len(r1.String()) == 0 {
+			t.Errorf("c1.RemoteAddr().String() is empty, want non-empty")
+		}
+	}
+
+	l2 := c2.LocalAddr()
+	if l2 == nil {
+		t.Errorf("c2.LocalAddr() = nil, want non-nil")
+	} else {
+		if len(l2.Network()) == 0 {
+			t.Errorf("c2.LocalAddr().Network() is empty, want non-empty")
+		}
+		if len(l2.String()) == 0 {
+			t.Errorf("c2.LocalAddr().String() is empty, want non-empty")
+		}
+	}
+
+	r2 := c2.RemoteAddr()
+	if r2 == nil {
+		t.Errorf("c2.RemoteAddr() = nil, want non-nil")
+	} else {
+		if len(r2.Network()) == 0 {
+			t.Errorf("c2.RemoteAddr().Network() is empty, want non-empty")
+		}
+		if len(r2.String()) == 0 {
+			t.Errorf("c2.RemoteAddr().String() is empty, want non-empty")
+		}
+	}
+
+	_ = c1.Close()
+	_ = c2.Close()
+}
+
 const (
 	testPipeBundleName     = "Bundle"
 	testPipeCloseErrorName = "CloseError"
+	testPipeEmptyAddrName  = "EmptyAddr"
 )
