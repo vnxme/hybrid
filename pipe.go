@@ -24,6 +24,8 @@
 
 // Major changes to the standard pipe implementation:
 // - local and remote addresses are optionally customizable
+// - read and write channels can be buffered or unbuffered
+// - pipes can be sync, semi-sync or async
 
 package hybrid
 
@@ -110,15 +112,19 @@ func (pipeAddr) Network() string { return pipeNetwork }
 func (pipeAddr) String() string  { return pipeNetwork }
 
 type pipe struct {
+	rdMu sync.Mutex // Serialize Read operations
 	wrMu sync.Mutex // Serialize Write operations
 
+	rdPart bool   // Partial reading switch
+	rdBuf  []byte // Bytes saved for partial reading
+
 	// Used by local Read to interact with remote Write.
-	// Successful receive on rdRx is always followed by send on rdTx.
+	// For a sync/semi-sync pipe, receive on rdRx is always followed by send on rdTx
 	rdRx <-chan []byte
 	rdTx chan<- int
 
 	// Used by local Write to interact with remote Read.
-	// Successful send on wrTx is always followed by receive on wrRx.
+	// For a sync/semi-sync pipe, send on wrTx is always followed by receive on wrRx
 	wrTx chan<- []byte
 	wrRx <-chan int
 
@@ -130,14 +136,32 @@ type pipe struct {
 	writeDeadline pipeDeadline
 }
 
-// Pipe creates a synchronous, in-memory, full duplex
-// network connection; both ends implement the [Conn] interface.
+// Pipe creates an in-memory, full duplex network connection;
+// both ends implement the [net.Conn] interface. It can be:
+//
+// (a) Unbuffered and synchronous.
 // Reads on one end are matched with writes on the other,
 // copying data directly between the two; there is no internal
-// buffering. Local and remote addresses are optionally customizable.
-func Pipe(local, remote net.Addr) (net.Conn, net.Conn) {
-	cb1 := make(chan []byte)
-	cb2 := make(chan []byte)
+// buffering.
+//
+// (b) Unbuffered and semi-synchronous.
+// When the target read buffer is shorter than the source write buffer,
+// the latter is saved internally so that its remaining bytes could be
+// asynchronously read later, i.e. partial reading is supported.
+//
+// (c) Buffered and asynchronous.
+// Reads on one end aren't matched with writes on the other;
+// data are copied internally to prevent slice aliasing issues;
+// partial reading is also supported.
+//
+// Note: when the remote end is closed, (a) returns io.EOF immediately
+// after that, but (b) and (c) return io.EOF only once there are no more
+// packets left in the read channel and no more bytes partially unread.
+//
+// Local and remote addresses are optionally customizable.
+func Pipe(queueSize int, partialRead bool, local, remote net.Addr) (net.Conn, net.Conn) {
+	cb1 := make(chan []byte, queueSize)
+	cb2 := make(chan []byte, queueSize)
 	cn1 := make(chan int)
 	cn2 := make(chan int)
 	done1 := make(chan struct{})
@@ -150,6 +174,7 @@ func Pipe(local, remote net.Addr) (net.Conn, net.Conn) {
 			localDone: done1, remoteDone: done2,
 			readDeadline:  makePipeDeadline(),
 			writeDeadline: makePipeDeadline(),
+			rdPart:        partialRead,
 		}
 		p2 := &pipe{
 			rdRx: cb2, rdTx: cn2,
@@ -157,6 +182,7 @@ func Pipe(local, remote net.Addr) (net.Conn, net.Conn) {
 			localDone: done2, remoteDone: done1,
 			readDeadline:  makePipeDeadline(),
 			writeDeadline: makePipeDeadline(),
+			rdPart:        partialRead,
 		}
 		return p1, p2
 	}
@@ -169,6 +195,7 @@ func Pipe(local, remote net.Addr) (net.Conn, net.Conn) {
 			localDone: done1, remoteDone: done2,
 			readDeadline:  makePipeDeadline(),
 			writeDeadline: makePipeDeadline(),
+			rdPart:        partialRead,
 		},
 	}
 	p2 := &pipeWithAddr{
@@ -179,6 +206,7 @@ func Pipe(local, remote net.Addr) (net.Conn, net.Conn) {
 			localDone: done2, remoteDone: done1,
 			readDeadline:  makePipeDeadline(),
 			writeDeadline: makePipeDeadline(),
+			rdPart:        partialRead,
 		},
 	}
 	return p1, p2
@@ -199,20 +227,64 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	switch {
 	case isClosedChan(p.localDone):
 		return 0, io.ErrClosedPipe
-	case isClosedChan(p.remoteDone):
+	case isClosedChan(p.remoteDone) && p.rdBuf == nil && len(p.rdRx) == 0:
 		return 0, io.EOF
 	case isClosedChan(p.readDeadline.wait()):
 		return 0, os.ErrDeadlineExceeded
 	}
 
+	p.rdMu.Lock()
+	defer p.rdMu.Unlock()
+	switch {
+	case isClosedChan(p.localDone):
+		return 0, io.ErrClosedPipe
+	case isClosedChan(p.remoteDone) && p.rdBuf == nil && len(p.rdRx) == 0:
+		return 0, io.EOF
+	case isClosedChan(p.readDeadline.wait()):
+		return 0, os.ErrDeadlineExceeded
+	case p.rdPart && p.rdBuf != nil:
+		nr := copy(b, p.rdBuf)
+		if nr < len(p.rdBuf) {
+			p.rdBuf = p.rdBuf[nr:]
+		} else {
+			p.rdBuf = nil
+		}
+		return nr, nil
+	}
+
 	select {
 	case bw := <-p.rdRx:
 		nr := copy(b, bw)
-		p.rdTx <- nr
+		if cap(p.rdRx) == 0 { // An unbuffered pipe can be sync or semi-sync
+			if p.rdPart { // A semi-sync unbuffered pipe supports partial read
+				sz := len(bw)
+				p.rdTx <- sz
+				if nr < sz {
+					p.rdBuf = bw[nr:]
+				}
+			} else { // A sync unbuffered pipe drops unread bytes
+				p.rdTx <- nr
+			}
+		} else { // A buffered pipe is async by definition and supports partial read
+			if nr < len(bw) {
+				p.rdBuf = bw[nr:]
+			}
+		}
 		return nr, nil
 	case <-p.localDone:
 		return 0, io.ErrClosedPipe
 	case <-p.remoteDone:
+		if p.rdPart {
+			// No need to check p.rdBuf here: unless it was empty, the function would return above
+			if len(p.rdRx) > 0 {
+				bw := <-p.rdRx
+				nr := copy(b, bw)
+				if nr < len(bw) {
+					p.rdBuf = bw[nr:]
+				}
+				return nr, nil
+			}
+		}
 		return 0, io.EOF
 	case <-p.readDeadline.wait():
 		return 0, os.ErrDeadlineExceeded
@@ -239,12 +311,19 @@ func (p *pipe) write(b []byte) (n int, err error) {
 
 	p.wrMu.Lock() // Ensure entirety of b is written together
 	defer p.wrMu.Unlock()
+	if p.rdPart { // A semi-sync unbuffered/async buffered pipe requires copy on write
+		b = append([]byte{}, b...)
+	}
 	for once := true; once || len(b) > 0; once = false {
 		select {
 		case p.wrTx <- b:
-			nw := <-p.wrRx
-			b = b[nw:]
-			n += nw
+			if cap(p.wrTx) == 0 { // An unbuffered pipe can be sync or semi-sync
+				nw := <-p.wrRx
+				b = b[nw:]
+				n += nw
+			} else { // A buffered pipe is async by definition
+				return len(b), nil
+			}
 		case <-p.localDone:
 			return n, io.ErrClosedPipe
 		case <-p.remoteDone:
