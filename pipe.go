@@ -40,9 +40,9 @@ import (
 
 // pipeDeadline is an abstraction for handling timeouts.
 type pipeDeadline struct {
-	mu     sync.Mutex // Guards timer and cancel
 	timer  *time.Timer
 	cancel chan struct{} // Must be non-nil
+	mu     sync.Mutex    // Guards timer and cancel
 }
 
 func makePipeDeadline() pipeDeadline {
@@ -112,11 +112,8 @@ func (pipeAddr) Network() string { return pipeNetwork }
 func (pipeAddr) String() string  { return pipeNetwork }
 
 type pipe struct {
-	rdMu sync.Mutex // Serialize Read operations
-	wrMu sync.Mutex // Serialize Write operations
-
-	rdPart bool   // Partial reading switch
-	rdBuf  []byte // Bytes saved for partial reading
+	readDeadline  pipeDeadline
+	writeDeadline pipeDeadline
 
 	// Used by local Read to interact with remote Write.
 	// For a sync/semi-sync pipe, receive on rdRx is always followed by send on rdTx
@@ -128,12 +125,16 @@ type pipe struct {
 	wrTx chan<- []byte
 	wrRx <-chan int
 
-	once       sync.Once // Protects closing localDone
 	localDone  chan struct{}
 	remoteDone <-chan struct{}
 
-	readDeadline  pipeDeadline
-	writeDeadline pipeDeadline
+	rdBuf []byte // Bytes saved for partial reading
+
+	once sync.Once  // Protects closing localDone
+	rdMu sync.Mutex // Serialize Read operations
+	wrMu sync.Mutex // Serialize Write operations
+
+	rdPart bool // Partial reading switch
 }
 
 // Pipe creates an in-memory, full duplex network connection;
