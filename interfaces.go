@@ -33,5 +33,15 @@ type Deadline interface {
 // PacketConn is an alias for net.PacketConn, i.e. a generic packet-oriented network connection.
 type PacketConn = net.PacketConn
 
+// PacketConnWrapper can unwrap the underlying PacketConn.
+type PacketConnWrapper interface {
+	Unwrap() PacketConn
+}
+
 // StreamConn is an alias for net.Conn, i.e. a generic stream-oriented network connection.
 type StreamConn = net.Conn
+
+// StreamConnWrapper can unwrap the underlying StreamConn.
+type StreamConnWrapper interface {
+	Unwrap() StreamConn
+}
