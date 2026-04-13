@@ -22,6 +22,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Major changes to the standard pipe implementation:
+// - local and remote addresses are optionally customizable
+
 package hybrid
 
 import (
@@ -44,10 +47,20 @@ func TestPipe(t *testing.T) {
 		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
 	})
 	t.Run("HybridUnbufferedSync", func(t *testing.T) {
-		ctor := Pipe
+		ctor := func() (net.Conn, net.Conn) { return Pipe(nil, nil) }
 		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
 		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
-		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
+		t.Run(testPipeEmptyAddrName, func(t *testing.T) {
+			t.Run("NoAddresses", func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
+			addr, _ := net.ResolveTCPAddr("tcp", "localhost:0")
+			ctor = func() (net.Conn, net.Conn) { return Pipe(addr, nil) }
+			t.Run("LocalOnly", func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
+			ctor = func() (net.Conn, net.Conn) { return Pipe(nil, addr) }
+			t.Run("RemoteOnly", func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
+			ctor = func() (net.Conn, net.Conn) { return Pipe(addr, addr) }
+			t.Run("BothAddresses", func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
+		})
+
 	})
 }
 

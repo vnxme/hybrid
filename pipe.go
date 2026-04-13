@@ -22,6 +22,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Major changes to the standard pipe implementation:
+// - local and remote addresses are optionally customizable
+
 package hybrid
 
 import (
@@ -131,8 +134,8 @@ type pipe struct {
 // network connection; both ends implement the [Conn] interface.
 // Reads on one end are matched with writes on the other,
 // copying data directly between the two; there is no internal
-// buffering.
-func Pipe() (net.Conn, net.Conn) {
+// buffering. Local and remote addresses are optionally customizable.
+func Pipe(local, remote net.Addr) (net.Conn, net.Conn) {
 	cb1 := make(chan []byte)
 	cb2 := make(chan []byte)
 	cn1 := make(chan int)
@@ -140,19 +143,43 @@ func Pipe() (net.Conn, net.Conn) {
 	done1 := make(chan struct{})
 	done2 := make(chan struct{})
 
-	p1 := &pipe{
-		rdRx: cb1, rdTx: cn1,
-		wrTx: cb2, wrRx: cn2,
-		localDone: done1, remoteDone: done2,
-		readDeadline:  makePipeDeadline(),
-		writeDeadline: makePipeDeadline(),
+	if local == nil && remote == nil {
+		p1 := &pipe{
+			rdRx: cb1, rdTx: cn1,
+			wrTx: cb2, wrRx: cn2,
+			localDone: done1, remoteDone: done2,
+			readDeadline:  makePipeDeadline(),
+			writeDeadline: makePipeDeadline(),
+		}
+		p2 := &pipe{
+			rdRx: cb2, rdTx: cn2,
+			wrTx: cb1, wrRx: cn1,
+			localDone: done2, remoteDone: done1,
+			readDeadline:  makePipeDeadline(),
+			writeDeadline: makePipeDeadline(),
+		}
+		return p1, p2
 	}
-	p2 := &pipe{
-		rdRx: cb2, rdTx: cn2,
-		wrTx: cb1, wrRx: cn1,
-		localDone: done2, remoteDone: done1,
-		readDeadline:  makePipeDeadline(),
-		writeDeadline: makePipeDeadline(),
+
+	p1 := &pipeWithAddr{
+		local, remote,
+		pipe{
+			rdRx: cb1, rdTx: cn1,
+			wrTx: cb2, wrRx: cn2,
+			localDone: done1, remoteDone: done2,
+			readDeadline:  makePipeDeadline(),
+			writeDeadline: makePipeDeadline(),
+		},
+	}
+	p2 := &pipeWithAddr{
+		remote, local,
+		pipe{
+			rdRx: cb2, rdTx: cn2,
+			wrTx: cb1, wrRx: cn1,
+			localDone: done2, remoteDone: done1,
+			readDeadline:  makePipeDeadline(),
+			writeDeadline: makePipeDeadline(),
+		},
 	}
 	return p1, p2
 }
@@ -259,10 +286,30 @@ func (p *pipe) Close() error {
 	return nil
 }
 
+type pipeWithAddr struct {
+	local, remote net.Addr
+	pipe
+}
+
+func (p *pipeWithAddr) LocalAddr() net.Addr {
+	if p.local == nil {
+		return pipeAddr{}
+	}
+	return p.local
+}
+
+func (p *pipeWithAddr) RemoteAddr() net.Addr {
+	if p.remote == nil {
+		return pipeAddr{}
+	}
+	return p.remote
+}
+
 const pipeNetwork = "pipe"
 
 // Interface guards
 var (
 	_ net.Addr = (*pipeAddr)(nil)
 	_ net.Conn = (*pipe)(nil)
+	_ net.Conn = (*pipeWithAddr)(nil)
 )
