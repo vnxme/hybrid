@@ -260,3 +260,9 @@ func (p *pipe) Close() error {
 }
 
 const pipeNetwork = "pipe"
+
+// Interface guards
+var (
+	_ net.Addr = (*pipeAddr)(nil)
+	_ net.Conn = (*pipe)(nil)
+)
