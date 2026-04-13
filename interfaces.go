@@ -30,5 +30,8 @@ type Deadline interface {
 	Wait() chan struct{}
 }
 
+// PacketConn is an alias for net.PacketConn, i.e. a generic packet-oriented network connection.
+type PacketConn = net.PacketConn
+
 // StreamConn is an alias for net.Conn, i.e. a generic stream-oriented network connection.
 type StreamConn = net.Conn
