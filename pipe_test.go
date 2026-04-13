@@ -28,9 +28,12 @@
 package hybrid
 
 import (
+	"bytes"
 	"errors"
 	"io"
+	"math/rand"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +48,7 @@ func TestPipe(t *testing.T) {
 		t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, ctor) })
 		t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, ctor) })
 		t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
+		t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, ctor) })
 	})
 	t.Run("HybridUnbufferedSync", func(t *testing.T) {
 		ctor := func() (net.Conn, net.Conn) { return Pipe(nil, nil) }
@@ -60,7 +64,7 @@ func TestPipe(t *testing.T) {
 			ctor = func() (net.Conn, net.Conn) { return Pipe(addr, addr) }
 			t.Run("BothAddresses", func(t *testing.T) { testPipeEmptyAddr(t, ctor) })
 		})
-
+		t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, ctor) })
 	})
 }
 
@@ -157,8 +161,80 @@ func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
 	_ = c2.Close()
 }
 
+func testPipeSliceAlias(t *testing.T, ctor func() (net.Conn, net.Conn)) {
+	t.Helper()
+	c1, c2 := ctor()
+
+	bSource := make([]byte, 1<<10)
+	rand.New(rand.NewSource(0)).Read(bSource)
+
+	bChange := make([]byte, 1<<5)
+	rand.New(rand.NewSource(0)).Read(bChange)
+
+	bWrite := bytes.Clone(bSource)
+	bRead := make([]byte, len(bWrite))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		nw, err := c1.Write(bWrite)
+		if err != nil {
+			t.Errorf("c1.Write() = %v, want nil", err)
+		} else {
+			if nw != len(bWrite) {
+				t.Errorf("c1.Write() = %d, want %d", nw, len(bWrite))
+			} else {
+				copy(bWrite[len(bWrite)-len(bChange):], bChange)
+			}
+		}
+		wg.Done()
+	}()
+
+	go func() {
+		c := 1 << 3
+		d := len(bRead) >> 1
+		f := func(low, high, chunk int) {
+			for i := low; i < high; i += chunk {
+				nr, err := c2.Read(bRead[i : i+chunk])
+				if err != nil {
+					t.Errorf("c2.Read() = %v, want nil", err)
+					break
+				} else {
+					if nr != chunk {
+						t.Errorf("c2.Read() = %d, want %d", nr, chunk)
+						break
+					}
+				}
+
+			}
+		}
+
+		f(0, d, c)
+		time.Sleep(50 * time.Millisecond)
+		f(d, len(bRead), c)
+
+		wg.Done()
+	}()
+
+	wg.Wait()
+	err := c1.Close()
+	if err != nil {
+		t.Errorf("c1.Close() = %v, want nil", err)
+	}
+	err = c2.Close()
+	if err != nil {
+		t.Errorf("c2.Close() = %v, want nil", err)
+	}
+
+	if !bytes.Equal(bSource, bRead) {
+		t.Errorf("transmitted data differs")
+	}
+}
+
 const (
 	testPipeBundleName     = "Bundle"
 	testPipeCloseErrorName = "CloseError"
 	testPipeEmptyAddrName  = "EmptyAddr"
+	testPipeSliceAliasName = "SliceAlias"
 )
