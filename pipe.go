@@ -83,7 +83,7 @@ type pipe struct {
 // (a) Unbuffered and synchronous.
 // Reads on one end are matched with writes on the other,
 // copying data directly between the two; there is no internal
-// buffering.
+// buffering, and partial reading isn't be supported.
 //
 // (b) Unbuffered and semi-synchronous.
 // When the target read buffer is shorter than the source write buffer,
@@ -93,7 +93,7 @@ type pipe struct {
 // (c) Buffered and asynchronous.
 // Reads on one end aren't matched with writes on the other;
 // data are copied internally to prevent slice aliasing issues;
-// partial reading is also supported.
+// partial reading is also supported by definition.
 //
 // Note: when the remote end is closed, (a) returns io.EOF immediately
 // after that, but (b) and (c) return io.EOF only once there are no more
@@ -112,7 +112,7 @@ func Pipe(queueSize int, partialRead bool) (StreamConn, StreamConn) {
 		localDone: done1, remoteDone: done2,
 		rdDeadline: HookDeadline(nil),
 		wrDeadline: HookDeadline(nil),
-		rdPart:     partialRead,
+		rdPart:     partialRead || queueSize > 0,
 	}
 	p2 := &pipe{
 		rdRx: cb2, rdTx: cn2,
@@ -120,7 +120,7 @@ func Pipe(queueSize int, partialRead bool) (StreamConn, StreamConn) {
 		localDone: done2, remoteDone: done1,
 		rdDeadline: HookDeadline(nil),
 		wrDeadline: HookDeadline(nil),
-		rdPart:     partialRead,
+		rdPart:     partialRead || queueSize > 0,
 	}
 	return p1, p2
 }
