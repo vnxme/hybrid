@@ -256,7 +256,7 @@ func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
 	_ = c2.Close()
 }
 
-func testPipeSliceAlias(t *testing.T, ctor func() (StreamConn, StreamConn)) {
+func testPipeSliceAlias(t *testing.T, ctor pipeCtor) {
 	t.Helper()
 	c1, c2 := ctor()
 
