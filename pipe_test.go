@@ -49,9 +49,9 @@ func BenchmarkPipe(b *testing.B) {
 		ctor pipeCtor
 	}{
 		{"StandardUnbufferedSync", net.Pipe},
-		{"HybridUnbufferedSync", func() (StreamConn, StreamConn) { return Pipe(0, false) }},
-		{"HybridUnbufferedSemi", func() (StreamConn, StreamConn) { return Pipe(0, true) }},
-		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return Pipe(10, true) }},
+		{"HybridUnbufferedSync", func() (StreamConn, StreamConn) { return UnbufferedPipe(false) }},
+		{"HybridUnbufferedSemi", func() (StreamConn, StreamConn) { return UnbufferedPipe(true) }},
+		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return BufferedPipe(10) }},
 	}
 
 	for _, benchmark := range benchmarks {
@@ -148,9 +148,9 @@ func TestPipe(t *testing.T) {
 		ctor pipeCtor
 	}{
 		{"StandardUnbufferedSync", net.Pipe},
-		{"HybridUnbufferedSync", func() (StreamConn, StreamConn) { return Pipe(0, false) }},
-		{"HybridUnbufferedSemi", func() (StreamConn, StreamConn) { return Pipe(0, true) }},
-		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return Pipe(10, true) }},
+		{"HybridUnbufferedSync", func() (StreamConn, StreamConn) { return UnbufferedPipe(false) }},
+		{"HybridUnbufferedSemi", func() (StreamConn, StreamConn) { return UnbufferedPipe(true) }},
+		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return BufferedPipe(10) }},
 	}
 
 	for _, test := range tests {

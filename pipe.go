@@ -77,6 +77,16 @@ type pipe struct {
 	rdPart bool // Partial reading switch
 }
 
+// BufferedPipe returns a buffered asynchronous Pipe.
+func BufferedPipe(queueSize int) (StreamConn, StreamConn) {
+	return Pipe(queueSize, true)
+}
+
+// UnbufferedPipe returns an unbuffered synchronous or semi-synchronous Pipe.
+func UnbufferedPipe(partialRead bool) (StreamConn, StreamConn) {
+	return Pipe(0, partialRead)
+}
+
 // Pipe creates an in-memory, full duplex network connection;
 // both ends implement the StreamConn interface. It can be:
 //
