@@ -60,14 +60,14 @@ type trunkPacket struct {
 
 // trunk represents a packet-oriented communication channel between local and remote endpoints.
 type trunk struct {
-	rdDeadline Deadline
-	wrDeadline Deadline
-
 	rdRx <-chan trunkPacket // Used by local read to interact with remote write
 	wrTx chan<- trunkPacket // Used by local write to interact with remote read
 
 	locDone chan struct{}
 	remDone <-chan struct{}
+
+	rdDeadline deadline[noHook]
+	wrDeadline deadline[noHook]
 
 	once sync.Once  // Protects closing locDone
 	rdMu sync.Mutex // Serialize read operations
@@ -120,15 +120,15 @@ func Trunk(queueSize int) (SelectivePacketConn, SelectivePacketConn) {
 		rdRx:    chan1,
 		wrTx:    chan2,
 		locDone: done1, remDone: done2,
-		rdDeadline: SimpleDeadline(),
-		wrDeadline: SimpleDeadline(),
+		rdDeadline: makeDeadline(noHook{}),
+		wrDeadline: makeDeadline(noHook{}),
 	}
 	p2 := &trunk{
 		rdRx:    chan2,
 		wrTx:    chan1,
 		locDone: done2, remDone: done1,
-		rdDeadline: SimpleDeadline(),
-		wrDeadline: SimpleDeadline(),
+		rdDeadline: makeDeadline(noHook{}),
+		wrDeadline: makeDeadline(noHook{}),
 	}
 	return p1, p2
 }
