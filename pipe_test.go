@@ -45,6 +45,17 @@ import (
 
 type pipeCtor func() (StreamConn, StreamConn)
 
+// pipeMode is the mode a pipe under test is expected to behave in.
+type pipeMode int
+
+const (
+	pipeModeSync pipeMode = iota
+	pipeModeSemiSync
+	pipeModeAsync
+)
+
+const pipeQueueSize = 10
+
 func BenchmarkPipe(b *testing.B) {
 	benchmarks := []struct {
 		name string
@@ -146,11 +157,12 @@ func TestPipe(t *testing.T) {
 	tests := []struct {
 		name string
 		ctor pipeCtor
+		mode pipeMode
 	}{
-		{"StandardUnbufferedSync", net.Pipe},
-		{"HybridUnbufferedSync", func() (StreamConn, StreamConn) { return UnbufferedPipe(false) }},
-		{"HybridUnbufferedSemi", func() (StreamConn, StreamConn) { return UnbufferedPipe(true) }},
-		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return BufferedPipe(10) }},
+		{"StandardUnbufferedSync", net.Pipe, pipeModeSync},
+		{"HybridUnbufferedSync", func() (StreamConn, StreamConn) { return UnbufferedPipe(false) }, pipeModeSync},
+		{"HybridUnbufferedSemi", func() (StreamConn, StreamConn) { return UnbufferedPipe(true) }, pipeModeSemiSync},
+		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return BufferedPipe(pipeQueueSize) }, pipeModeAsync},
 	}
 
 	for _, test := range tests {
@@ -158,7 +170,7 @@ func TestPipe(t *testing.T) {
 			t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, test.ctor) })
 			t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, test.ctor) })
 			t.Run(testPipeConcurrentReadName, func(t *testing.T) { testPipeConcurrentRead(t, test.ctor) })
-			t.Run(testPipeDrainName, func(t *testing.T) { testPipeDrain(t, test.ctor) })
+			t.Run(testPipeDrainName, func(t *testing.T) { testPipeDrain(t, test.ctor, test.mode) })
 			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
 			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor) })
 			t.Run(testPipeZeroLengthName, func(t *testing.T) { testPipeZeroLength(t, test.ctor) })
@@ -274,21 +286,21 @@ func testPipeConcurrentRead(t *testing.T, ctor pipeCtor) {
 
 // testPipeDrain ensures all bytes written before remote closure are read before io.EOF.
 // Semi-sync and async pipes are also drained after remote closure under a read deadline.
-func testPipeDrain(t *testing.T, ctor pipeCtor) {
+func testPipeDrain(t *testing.T, ctor pipeCtor, mode pipeMode) {
 	c1, c2 := ctor()
-	p, _ := c2.(*pipe)
-	retain := p != nil && p.retain
 
 	// A semi-sync pipe holds at most one write pending, an async one up to its queue size
 	writes := 1
-	if p != nil && cap(p.rdRx) > 0 {
-		writes = min(cap(p.rdRx), 3)
+	if mode == pipeModeAsync {
+		writes = 3
 	}
 
 	bWrite := make([]byte, 10)
 	rand.New(rand.NewSource(0)).Read(bWrite)
 
-	_ = c2.SetReadDeadline(time.Now().Add(time.Second)) // Fail instead of hanging
+	// Fail instead of hanging
+	_ = c1.SetWriteDeadline(time.Now().Add(time.Second))
+	_ = c2.SetReadDeadline(time.Now().Add(time.Second))
 
 	done := make(chan struct{})
 	go func() {
@@ -313,7 +325,7 @@ func testPipeDrain(t *testing.T, ctor pipeCtor) {
 			}
 			break
 		}
-		if retain && !waited { // Read the rest after remote closure
+		if mode != pipeModeSync && !waited { // Read the rest after remote closure
 			<-done
 			waited = true
 			if err := c2.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
