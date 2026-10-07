@@ -47,12 +47,12 @@ func TestPacketConn(t *testing.T) {
 		t.Run("CloseError", func(t *testing.T) { testPacketConnCloseError(t, ctor) })
 	})
 	t.Run("UnbufferedTrunk", func(t *testing.T) {
-		ctor := func() (pc1, pc2 PacketConn) { return UnbufferedTrunk() }
+		ctor := func() (pc1, pc2 PacketConn) { return UnbufferedTrunk(nil, nil) }
 		t.Run("BasicIO", func(t *testing.T) { testPacketConnBasicIO(t, ctor) })
 		t.Run("CloseError", func(t *testing.T) { testPacketConnCloseError(t, ctor) })
 	})
 	t.Run("BufferedTrunk", func(t *testing.T) {
-		ctor := func() (pc1, pc2 PacketConn) { return BufferedTrunk(10) }
+		ctor := func() (pc1, pc2 PacketConn) { return BufferedTrunk(10, nil, nil) }
 		t.Run("BasicIO", func(t *testing.T) { testPacketConnBasicIO(t, ctor) })
 		t.Run("CloseError", func(t *testing.T) { testPacketConnCloseError(t, ctor) })
 	})

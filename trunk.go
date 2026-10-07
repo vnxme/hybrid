@@ -60,6 +60,8 @@ type trunkPacket struct {
 
 // trunk represents a packet-oriented communication channel between local and remote endpoints.
 type trunk struct {
+	addr net.Addr // Local address
+
 	// Used by local read to interact with remote write. For an unbuffered trunk,
 	// receive on rdRx is always followed by send on rdTx, once the packet is copied
 	rdRx <-chan trunkPacket
@@ -84,14 +86,14 @@ type trunk struct {
 // BufferedTrunk creates an in-memory, full duplex network connection with buffered
 // and asynchronous behavior, using the specified internal queue size for each end.
 // See Trunk for more details.
-func BufferedTrunk(queueSize int) (SelectivePacketConn, SelectivePacketConn) {
-	return Trunk(queueSize)
+func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+	return Trunk(queueSize, addr1, addr2)
 }
 
 // UnbufferedTrunk creates an unbuffered, synchronous in-memory full-duplex connection pair.
 // See Trunk for more details.
-func UnbufferedTrunk() (SelectivePacketConn, SelectivePacketConn) {
-	return Trunk(0)
+func UnbufferedTrunk(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+	return Trunk(0, addr1, addr2)
 }
 
 // Trunk creates an in-memory, full duplex network connection;
@@ -116,8 +118,21 @@ func UnbufferedTrunk() (SelectivePacketConn, SelectivePacketConn) {
 // Note: the queue size must be within the range of 0 to 1024.
 // Any negative value is replaced with 0, and any value exceeding
 // the upper limit is adjusted to that limit.
-func Trunk(queueSize int) (SelectivePacketConn, SelectivePacketConn) {
+//
+// The ends have local addresses addr1 and addr2 respectively, or a generic
+// trunk address if nil. A local address is returned by LocalAddr, used as
+// the source address of a packet written without one, e.g. by WriteTo, and
+// as the destination address of a packet read that was written without one.
+// A packet is delivered to the other end whatever its destination address is,
+// so that multiple packet flows may share a trunk, told apart by addresses.
+func Trunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
 	queueSize = min(1<<10, max(0, queueSize))
+	if addr1 == nil {
+		addr1 = oneTrunkAddr
+	}
+	if addr2 == nil {
+		addr2 = oneTrunkAddr
+	}
 
 	chan1 := make(chan trunkPacket, queueSize)
 	chan2 := make(chan trunkPacket, queueSize)
@@ -127,6 +142,7 @@ func Trunk(queueSize int) (SelectivePacketConn, SelectivePacketConn) {
 	done2 := make(chan struct{})
 
 	p1 := &trunk{
+		addr: addr1,
 		rdRx: chan1, rdTx: ack1,
 		wrTx: chan2, wrRx: ack2,
 		localDone: done1, remoteDone: done2,
@@ -134,6 +150,7 @@ func Trunk(queueSize int) (SelectivePacketConn, SelectivePacketConn) {
 		wrDeadline: makeDeadline(noHook{}),
 	}
 	p2 := &trunk{
+		addr: addr2,
 		rdRx: chan2, rdTx: ack2,
 		wrTx: chan1, wrRx: ack1,
 		localDone: done2, remoteDone: done1,
@@ -143,8 +160,8 @@ func Trunk(queueSize int) (SelectivePacketConn, SelectivePacketConn) {
 	return p1, p2
 }
 
-// LocalAddr returns the local address of the trunk. The address is constant for all trunks.
-func (*trunk) LocalAddr() net.Addr { return oneTrunkAddr }
+// LocalAddr returns the local address of the trunk end.
+func (p *trunk) LocalAddr() net.Addr { return p.addr }
 
 // ReadFrom reads a packet from the trunk, returning the number of bytes, the remote address, and an error.
 func (p *trunk) ReadFrom(b []byte) (int, net.Addr, error) {
@@ -158,12 +175,6 @@ func (p *trunk) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, r, l, i, err := p.read(b)
 	if err != nil && !errors.Is(err, errTrunkEOF) && !errors.Is(err, errTrunkClosed) {
 		err = &net.OpError{Op: "read", Net: trunkNetwork, Source: l, Addr: r, Err: err}
-	}
-	if r == nil {
-		r = oneTrunkAddr
-	}
-	if l == nil {
-		l = oneTrunkAddr
 	}
 	return n, r, l, i, err
 }
@@ -223,6 +234,9 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 	}
 
 success:
+	if pkt.dst == nil { // A packet written without a destination address is destined to this end
+		pkt.dst = p.addr
+	}
 	nr := copy(b, pkt.b)
 	if cap(p.rdRx) == 0 { // An unbuffered trunk lets remote write return only once the packet is copied
 		p.rdTx <- struct{}{}
@@ -274,6 +288,9 @@ func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 		return 0, errTrunkClosed
 	}
 
+	if l == nil { // A packet written without a source address originates from this end
+		l = p.addr
+	}
 	pkt := trunkPacket{b: b, src: l, dst: r, i: i}
 	if cap(p.wrTx) > 0 { // An async buffered trunk requires copy on write
 		pkt.b = slices.Clone(b) // TODO(vnxme): use a pool?

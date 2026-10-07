@@ -143,7 +143,7 @@ func TestTrunkReadLLM(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			spcA, spcB := BufferedTrunk(1)
+			spcA, spcB := BufferedTrunk(1, nil, nil)
 			tt.setup(t, spcA.(*trunk), spcB.(*trunk))
 
 			b := make([]byte, tt.bufLen)
@@ -305,9 +305,9 @@ func TestTrunkWriteLLM(t *testing.T) {
 			// Use buffered trunk with capacity 1 by default; for unbuffered tests we explicitly create them.
 			var spcA, spcB SelectivePacketConn
 			if tt.name == "WriteUnbufferedBlockingThenRemoteClose" {
-				spcA, spcB = UnbufferedTrunk()
+				spcA, spcB = UnbufferedTrunk(nil, nil)
 			} else {
-				spcA, spcB = BufferedTrunk(1)
+				spcA, spcB = BufferedTrunk(1, nil, nil)
 			}
 			trA := spcA.(*trunk)
 			trB := spcB.(*trunk)
@@ -418,9 +418,9 @@ func TestTrunkCloseLLM(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				var spcA, spcB SelectivePacketConn
 				if tt.name == "UnbufferedOnce" {
-					spcA, spcB = UnbufferedTrunk()
+					spcA, spcB = UnbufferedTrunk(nil, nil)
 				} else {
-					spcA, spcB = BufferedTrunk(1)
+					spcA, spcB = BufferedTrunk(1, nil, nil)
 				}
 				trA := spcA.(*trunk)
 				trB := spcB.(*trunk)
@@ -444,7 +444,7 @@ func TestTrunkCloseLLM(t *testing.T) {
 	})
 
 	t.Run("Concurrent", func(t *testing.T) {
-		spcA, spcB := BufferedTrunk(1)
+		spcA, spcB := BufferedTrunk(1, nil, nil)
 		trA := spcA.(*trunk)
 		defer func() { _ = spcB.Close() }()
 
@@ -486,8 +486,8 @@ func TestTrunkCloseLLM(t *testing.T) {
 // though not certain, to be detected, as it depends on how reads and writes are scheduled.
 func TestTrunkSliceAlias(t *testing.T) {
 	for name, ctor := range map[string]func() (SelectivePacketConn, SelectivePacketConn){
-		"Unbuffered": UnbufferedTrunk,
-		"Buffered":   func() (SelectivePacketConn, SelectivePacketConn) { return BufferedTrunk(10) },
+		"Unbuffered": func() (SelectivePacketConn, SelectivePacketConn) { return UnbufferedTrunk(nil, nil) },
+		"Buffered":   func() (SelectivePacketConn, SelectivePacketConn) { return BufferedTrunk(10, nil, nil) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c1, c2 := ctor()
@@ -526,5 +526,73 @@ func TestTrunkSliceAlias(t *testing.T) {
 			_ = c1.Close()
 			wg.Wait()
 		})
+	}
+}
+
+// TestTrunkAddrs ensures each end of a trunk has its own local address used by default,
+// and multiple packet flows sharing a trunk are told apart by addresses.
+func TestTrunkAddrs(t *testing.T) {
+	addr1 := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 53}
+	addr2 := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 53}
+	flow1 := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1001}
+	flow2 := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 1002}
+
+	t.Run("Default", func(t *testing.T) {
+		c1, c2 := BufferedTrunk(1, nil, nil)
+		defer func() {
+			_ = c1.Close()
+			_ = c2.Close()
+		}()
+		for name, addr := range map[string]net.Addr{"c1": c1.LocalAddr(), "c2": c2.LocalAddr()} {
+			if addr == nil || addr.Network() != trunkNetwork {
+				t.Errorf("%s.LocalAddr() = %v, want a %s address", name, addr, trunkNetwork)
+			}
+		}
+	})
+
+	c1, c2 := BufferedTrunk(4, addr1, addr2)
+	defer func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	}()
+	if got := c1.LocalAddr(); got != addr1 {
+		t.Errorf("c1.LocalAddr() = %v, want %v", got, addr1)
+	}
+	if got := c2.LocalAddr(); got != addr2 {
+		t.Errorf("c2.LocalAddr() = %v, want %v", got, addr2)
+	}
+
+	// expect reads a packet from c and checks its payload, addresses and interface index
+	expect := func(c SelectivePacketConn, payload string, src, dst net.Addr, idx int) {
+		t.Helper()
+		_ = c.SetReadDeadline(time.Now().Add(time.Second))
+		b := make([]byte, 16)
+		n, gotSrc, gotDst, gotIdx, err := c.ReadFromTo(b)
+		if err != nil || string(b[:n]) != payload || gotSrc != src || gotDst != dst || gotIdx != idx {
+			t.Errorf("ReadFromTo() = %q, %v, %v, %d, %v, want %q, %v, %v, %d, nil",
+				b[:n], gotSrc, gotDst, gotIdx, err, payload, src, dst, idx)
+		}
+	}
+
+	// Without addresses, a packet goes from one local address to the other
+	_, _ = c1.WriteTo([]byte("a"), nil)
+	expect(c2, "a", addr1, addr2, 0)
+
+	// Interleaved flows keep their addresses and interface indices
+	_, _ = c1.WriteToFrom([]byte("b"), addr2, flow1, 1)
+	_, _ = c1.WriteToFrom([]byte("c"), addr2, flow2, 2)
+	_, _ = c1.WriteToFrom([]byte("d"), addr2, flow1, 1)
+	expect(c2, "b", flow1, addr2, 1)
+	expect(c2, "c", flow2, addr2, 2)
+	expect(c2, "d", flow1, addr2, 1)
+
+	// A reply by means of PacketConn reaches the flow it is addressed to
+	_, _ = c2.WriteTo([]byte("e"), flow2)
+	expect(c1, "e", addr2, flow2, 0)
+
+	// No addresses are returned on errors
+	_ = c2.SetReadDeadline(time.Now().Add(-time.Second))
+	if _, src, dst, _, err := c2.ReadFromTo(make([]byte, 16)); err == nil || src != nil || dst != nil {
+		t.Errorf("ReadFromTo() = %v, %v, %v, want nil, nil, an error", src, dst, err)
 	}
 }
