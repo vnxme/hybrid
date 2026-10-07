@@ -64,7 +64,7 @@ func BenchmarkPipe(b *testing.B) {
 		{"StandardUnbufferedSync", net.Pipe},
 		{"HybridUnbufferedSync", func() (StreamConn, StreamConn) { return UnbufferedPipe(false) }},
 		{"HybridUnbufferedSemi", func() (StreamConn, StreamConn) { return UnbufferedPipe(true) }},
-		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return BufferedPipe(10) }},
+		{"HybridBufferedAsync", func() (StreamConn, StreamConn) { return BufferedPipe(pipeQueueSize) }},
 	}
 
 	for _, benchmark := range benchmarks {
@@ -84,34 +84,25 @@ func benchmarkPipeChunkedRead(b *testing.B, ctor pipeCtor) {
 	bRead := make([]byte, 1<<5)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
+	defer func() {
+		_ = c2.Close() // Make c1.Write fail
+		wg.Wait()
+	}()
+	wg.Go(func() {
 		for {
-			_, err := c1.Write(bWrite)
-			if err != nil {
+			if _, err := c1.Write(bWrite); err != nil {
 				break
 			}
 		}
 		_ = c1.Close()
-		wg.Done()
-	}()
+	})
 
-	go func() {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for b.Loop() {
-			_, err := c2.Read(bRead)
-			if err != nil {
-				break
-			}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := c2.Read(bRead); err != nil {
+			b.Fatalf("c2.Read() = %v, want nil", err)
 		}
-		b.StopTimer()
-		_ = c2.Close()
-		wg.Done()
-	}()
-
-	wg.Wait()
+	}
 }
 
 func benchmarkPipeChunkedWrite(b *testing.B, ctor pipeCtor) {
@@ -123,34 +114,25 @@ func benchmarkPipeChunkedWrite(b *testing.B, ctor pipeCtor) {
 	bRead := make([]byte, 1<<10)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for b.Loop() {
-			_, err := c1.Write(bWrite)
-			if err != nil {
-				break
-			}
-		}
-		b.StopTimer()
-		_ = c1.Close()
-		wg.Done()
+	defer func() {
+		_ = c1.Close() // Make c2.Read fail
+		wg.Wait()
 	}()
-
-	go func() {
+	wg.Go(func() {
 		for {
-			_, err := c2.Read(bRead)
-			if err != nil {
+			if _, err := c2.Read(bRead); err != nil {
 				break
 			}
 		}
 		_ = c2.Close()
-		wg.Done()
-	}()
+	})
 
-	wg.Wait()
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := c1.Write(bWrite); err != nil {
+			b.Fatalf("c1.Write() = %v, want nil", err)
+		}
+	}
 }
 
 func TestPipe(t *testing.T) {
