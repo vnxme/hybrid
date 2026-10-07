@@ -172,7 +172,7 @@ func TestPipe(t *testing.T) {
 			t.Run(testPipeConcurrentReadName, func(t *testing.T) { testPipeConcurrentRead(t, test.ctor) })
 			t.Run(testPipeDrainName, func(t *testing.T) { testPipeDrain(t, test.ctor, test.mode) })
 			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
-			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor) })
+			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor, test.mode) })
 			t.Run(testPipeWriteReturnName, func(t *testing.T) { testPipeWriteReturn(t, test.ctor, test.mode) })
 			t.Run(testPipeZeroLengthName, func(t *testing.T) { testPipeZeroLength(t, test.ctor) })
 		})
@@ -400,68 +400,52 @@ func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
 	_ = c2.Close()
 }
 
-func testPipeSliceAlias(t *testing.T, ctor pipeCtor) {
+// testPipeSliceAlias ensures a pipe doesn't refer to a write buffer once the write has returned,
+// so that the caller may modify it. A sync pipe trivially satisfies that, as its write returns
+// once all the bytes have been read, while the others must have copied the bytes left unread.
+func testPipeSliceAlias(t *testing.T, ctor pipeCtor, mode pipeMode) {
 	c1, c2 := ctor()
+
+	// Fail instead of hanging
+	_ = c1.SetWriteDeadline(time.Now().Add(time.Second))
+	_ = c2.SetReadDeadline(time.Now().Add(time.Second))
 
 	bSource := make([]byte, 1<<10)
 	rand.New(rand.NewSource(0)).Read(bSource)
 
-	bChange := make([]byte, 1<<5)
-	rand.New(rand.NewSource(0)).Read(bChange)
-
 	bWrite := bytes.Clone(bSource)
 	bRead := make([]byte, len(bWrite))
 
+	modified := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		nw, err := c1.Write(bWrite)
-		if err != nil {
-			t.Errorf("c1.Write() = %v, want nil", err)
-		} else {
-			if nw != len(bWrite) {
-				t.Errorf("c1.Write() = %d, want %d", nw, len(bWrite))
-			} else {
-				copy(bWrite[len(bWrite)-len(bChange):], bChange)
-			}
+	wg.Go(func() {
+		defer close(modified)
+		if nw, err := c1.Write(bWrite); nw != len(bWrite) || err != nil {
+			t.Errorf("c1.Write() = %d, %v, want %d, nil", nw, err, len(bWrite))
+			return
 		}
-		wg.Done()
-	}()
-
-	go func() {
-		c := 1 << 3
-		d := len(bRead) >> 1
-		f := func(low, high, chunk int) {
-			for i := low; i < high; i += chunk {
-				nr, err := c2.Read(bRead[i : i+chunk])
-				if err != nil {
-					t.Errorf("c2.Read() = %v, want nil", err)
-					break
-				} else {
-					if nr != chunk {
-						t.Errorf("c2.Read() = %d, want %d", nr, chunk)
-						break
-					}
-				}
-
-			}
+		for i := range bWrite {
+			bWrite[i] ^= 0xff
 		}
+	})
 
-		f(0, d, c)
-		time.Sleep(50 * time.Millisecond)
-		f(d, len(bRead), c)
-
-		wg.Done()
-	}()
-
+	// Read the first half in chunks, then the second half once the write buffer has been modified
+	const chunk = 1 << 3
+	for i := 0; i < len(bRead); i += chunk {
+		if i == len(bRead)/2 && mode != pipeModeSync {
+			<-modified
+		}
+		if nr, err := c2.Read(bRead[i : i+chunk]); nr != chunk || err != nil {
+			t.Errorf("c2.Read() = %d, %v, want %d, nil", nr, err, chunk)
+			break
+		}
+	}
 	wg.Wait()
-	err := c1.Close()
-	if err != nil {
+
+	if err := c1.Close(); err != nil {
 		t.Errorf("c1.Close() = %v, want nil", err)
 	}
-	err = c2.Close()
-	if err != nil {
+	if err := c2.Close(); err != nil {
 		t.Errorf("c2.Close() = %v, want nil", err)
 	}
 
