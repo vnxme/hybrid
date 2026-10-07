@@ -63,6 +63,11 @@ type trunk struct {
 	rdRx <-chan trunkPacket // Used by local read to interact with remote write
 	wrTx chan<- trunkPacket // Used by local write to interact with remote read
 
+	// For an unbuffered trunk, receive on rdRx is always followed by send on rdAck,
+	// once the packet has been copied, and send on wrTx by receive on wrAck
+	rdAck chan<- struct{}
+	wrAck <-chan struct{}
+
 	locDone chan struct{}
 	remDone <-chan struct{}
 
@@ -93,7 +98,8 @@ func UnbufferedTrunk() (SelectivePacketConn, SelectivePacketConn) {
 // (a) Unbuffered and synchronous.
 // Reads on one end are matched with writes on the other,
 // copying data directly between the two; there is no internal
-// buffering, and partial reading isn't supported.
+// buffering, and partial reading isn't supported. A write
+// returns once its packet has been copied by a read.
 //
 // (b) Buffered and asynchronous.
 // Reads on one end aren't matched with writes on the other;
@@ -113,19 +119,21 @@ func Trunk(queueSize int) (SelectivePacketConn, SelectivePacketConn) {
 
 	chan1 := make(chan trunkPacket, queueSize)
 	chan2 := make(chan trunkPacket, queueSize)
+	ack1 := make(chan struct{})
+	ack2 := make(chan struct{})
 	done1 := make(chan struct{})
 	done2 := make(chan struct{})
 
 	p1 := &trunk{
-		rdRx:    chan1,
-		wrTx:    chan2,
+		rdRx: chan1, rdAck: ack1,
+		wrTx: chan2, wrAck: ack2,
 		locDone: done1, remDone: done2,
 		rdDeadline: makeDeadline(noHook{}),
 		wrDeadline: makeDeadline(noHook{}),
 	}
 	p2 := &trunk{
-		rdRx:    chan2,
-		wrTx:    chan1,
+		rdRx: chan2, rdAck: ack2,
+		wrTx: chan1, wrAck: ack1,
 		locDone: done2, remDone: done1,
 		rdDeadline: makeDeadline(noHook{}),
 		wrDeadline: makeDeadline(noHook{}),
@@ -214,6 +222,9 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 
 success:
 	nr := copy(b, pkt.b)
+	if cap(p.rdRx) == 0 { // An unbuffered trunk lets remote write return only once the packet is copied
+		p.rdAck <- struct{}{}
+	}
 	if nr < len(pkt.b) { // Unread bytes are dropped, i.e. a trunk doesn't support partial read
 		return nr, pkt.l, pkt.r, pkt.i, errTrunkShortBuffer
 	}
@@ -283,6 +294,9 @@ func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 	}
 
 success:
+	if cap(p.wrTx) == 0 { // An unbuffered trunk doesn't copy on write, so wait until remote read copies the packet
+		<-p.wrAck
+	}
 	return len(b), nil
 }
 

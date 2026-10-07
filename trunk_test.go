@@ -480,3 +480,51 @@ func TestTrunkCloseLLM(t *testing.T) {
 		}
 	})
 }
+
+// TestTrunkSliceAlias ensures a trunk doesn't refer to a write buffer once the write has returned,
+// so that the caller may reuse it right away, as UDP code commonly does. A regression is likely,
+// though not certain, to be detected, as it depends on how reads and writes are scheduled.
+func TestTrunkSliceAlias(t *testing.T) {
+	for name, ctor := range map[string]func() (SelectivePacketConn, SelectivePacketConn){
+		"Unbuffered": UnbufferedTrunk,
+		"Buffered":   func() (SelectivePacketConn, SelectivePacketConn) { return BufferedTrunk(10) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c1, c2 := ctor()
+			const packets, size = 1 << 10, 1 << 16
+
+			var wg sync.WaitGroup
+			wg.Go(func() {
+				b := make([]byte, size)
+				for range packets {
+					clear(b)
+					if _, err := c1.WriteTo(b, nil); err != nil {
+						t.Errorf("c1.WriteTo() = %v, want nil", err)
+						return
+					}
+					for i := range b {
+						b[i] = 0xff
+					}
+				}
+			})
+
+			b := make([]byte, size)
+			for i := range packets {
+				_ = c2.SetReadDeadline(time.Now().Add(time.Second))
+				n, _, err := c2.ReadFrom(b)
+				if err != nil {
+					t.Errorf("c2.ReadFrom() = %v, want nil", err)
+					break
+				}
+				if bytes.IndexByte(b[:n], 0xff) >= 0 {
+					t.Errorf("packet %d is modified after its write has returned", i)
+					break
+				}
+			}
+
+			_ = c2.Close()
+			_ = c1.Close()
+			wg.Wait()
+		})
+	}
+}
