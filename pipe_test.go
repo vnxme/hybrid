@@ -348,51 +348,19 @@ func testPipeDrain(t *testing.T, ctor pipeCtor, mode pipeMode) {
 func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
 	c1, c2 := ctor()
 
-	l1 := c1.LocalAddr()
-	if l1 == nil {
-		t.Errorf("c1.LocalAddr() = nil, want non-nil")
-	} else {
-		if len(l1.Network()) == 0 {
-			t.Errorf("c1.LocalAddr().Network() is empty, want non-empty")
-		}
-		if len(l1.String()) == 0 {
-			t.Errorf("c1.LocalAddr().String() is empty, want non-empty")
-		}
-	}
-
-	r1 := c1.RemoteAddr()
-	if r1 == nil {
-		t.Errorf("c1.RemoteAddr() = nil, want non-nil")
-	} else {
-		if len(r1.Network()) == 0 {
-			t.Errorf("c1.RemoteAddr().Network() is empty, want non-empty")
-		}
-		if len(r1.String()) == 0 {
-			t.Errorf("c1.RemoteAddr().String() is empty, want non-empty")
-		}
-	}
-
-	l2 := c2.LocalAddr()
-	if l2 == nil {
-		t.Errorf("c2.LocalAddr() = nil, want non-nil")
-	} else {
-		if len(l2.Network()) == 0 {
-			t.Errorf("c2.LocalAddr().Network() is empty, want non-empty")
-		}
-		if len(l2.String()) == 0 {
-			t.Errorf("c2.LocalAddr().String() is empty, want non-empty")
-		}
-	}
-
-	r2 := c2.RemoteAddr()
-	if r2 == nil {
-		t.Errorf("c2.RemoteAddr() = nil, want non-nil")
-	} else {
-		if len(r2.Network()) == 0 {
-			t.Errorf("c2.RemoteAddr().Network() is empty, want non-empty")
-		}
-		if len(r2.String()) == 0 {
-			t.Errorf("c2.RemoteAddr().String() is empty, want non-empty")
+	for name, addr := range map[string]net.Addr{
+		"c1.LocalAddr()":  c1.LocalAddr(),
+		"c1.RemoteAddr()": c1.RemoteAddr(),
+		"c2.LocalAddr()":  c2.LocalAddr(),
+		"c2.RemoteAddr()": c2.RemoteAddr(),
+	} {
+		switch {
+		case addr == nil:
+			t.Errorf("%s = nil, want non-nil", name)
+		case addr.Network() == "":
+			t.Errorf("%s.Network() is empty, want non-empty", name)
+		case addr.String() == "":
+			t.Errorf("%s.String() is empty, want non-empty", name)
 		}
 	}
 
