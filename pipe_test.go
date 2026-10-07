@@ -167,6 +167,19 @@ func TestPipe(t *testing.T) {
 	}
 }
 
+func TestBufferedPipePanic(t *testing.T) {
+	for _, queueSize := range []int{0, -1} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("BufferedPipe(%d) didn't panic", queueSize)
+				}
+			}()
+			BufferedPipe(queueSize)
+		}()
+	}
+}
+
 func testPipeBundle(t *testing.T, ctor pipeCtor) {
 	t.Helper()
 	nettest.TestConn(t, func() (c1, c2 StreamConn, stop func(), err error) {

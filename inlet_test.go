@@ -94,15 +94,15 @@ func TestPacketInletWithPairedConns(t *testing.T) {
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		{name: "HybridUnbufferedSyncPipe", ctor: func() (PacketConn, PacketConn) {
-			c1, c2 := Pipe(0, false)
+			c1, c2 := UnbufferedPipe(false)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		{name: "HybridUnbufferedSemiPipe", ctor: func() (PacketConn, PacketConn) {
-			c1, c2 := Pipe(0, true)
+			c1, c2 := UnbufferedPipe(true)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		{name: "HybridBufferedAsyncPipe", ctor: func() (PacketConn, PacketConn) {
-			c1, c2 := Pipe(10, true)
+			c1, c2 := BufferedPipe(10)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		{name: "LocalUDP4Socket", ctor: func() (PacketConn, PacketConn) {

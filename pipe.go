@@ -77,43 +77,50 @@ type pipe struct {
 	retain bool // Read retains unread bytes, so Write needn't wait for them to be read
 }
 
-// BufferedPipe returns a buffered asynchronous Pipe.
-func BufferedPipe(queueSize int) (StreamConn, StreamConn) {
-	return Pipe(queueSize, true)
-}
-
-// UnbufferedPipe returns an unbuffered synchronous or semi-synchronous Pipe.
-func UnbufferedPipe(semiSync bool) (StreamConn, StreamConn) {
-	return Pipe(0, semiSync)
-}
-
-// Pipe creates an in-memory, full duplex network connection;
-// both ends implement the StreamConn interface. In any mode,
-// a write on one end may be consumed by several reads on the other,
-// but the moment the write returns depends on the mode:
+// BufferedPipe creates an in-memory, full duplex network connection
+// that is buffered and asynchronous; both ends implement the StreamConn interface.
+// A write on one end may be consumed by several reads on the other. It returns
+// once it has been queued, unless the queue already holds queueSize writes,
+// in which case it blocks. Data are copied internally, so the write buffer
+// may be reused once a write returns. When the remote end is closed, reads
+// return io.EOF once all the bytes queued internally have been read.
 //
-// (a) Unbuffered and synchronous (queueSize == 0, semiSync == false).
+// BufferedPipe panics if queueSize isn't positive.
+func BufferedPipe(queueSize int) (StreamConn, StreamConn) {
+	if queueSize <= 0 {
+		panic("hybrid: BufferedPipe: non-positive queueSize")
+	}
+	return newPipe(queueSize, true)
+}
+
+// UnbufferedPipe creates an in-memory, full duplex network connection
+// that is unbuffered; both ends implement the StreamConn interface.
+// A write on one end may be consumed by several reads on the other,
+// but the moment the write returns depends on semiSync:
+//
+// (a) Synchronous (semiSync == false).
 // Reads on one end are matched with writes on the other,
 // copying data directly between the two; there is no internal
 // buffering. A write returns once all its bytes have been read,
 // the same way as with [net.Pipe].
 //
-// (b) Unbuffered and semi-synchronous (queueSize == 0, semiSync == true).
+// (b) Semi-synchronous (semiSync == true).
 // A write returns once a read on the other end has received it,
 // even if the read buffer is shorter than the write buffer: the
 // remaining bytes are retained internally for subsequent reads,
-// and the next write blocks until they have been read.
-//
-// (c) Buffered and asynchronous (queueSize > 0, semiSync is ignored).
-// A write returns once it has been queued, unless the queue already
-// holds queueSize writes, in which case it blocks.
-//
-// In (b) and (c), data are copied internally, so the write buffer may be
-// reused once a write returns, which is trivially true for (a) as well.
+// and the next write blocks until they have been read. Data are
+// copied internally, so the write buffer may be reused once a write
+// returns, which is trivially true for (a) as well.
 //
 // When the remote end is closed, reads return io.EOF once all the bytes
-// retained or queued internally in (b) and (c) have been read.
-func Pipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
+// retained internally in (b) have been read.
+func UnbufferedPipe(semiSync bool) (StreamConn, StreamConn) {
+	return newPipe(0, semiSync)
+}
+
+// newPipe creates a pipe of the mode specified by queueSize and semiSync,
+// see [BufferedPipe] and [UnbufferedPipe]. A positive queueSize implies semiSync.
+func newPipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
 	cb1 := make(chan []byte, queueSize)
 	cb2 := make(chan []byte, queueSize)
 	cn1 := make(chan int)
