@@ -164,11 +164,18 @@ func (p *trunk) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 // It serializes reads and blocks until a packet is received or the trunk is closed or a deadline expires.
 // If the provided buffer is too small, it returns io.ErrShortBuffer and drops the excess bytes.
 func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
+	var pkt trunkPacket
+
 	switch {
 	case isClosedChan(p.locDone):
 		return 0, nil, nil, 0, errTrunkClosed
-	case isClosedChan(p.remDone) && len(p.rdRx) == 0:
-		return 0, nil, nil, 0, errTrunkEOF // TODO(vnxme): racy len check?
+	case isClosedChan(p.remDone):
+		select {
+		case pkt = <-p.rdRx:
+			goto success
+		default:
+			return 0, nil, nil, 0, errTrunkEOF
+		}
 	case isClosedChan(p.rdDeadline.Wait()):
 		return 0, nil, nil, 0, errTrunkDeadlineExceeded
 	}
@@ -178,27 +185,39 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 	switch {
 	case isClosedChan(p.locDone):
 		return 0, nil, nil, 0, errTrunkClosed
-	case isClosedChan(p.remDone) && len(p.rdRx) == 0:
-		return 0, nil, nil, 0, errTrunkEOF
+	case isClosedChan(p.remDone):
+		select {
+		case pkt = <-p.rdRx:
+			goto success
+		default:
+			return 0, nil, nil, 0, errTrunkEOF
+		}
 	case isClosedChan(p.rdDeadline.Wait()):
 		return 0, nil, nil, 0, errTrunkDeadlineExceeded
 	}
 
 	select {
-	case pkt := <-p.rdRx:
-		nr := copy(b, pkt.b)
-		var err error
-		if nr < len(pkt.b) { // Unread bytes are dropped, i.e. a trunk doesn't support partial read
-			err = errTrunkShortBuffer
+	case pkt = <-p.rdRx:
+		goto success
+	default:
+		select {
+		case pkt = <-p.rdRx:
+			goto success
+		case <-p.locDone:
+			return 0, nil, nil, 0, errTrunkClosed
+		case <-p.remDone:
+			return 0, nil, nil, 0, errTrunkEOF
+		case <-p.rdDeadline.Wait():
+			return 0, nil, nil, 0, errTrunkDeadlineExceeded
 		}
-		return nr, pkt.l, pkt.r, pkt.i, err
-	case <-p.locDone:
-		return 0, nil, nil, 0, errTrunkClosed
-	case <-p.remDone:
-		return 0, nil, nil, 0, errTrunkEOF
-	case <-p.rdDeadline.Wait():
-		return 0, nil, nil, 0, errTrunkDeadlineExceeded
 	}
+
+success:
+	nr := copy(b, pkt.b)
+	if nr < len(pkt.b) { // Unread bytes are dropped, i.e. a trunk doesn't support partial read
+		return nr, pkt.l, pkt.r, pkt.i, errTrunkShortBuffer
+	}
+	return nr, pkt.l, pkt.r, pkt.i, nil
 }
 
 // WriteTo writes a packet of len(b) bytes to the remote addr.
@@ -225,28 +244,46 @@ func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 	switch {
 	case isClosedChan(p.locDone):
 		return 0, errTrunkClosed
+	case isClosedChan(p.wrDeadline.Wait()):
+		return 0, errTrunkDeadlineExceeded
 	case isClosedChan(p.remDone):
+		return 0, errTrunkClosed
+	}
+
+	p.wrMu.Lock()
+	defer p.wrMu.Unlock()
+	switch {
+	case isClosedChan(p.locDone):
 		return 0, errTrunkClosed
 	case isClosedChan(p.wrDeadline.Wait()):
 		return 0, errTrunkDeadlineExceeded
+	case isClosedChan(p.remDone):
+		return 0, errTrunkClosed
 	}
 
-	p.wrMu.Lock() // Ensure entirety of b is written together
-	defer p.wrMu.Unlock()
 	pkt := trunkPacket{b: b, r: r, l: l, i: i}
 	if cap(p.wrTx) > 0 { // An async buffered trunk requires copy on write
 		pkt.b = slices.Clone(b) // TODO(vnxme): use a pool?
 	}
+
 	select {
 	case p.wrTx <- pkt:
-		return len(b), nil
-	case <-p.locDone:
-		return 0, errTrunkClosed
-	case <-p.remDone:
-		return 0, errTrunkClosed
-	case <-p.wrDeadline.Wait():
-		return 0, errTrunkDeadlineExceeded
+		goto success
+	default:
+		select {
+		case p.wrTx <- pkt:
+			goto success
+		case <-p.locDone:
+			return 0, errTrunkClosed
+		case <-p.remDone:
+			return 0, errTrunkClosed
+		case <-p.wrDeadline.Wait():
+			return 0, errTrunkDeadlineExceeded
+		}
 	}
+
+success:
+	return len(b), nil
 }
 
 // SetDeadline sets the read and write deadlines to t.
@@ -281,14 +318,19 @@ func (p *trunk) SetWriteDeadline(t time.Time) error {
 }
 
 // Close closes the trunk, signaling completion and preventing further I/O.
-// Returns no error if the trunk is closed.
-func (p *trunk) Close() error {
-	p.once.Do(func() { close(p.locDone) })
-	return nil
+// Returns io.ErrClosedPipe if the trunk is closed.
+func (p *trunk) Close() (err error) {
+	err = errTrunkClosed
+	p.once.Do(func() {
+		close(p.locDone)
+		err = nil
+	})
+	return
 }
 
 const trunkNetwork = "trunk"
 
+// Shared variables
 var (
 	errTrunkClosed           = io.ErrClosedPipe
 	errTrunkDeadlineExceeded = os.ErrDeadlineExceeded

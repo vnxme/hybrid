@@ -235,7 +235,7 @@ func (p *pipe) write(b []byte) (n int, err error) {
 	p.wrMu.Lock() // Ensure entirety of b is written together
 	defer p.wrMu.Unlock()
 	if p.rdPart { // A semi-sync unbuffered/async buffered pipe requires copy on write
-		b = append([]byte{}, b...)
+		b = append([]byte{}, b...) // TODO(vnxme): use a pool?
 	}
 	for once := true; once || len(b) > 0; once = false {
 		select {

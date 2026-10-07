@@ -16,6 +16,8 @@ package hybrid
 
 import (
 	"net"
+	"net/netip"
+	"syscall"
 	"time"
 )
 
@@ -30,12 +32,56 @@ type Deadline interface {
 	Wait() chan struct{}
 }
 
+// MixedConn is a network connection that implements both PacketConn and StreamConn interfaces.
+type MixedConn interface {
+	PacketConn
+	StreamConn
+}
+
+type DataPacket interface {
+	Cap() int
+	Len() int
+
+	ReadableBuffer() []byte
+	WritableBuffer() []byte
+
+	Reset()
+}
+
+type NetworkPacket interface {
+	DataPacket
+
+	Data() DataPacket
+
+	LocalIfIdx() int
+
+	LocalAddr() net.Addr
+	RemoteAddr() net.Addr
+
+	Reset()
+}
+
 // PacketConn is an alias for net.PacketConn, i.e. a generic packet-oriented network connection.
 type PacketConn = net.PacketConn
 
 // PacketConnWrapper can unwrap the underlying PacketConn.
 type PacketConnWrapper interface {
 	Unwrap() PacketConn
+}
+
+// PacketListener is a generic network listener for packet-oriented protocols, similar to StreamListener.
+type PacketListener interface {
+	// Accept waits for and returns the next connection to the listener.
+	Accept() (MixedConn, error)
+	// Close closes the listener. Any operations blocked by Accept will be unblocked and return errors.
+	Close() error
+	// Addr returns the listener's network address.
+	Addr() net.Addr
+}
+
+// PacketListenerWrapper can unwrap the underlying PacketListener.
+type PacketListenerWrapper interface {
+	Unwrap() PacketListener
 }
 
 // ReaderFromTo is a capability of a generic packet-oriented network connection
@@ -63,12 +109,45 @@ type SelectivePacketConn interface {
 	WriterToFrom
 }
 
+// SelectiveUDPConn is a UDP connection that is aware of the local addresses
+// and the local interface indices when it comes to reading and writing packets.
+type SelectiveUDPConn interface {
+	UDPConn
+	ReaderFromTo
+	WriterToFrom
+
+	ReadFromToUDP(b []byte) (n int, src *net.UDPAddr, dst *net.UDPAddr, idx int, err error)
+	ReadFromToUDPAddrPort(b []byte) (n int, src netip.AddrPort, dst netip.AddrPort, idx int, err error)
+	WriteToFromUDP(b []byte, dst, src *net.UDPAddr, idx int) (n int, err error)
+	WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error)
+}
+
 // StreamConn is an alias for net.Conn, i.e. a generic stream-oriented network connection.
 type StreamConn = net.Conn
 
 // StreamConnWrapper can unwrap the underlying StreamConn.
 type StreamConnWrapper interface {
 	Unwrap() StreamConn
+}
+
+// StreamListener is an alias for net.Listener, i.e. a generic network listener for stream-oriented protocols.
+type StreamListener = net.Listener
+
+// UDPConn is an interface that is implicitly implemented by *net.UDPConn.
+type UDPConn interface {
+	PacketConn
+
+	SyscallConn() (syscall.RawConn, error)
+
+	ReadFromUDP(b []byte) (n int, addr *net.UDPAddr, err error)
+	ReadFromUDPAddrPort(b []byte) (n int, addr netip.AddrPort, err error)
+	WriteToUDP(b []byte, addr *net.UDPAddr) (int, error)
+	WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error)
+
+	ReadMsgUDP(b []byte, oob []byte) (n int, oobn int, flags int, addr *net.UDPAddr, err error)
+	ReadMsgUDPAddrPort(b []byte, oob []byte) (n int, oobn int, flags int, addr netip.AddrPort, err error)
+	WriteMsgUDP(b []byte, oob []byte, addr *net.UDPAddr) (n int, oobn int, err error)
+	WriteMsgUDPAddrPort(b []byte, oob []byte, addr netip.AddrPort) (n int, oobn int, err error)
 }
 
 // WriterToFrom is a capability of a generic packet-oriented network connection
