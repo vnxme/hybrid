@@ -277,8 +277,8 @@ func (i *inlet) newConnection(src, dst net.Addr, idx int, key string) *inletConn
 		localDone:  make(chan struct{}),
 		remoteDone: i.done,
 
-		rdDeadline: SimpleDeadline(),
-		wrDeadline: SimpleDeadline(),
+		rdDeadline: makeDeadline(noHook{}),
+		wrDeadline: makeDeadline(noHook{}),
 
 		localAddr:  dst,
 		remoteAddr: src,
@@ -788,8 +788,8 @@ type inletConn struct {
 	localDone  chan struct{}
 	remoteDone <-chan struct{}
 
-	rdDeadline Deadline
-	wrDeadline Deadline
+	rdDeadline deadline[noHook]
+	wrDeadline deadline[noHook]
 
 	once sync.Once  // Protects closing localDone
 	rdMu sync.Mutex // Serialize Read operations
