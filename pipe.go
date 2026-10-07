@@ -29,6 +29,7 @@
 package hybrid
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -195,11 +196,10 @@ func (p *pipe) read(b []byte) (n int, err error) {
 		nr := copy(b, bw)
 		if cap(p.rdRx) == 0 { // An unbuffered pipe can be sync or semi-sync
 			if p.retain { // A semi-sync pipe retains unread bytes and reports all of them written
-				sz := len(bw)
-				p.rdTx <- sz
-				if nr < sz {
-					p.rdBuf = bw[nr:]
+				if nr < len(bw) { // Copy before reporting, as remote Write returns and b may be reused
+					p.rdBuf = bytes.Clone(bw[nr:])
 				}
+				p.rdTx <- len(bw)
 			} else { // A sync pipe reports only read bytes, so Write resends the rest
 				p.rdTx <- nr
 			}
@@ -251,8 +251,8 @@ func (p *pipe) write(b []byte) (n int, err error) {
 
 	p.wrMu.Lock() // Ensure entirety of b is written together
 	defer p.wrMu.Unlock()
-	if p.retain { // A semi-sync/async pipe requires copy on write, as Write returns before b is read
-		b = append([]byte{}, b...) // TODO(vnxme): use a pool?
+	if cap(p.wrTx) > 0 { // An async pipe requires copy on write, as Write returns before b is read
+		b = bytes.Clone(b) // TODO(vnxme): use a pool?
 	}
 	for len(b) > 0 {
 		select {
