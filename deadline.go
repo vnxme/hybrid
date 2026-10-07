@@ -48,7 +48,7 @@ type funcHook func()
 func (f funcHook) run() { f() }
 
 // deadline is an abstraction for handling timeouts.
-// Once a timeout has occurred, it runs its hook.
+// Once a timer set up by Set fires, it runs its hook, see [HookDeadline].
 type deadline[H deadlineHook] struct {
 	hook   H
 	timer  *time.Timer
@@ -68,7 +68,19 @@ func SimpleDeadline() Deadline {
 }
 
 // HookDeadline returns a pointer to the struct that satisfies the Deadline interface.
-// Unless the hook argument is nil, it is run when the timer fires before the channel is closed.
+// Unless the hook argument is nil, it is run as follows:
+//
+//   - The hook is run on its own goroutine once the time passed to Set in the future
+//     has come. It isn't run if Set is called with a zero time or a time in the past.
+//   - The hook is run before the channel returned by Wait is closed, so its effects
+//     are observed by any goroutine having received from the channel.
+//   - Set waits for a running hook to return, so once Set returns, no hook started
+//     for an earlier time is running, and none will be started.
+//
+// Consequently, the hook must not call Set on the same deadline, directly or indirectly,
+// as it always deadlocks, nor Wait, as it deadlocks if Set is called concurrently.
+// The hook should also return promptly, as it blocks concurrent calls of Set,
+// as well as calls of Wait made while Set is blocked.
 func HookDeadline(hook func()) Deadline {
 	if hook == nil {
 		return SimpleDeadline()
