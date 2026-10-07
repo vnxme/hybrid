@@ -181,7 +181,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 		return 0, io.EOF
 	case isClosedChan(p.rdDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
-	case p.retain && p.rdBuf != nil:
+	case p.rdBuf != nil: // Only a semi-sync/async pipe retains unread bytes
 		nr := copy(b, p.rdBuf)
 		if nr < len(p.rdBuf) {
 			p.rdBuf = p.rdBuf[nr:]
@@ -212,16 +212,15 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	case <-p.localDone:
 		return 0, io.ErrClosedPipe
 	case <-p.remoteDone:
-		if p.retain {
-			// No need to check p.rdBuf here: unless it was empty, the function would return above
-			if len(p.rdRx) > 0 {
-				bw := <-p.rdRx
-				nr := copy(b, bw)
-				if nr < len(bw) {
-					p.rdBuf = bw[nr:]
-				}
-				return nr, nil
+		// Only an async pipe may have queued bytes. No need to check p.rdBuf here:
+		// unless it was empty, the function would return above
+		if len(p.rdRx) > 0 {
+			bw := <-p.rdRx
+			nr := copy(b, bw)
+			if nr < len(bw) {
+				p.rdBuf = bw[nr:]
 			}
+			return nr, nil
 		}
 		return 0, io.EOF
 	case <-p.rdDeadline.Wait():
