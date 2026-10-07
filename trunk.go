@@ -190,6 +190,8 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 	switch {
 	case isClosedChan(p.localDone):
 		return 0, nil, nil, 0, errTrunkClosed
+	case isClosedChan(p.rdDeadline.Wait()): // An exceeded deadline prevails over pending packets
+		return 0, nil, nil, 0, errTrunkDeadlineExceeded
 	case isClosedChan(p.remoteDone):
 		select {
 		case pkt = <-p.rdRx:
@@ -197,8 +199,6 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 		default:
 			return 0, nil, nil, 0, errTrunkEOF
 		}
-	case isClosedChan(p.rdDeadline.Wait()):
-		return 0, nil, nil, 0, errTrunkDeadlineExceeded
 	}
 
 	p.rdMu.Lock()
@@ -206,6 +206,8 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 	switch {
 	case isClosedChan(p.localDone):
 		return 0, nil, nil, 0, errTrunkClosed
+	case isClosedChan(p.rdDeadline.Wait()): // An exceeded deadline prevails over pending packets
+		return 0, nil, nil, 0, errTrunkDeadlineExceeded
 	case isClosedChan(p.remoteDone):
 		select {
 		case pkt = <-p.rdRx:
@@ -213,8 +215,6 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 		default:
 			return 0, nil, nil, 0, errTrunkEOF
 		}
-	case isClosedChan(p.rdDeadline.Wait()):
-		return 0, nil, nil, 0, errTrunkDeadlineExceeded
 	}
 
 	select {

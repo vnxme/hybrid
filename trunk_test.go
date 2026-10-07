@@ -133,11 +133,24 @@ func TestTrunkReadLLM(t *testing.T) {
 				_ = trB.Close()
 			},
 			bufLen:  64,
-			wantN:   7,
-			wantL:   laddr,
-			wantR:   raddr,
-			wantI:   7,
-			wantErr: nil,
+			wantN:   0,
+			wantL:   nil,
+			wantR:   nil,
+			wantI:   0,
+			wantErr: errTrunkDeadlineExceeded,
+		},
+		{
+			name: "ReadDeadlineExceededPendingData",
+			setup: func(t *testing.T, trA, trB *trunk) {
+				_ = trA.SetReadDeadline(time.Now().Add(-time.Second))
+				trB.wrTx <- trunkPacket{b: []byte("pending"), src: laddr, dst: raddr, i: 7}
+			},
+			bufLen:  64,
+			wantN:   0,
+			wantL:   nil,
+			wantR:   nil,
+			wantI:   0,
+			wantErr: errTrunkDeadlineExceeded,
 		},
 	}
 
