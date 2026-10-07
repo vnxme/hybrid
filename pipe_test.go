@@ -173,6 +173,7 @@ func TestPipe(t *testing.T) {
 			t.Run(testPipeDrainName, func(t *testing.T) { testPipeDrain(t, test.ctor, test.mode) })
 			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
 			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor) })
+			t.Run(testPipeWriteReturnName, func(t *testing.T) { testPipeWriteReturn(t, test.ctor, test.mode) })
 			t.Run(testPipeZeroLengthName, func(t *testing.T) { testPipeZeroLength(t, test.ctor) })
 		})
 	}
@@ -469,6 +470,79 @@ func testPipeSliceAlias(t *testing.T, ctor pipeCtor) {
 	}
 }
 
+// testPipeWriteReturn ensures a write returns once all its bytes have been read in a sync pipe,
+// once it has been received by a read in a semi-sync pipe, or once it has been queued in an async pipe.
+// A write expected to block is detected by exceeding a short deadline.
+func testPipeWriteReturn(t *testing.T, ctor pipeCtor, mode pipeMode) {
+	c1, c2 := ctor()
+	defer func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	}()
+	const block = 100 * time.Millisecond
+	_ = c2.SetReadDeadline(time.Now().Add(time.Second)) // Fail instead of hanging
+
+	// read reads up to n bytes from c2 in a separate goroutine
+	read := func(n int) <-chan []byte {
+		ch := make(chan []byte, 1)
+		go func() {
+			b := make([]byte, n)
+			nr, err := c2.Read(b)
+			if err != nil {
+				t.Errorf("c2.Read() = %v, want nil", err)
+			}
+			ch <- b[:nr]
+		}()
+		return ch
+	}
+
+	switch mode {
+	case pipeModeSync:
+		ch := read(3)
+		_ = c1.SetWriteDeadline(time.Now().Add(block))
+		if n, err := c1.Write(make([]byte, 10)); n != 3 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("c1.Write() = %d, %v, want 3, os.ErrDeadlineExceeded", n, err)
+		}
+		<-ch
+	case pipeModeSemiSync:
+		ch := read(3)
+		_ = c1.SetWriteDeadline(time.Now().Add(time.Second))
+		if n, err := c1.Write([]byte("0123456789")); n != 10 || err != nil {
+			t.Errorf("c1.Write() = %d, %v, want 10, nil", n, err)
+		}
+		<-ch
+		_ = c1.SetWriteDeadline(time.Now().Add(block))
+		if n, err := c1.Write([]byte("x")); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("c1.Write() = %d, %v, want 0, os.ErrDeadlineExceeded", n, err)
+		}
+		if b := <-read(16); string(b) != "3456789" {
+			t.Errorf("c2.Read() = %q, want %q", b, "3456789")
+		}
+	case pipeModeAsync:
+		_ = c1.SetWriteDeadline(time.Now().Add(time.Second))
+		for i := range pipeQueueSize {
+			if n, err := c1.Write([]byte{byte(i)}); n != 1 || err != nil {
+				t.Errorf("c1.Write() = %d, %v, want 1, nil", n, err)
+			}
+		}
+		_ = c1.SetWriteDeadline(time.Now().Add(block))
+		if n, err := c1.Write([]byte{0xff}); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("c1.Write() = %d, %v, want 0, os.ErrDeadlineExceeded", n, err)
+		}
+		for i := range pipeQueueSize {
+			if b := <-read(16); !bytes.Equal(b, []byte{byte(i)}) {
+				t.Errorf("c2.Read() = %v, want %v", b, []byte{byte(i)})
+			}
+		}
+	}
+
+	// Nothing else may be read, including the bytes of a write that has timed out
+	_ = c2.SetReadDeadline(time.Now().Add(block))
+	if n, err := c2.Read(make([]byte, 16)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("c2.Read() = %d, %v, want 0, os.ErrDeadlineExceeded", n, err)
+	}
+}
+
 // testPipeZeroLength ensures zero-length reads and writes behave like TCP ones:
 // they return immediately, and no zero-length write is ever observed by a read.
 func testPipeZeroLength(t *testing.T, ctor pipeCtor) {
@@ -534,5 +608,6 @@ const (
 	testPipeDrainName          = "Drain"
 	testPipeEmptyAddrName      = "EmptyAddr"
 	testPipeSliceAliasName     = "SliceAlias"
+	testPipeWriteReturnName    = "WriteReturn"
 	testPipeZeroLengthName     = "ZeroLength"
 )
