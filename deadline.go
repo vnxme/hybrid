@@ -118,7 +118,7 @@ func (d *deadline[H]) Set(t time.Time) {
 }
 
 // Wait returns a channel that is closed when the deadline is exceeded.
-func (d *deadline[H]) Wait() chan struct{} {
+func (d *deadline[H]) Wait() <-chan struct{} {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.cancel

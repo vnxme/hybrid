@@ -29,7 +29,7 @@ type Deadline interface {
 	// a time value in the future. A zero time value prevents timeout.
 	Set(t time.Time)
 	// Wait returns a channel that is closed when the deadline is exceeded.
-	Wait() chan struct{}
+	Wait() <-chan struct{}
 }
 
 // MixedConn is a network connection that implements both PacketConn and StreamConn interfaces.
