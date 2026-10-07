@@ -68,13 +68,13 @@ type pipe struct {
 	localDone  chan struct{}
 	remoteDone <-chan struct{}
 
-	rdBuf []byte // Bytes saved for partial reading
+	rdBuf []byte // Unread bytes retained from a remote Write
 
 	once sync.Once  // Protects closing localDone
 	rdMu sync.Mutex // Serialize Read operations
 	wrMu sync.Mutex // Serialize Write operations
 
-	rdPart bool // Partial reading switch
+	retain bool // Read retains unread bytes, so Write needn't wait for them to be read
 }
 
 // BufferedPipe returns a buffered asynchronous Pipe.
@@ -83,32 +83,37 @@ func BufferedPipe(queueSize int) (StreamConn, StreamConn) {
 }
 
 // UnbufferedPipe returns an unbuffered synchronous or semi-synchronous Pipe.
-func UnbufferedPipe(partialRead bool) (StreamConn, StreamConn) {
-	return Pipe(0, partialRead)
+func UnbufferedPipe(semiSync bool) (StreamConn, StreamConn) {
+	return Pipe(0, semiSync)
 }
 
 // Pipe creates an in-memory, full duplex network connection;
-// both ends implement the StreamConn interface. It can be:
+// both ends implement the StreamConn interface. In any mode,
+// a write on one end may be consumed by several reads on the other,
+// but the moment the write returns depends on the mode:
 //
-// (a) Unbuffered and synchronous.
+// (a) Unbuffered and synchronous (queueSize == 0, semiSync == false).
 // Reads on one end are matched with writes on the other,
 // copying data directly between the two; there is no internal
-// buffering, and partial reading isn't be supported.
+// buffering. A write returns once all its bytes have been read,
+// the same way as with [net.Pipe].
 //
-// (b) Unbuffered and semi-synchronous.
-// When the target read buffer is shorter than the source write buffer,
-// the latter is saved internally so that its remaining bytes could be
-// asynchronously read later, i.e. partial reading is supported.
+// (b) Unbuffered and semi-synchronous (queueSize == 0, semiSync == true).
+// A write returns once a read on the other end has received it,
+// even if the read buffer is shorter than the write buffer: the
+// remaining bytes are retained internally for subsequent reads,
+// and the next write blocks until they have been read.
 //
-// (c) Buffered and asynchronous.
-// Reads on one end aren't matched with writes on the other;
-// data are copied internally to prevent slice aliasing issues;
-// partial reading is also supported by definition.
+// (c) Buffered and asynchronous (queueSize > 0, semiSync is ignored).
+// A write returns once it has been queued, unless the queue already
+// holds queueSize writes, in which case it blocks.
 //
-// Note: when the remote end is closed, (a) returns io.EOF immediately
-// after that, but (b) and (c) return io.EOF only once there are no more
-// packets left in the read channel and no more bytes partially unread.
-func Pipe(queueSize int, partialRead bool) (StreamConn, StreamConn) {
+// In (b) and (c), data are copied internally, so the write buffer may be
+// reused once a write returns, which is trivially true for (a) as well.
+//
+// When the remote end is closed, reads return io.EOF once all the bytes
+// retained or queued internally in (b) and (c) have been read.
+func Pipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
 	cb1 := make(chan []byte, queueSize)
 	cb2 := make(chan []byte, queueSize)
 	cn1 := make(chan int)
@@ -122,7 +127,7 @@ func Pipe(queueSize int, partialRead bool) (StreamConn, StreamConn) {
 		localDone: done1, remoteDone: done2,
 		rdDeadline: HookDeadline(nil),
 		wrDeadline: HookDeadline(nil),
-		rdPart:     partialRead || queueSize > 0,
+		retain:     semiSync || queueSize > 0,
 	}
 	p2 := &pipe{
 		rdRx: cb2, rdTx: cn2,
@@ -130,7 +135,7 @@ func Pipe(queueSize int, partialRead bool) (StreamConn, StreamConn) {
 		localDone: done2, remoteDone: done1,
 		rdDeadline: HookDeadline(nil),
 		wrDeadline: HookDeadline(nil),
-		rdPart:     partialRead || queueSize > 0,
+		retain:     semiSync || queueSize > 0,
 	}
 	return p1, p2
 }
@@ -166,7 +171,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 		return 0, io.EOF
 	case isClosedChan(p.rdDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
-	case p.rdPart && p.rdBuf != nil:
+	case p.retain && p.rdBuf != nil:
 		nr := copy(b, p.rdBuf)
 		if nr < len(p.rdBuf) {
 			p.rdBuf = p.rdBuf[nr:]
@@ -180,16 +185,16 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	case bw := <-p.rdRx:
 		nr := copy(b, bw)
 		if cap(p.rdRx) == 0 { // An unbuffered pipe can be sync or semi-sync
-			if p.rdPart { // A semi-sync unbuffered pipe supports partial read
+			if p.retain { // A semi-sync pipe retains unread bytes and reports all of them written
 				sz := len(bw)
 				p.rdTx <- sz
 				if nr < sz {
 					p.rdBuf = bw[nr:]
 				}
-			} else { // A sync unbuffered pipe drops unread bytes
+			} else { // A sync pipe reports only read bytes, so Write resends the rest
 				p.rdTx <- nr
 			}
-		} else { // A buffered pipe is async by definition and supports partial read
+		} else { // A buffered pipe is async by definition and retains unread bytes
 			if nr < len(bw) {
 				p.rdBuf = bw[nr:]
 			}
@@ -198,7 +203,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	case <-p.localDone:
 		return 0, io.ErrClosedPipe
 	case <-p.remoteDone:
-		if p.rdPart {
+		if p.retain {
 			// No need to check p.rdBuf here: unless it was empty, the function would return above
 			if len(p.rdRx) > 0 {
 				bw := <-p.rdRx
@@ -235,7 +240,7 @@ func (p *pipe) write(b []byte) (n int, err error) {
 
 	p.wrMu.Lock() // Ensure entirety of b is written together
 	defer p.wrMu.Unlock()
-	if p.rdPart { // A semi-sync unbuffered/async buffered pipe requires copy on write
+	if p.retain { // A semi-sync/async pipe requires copy on write, as Write returns before b is read
 		b = append([]byte{}, b...) // TODO(vnxme): use a pool?
 	}
 	for once := true; once || len(b) > 0; once = false {
