@@ -60,21 +60,23 @@ type trunkPacket struct {
 
 // trunk represents a packet-oriented communication channel between local and remote endpoints.
 type trunk struct {
-	rdRx <-chan trunkPacket // Used by local read to interact with remote write
-	wrTx chan<- trunkPacket // Used by local write to interact with remote read
+	// Used by local read to interact with remote write. For an unbuffered trunk,
+	// receive on rdRx is always followed by send on rdTx, once the packet is copied
+	rdRx <-chan trunkPacket
+	rdTx chan<- struct{}
 
-	// For an unbuffered trunk, receive on rdRx is always followed by send on rdAck,
-	// once the packet has been copied, and send on wrTx by receive on wrAck
-	rdAck chan<- struct{}
-	wrAck <-chan struct{}
+	// Used by local write to interact with remote read. For an unbuffered trunk,
+	// send on wrTx is always followed by receive on wrRx
+	wrTx chan<- trunkPacket
+	wrRx <-chan struct{}
 
-	locDone chan struct{}
-	remDone <-chan struct{}
+	localDone  chan struct{}
+	remoteDone <-chan struct{}
 
 	rdDeadline deadline[noHook]
 	wrDeadline deadline[noHook]
 
-	once sync.Once  // Protects closing locDone
+	once sync.Once  // Protects closing localDone
 	rdMu sync.Mutex // Serialize read operations
 	wrMu sync.Mutex // Serialize write operations
 }
@@ -125,16 +127,16 @@ func Trunk(queueSize int) (SelectivePacketConn, SelectivePacketConn) {
 	done2 := make(chan struct{})
 
 	p1 := &trunk{
-		rdRx: chan1, rdAck: ack1,
-		wrTx: chan2, wrAck: ack2,
-		locDone: done1, remDone: done2,
+		rdRx: chan1, rdTx: ack1,
+		wrTx: chan2, wrRx: ack2,
+		localDone: done1, remoteDone: done2,
 		rdDeadline: makeDeadline(noHook{}),
 		wrDeadline: makeDeadline(noHook{}),
 	}
 	p2 := &trunk{
-		rdRx: chan2, rdAck: ack2,
-		wrTx: chan1, wrAck: ack1,
-		locDone: done2, remDone: done1,
+		rdRx: chan2, rdTx: ack2,
+		wrTx: chan1, wrRx: ack1,
+		localDone: done2, remoteDone: done1,
 		rdDeadline: makeDeadline(noHook{}),
 		wrDeadline: makeDeadline(noHook{}),
 	}
@@ -175,9 +177,9 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 	var pkt trunkPacket
 
 	switch {
-	case isClosedChan(p.locDone):
+	case isClosedChan(p.localDone):
 		return 0, nil, nil, 0, errTrunkClosed
-	case isClosedChan(p.remDone):
+	case isClosedChan(p.remoteDone):
 		select {
 		case pkt = <-p.rdRx:
 			goto success
@@ -191,9 +193,9 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 	p.rdMu.Lock()
 	defer p.rdMu.Unlock()
 	switch {
-	case isClosedChan(p.locDone):
+	case isClosedChan(p.localDone):
 		return 0, nil, nil, 0, errTrunkClosed
-	case isClosedChan(p.remDone):
+	case isClosedChan(p.remoteDone):
 		select {
 		case pkt = <-p.rdRx:
 			goto success
@@ -211,9 +213,9 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 		select {
 		case pkt = <-p.rdRx:
 			goto success
-		case <-p.locDone:
+		case <-p.localDone:
 			return 0, nil, nil, 0, errTrunkClosed
-		case <-p.remDone:
+		case <-p.remoteDone:
 			return 0, nil, nil, 0, errTrunkEOF
 		case <-p.rdDeadline.Wait():
 			return 0, nil, nil, 0, errTrunkDeadlineExceeded
@@ -223,7 +225,7 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 success:
 	nr := copy(b, pkt.b)
 	if cap(p.rdRx) == 0 { // An unbuffered trunk lets remote write return only once the packet is copied
-		p.rdAck <- struct{}{}
+		p.rdTx <- struct{}{}
 	}
 	if nr < len(pkt.b) { // Unread bytes are dropped, i.e. a trunk doesn't support partial read
 		return nr, pkt.l, pkt.r, pkt.i, errTrunkShortBuffer
@@ -253,22 +255,22 @@ func (p *trunk) WriteToFrom(b []byte, r, l net.Addr, i int) (int, error) {
 // For buffered trunks, it copies b to avoid slice aliasing issues.
 func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 	switch {
-	case isClosedChan(p.locDone):
+	case isClosedChan(p.localDone):
 		return 0, errTrunkClosed
 	case isClosedChan(p.wrDeadline.Wait()):
 		return 0, errTrunkDeadlineExceeded
-	case isClosedChan(p.remDone):
+	case isClosedChan(p.remoteDone):
 		return 0, errTrunkClosed
 	}
 
 	p.wrMu.Lock()
 	defer p.wrMu.Unlock()
 	switch {
-	case isClosedChan(p.locDone):
+	case isClosedChan(p.localDone):
 		return 0, errTrunkClosed
 	case isClosedChan(p.wrDeadline.Wait()):
 		return 0, errTrunkDeadlineExceeded
-	case isClosedChan(p.remDone):
+	case isClosedChan(p.remoteDone):
 		return 0, errTrunkClosed
 	}
 
@@ -284,9 +286,9 @@ func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 		select {
 		case p.wrTx <- pkt:
 			goto success
-		case <-p.locDone:
+		case <-p.localDone:
 			return 0, errTrunkClosed
-		case <-p.remDone:
+		case <-p.remoteDone:
 			return 0, errTrunkClosed
 		case <-p.wrDeadline.Wait():
 			return 0, errTrunkDeadlineExceeded
@@ -295,7 +297,7 @@ func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 
 success:
 	if cap(p.wrTx) == 0 { // An unbuffered trunk doesn't copy on write, so wait until remote read copies the packet
-		<-p.wrAck
+		<-p.wrRx
 	}
 	return len(b), nil
 }
@@ -303,7 +305,7 @@ success:
 // SetDeadline sets the read and write deadlines to t.
 // Returns io.ErrClosedPipe if the trunk is closed.
 func (p *trunk) SetDeadline(t time.Time) error {
-	if isClosedChan(p.locDone) || isClosedChan(p.remDone) {
+	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
 		return errTrunkClosed
 	}
 	p.rdDeadline.Set(t)
@@ -314,7 +316,7 @@ func (p *trunk) SetDeadline(t time.Time) error {
 // SetReadDeadline sets the read deadline to t.
 // Returns io.ErrClosedPipe if the trunk is closed.
 func (p *trunk) SetReadDeadline(t time.Time) error {
-	if isClosedChan(p.locDone) || isClosedChan(p.remDone) {
+	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
 		return errTrunkClosed
 	}
 	p.rdDeadline.Set(t)
@@ -324,7 +326,7 @@ func (p *trunk) SetReadDeadline(t time.Time) error {
 // SetWriteDeadline sets the write deadline to t.
 // Returns io.ErrClosedPipe if the trunk is closed.
 func (p *trunk) SetWriteDeadline(t time.Time) error {
-	if isClosedChan(p.locDone) || isClosedChan(p.remDone) {
+	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
 		return errTrunkClosed
 	}
 	p.wrDeadline.Set(t)
@@ -336,7 +338,7 @@ func (p *trunk) SetWriteDeadline(t time.Time) error {
 func (p *trunk) Close() (err error) {
 	err = errTrunkClosed
 	p.once.Do(func() {
-		close(p.locDone)
+		close(p.localDone)
 		err = nil
 	})
 	return
