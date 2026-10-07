@@ -65,7 +65,6 @@ func BenchmarkPipe(b *testing.B) {
 }
 
 func benchmarkPipeChunkedRead(b *testing.B, ctor pipeCtor) {
-	b.Helper()
 	c1, c2 := ctor()
 
 	bWrite := make([]byte, 1<<10)
@@ -105,7 +104,6 @@ func benchmarkPipeChunkedRead(b *testing.B, ctor pipeCtor) {
 }
 
 func benchmarkPipeChunkedWrite(b *testing.B, ctor pipeCtor) {
-	b.Helper()
 	c1, c2 := ctor()
 
 	bWrite := make([]byte, 1<<5)
@@ -181,7 +179,6 @@ func TestBufferedPipePanic(t *testing.T) {
 }
 
 func testPipeBundle(t *testing.T, ctor pipeCtor) {
-	t.Helper()
 	nettest.TestConn(t, func() (c1, c2 StreamConn, stop func(), err error) {
 		c1, c2 = ctor()
 		stop = func() {
@@ -193,7 +190,6 @@ func testPipeBundle(t *testing.T, ctor pipeCtor) {
 }
 
 func testPipeCloseError(t *testing.T, ctor pipeCtor) {
-	t.Helper()
 	c1, c2 := ctor()
 	_ = c1.Close()
 
@@ -237,7 +233,6 @@ func testPipeCloseError(t *testing.T, ctor pipeCtor) {
 
 // testPipeConcurrentRead ensures concurrent partial reads neither lose bytes nor race.
 func testPipeConcurrentRead(t *testing.T, ctor pipeCtor) {
-	t.Helper()
 	c1, c2 := ctor()
 
 	const writes, size = 1 << 10, 7
@@ -277,7 +272,6 @@ func testPipeConcurrentRead(t *testing.T, ctor pipeCtor) {
 }
 
 func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
-	t.Helper()
 	c1, c2 := ctor()
 
 	l1 := c1.LocalAddr()
@@ -333,7 +327,6 @@ func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
 }
 
 func testPipeSliceAlias(t *testing.T, ctor pipeCtor) {
-	t.Helper()
 	c1, c2 := ctor()
 
 	bSource := make([]byte, 1<<10)
@@ -406,7 +399,6 @@ func testPipeSliceAlias(t *testing.T, ctor pipeCtor) {
 // testPipeZeroLength ensures zero-length reads and writes behave like TCP ones:
 // they return immediately, and no zero-length write is ever observed by a read.
 func testPipeZeroLength(t *testing.T, ctor pipeCtor) {
-	t.Helper()
 	c1, c2 := ctor()
 	if _, ok := c1.(*pipe); !ok {
 		t.Skip("net.Pipe matches a zero-length write with a read")
