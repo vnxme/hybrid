@@ -32,26 +32,49 @@ import (
 	"time"
 )
 
-// hookDeadline is an abstraction for handling timeouts.
-// Once a timeout has occurred, it calls a hook, unless it is nil.
-type hookDeadline struct {
-	hook   func()
+// deadlineHook is run by a deadline when its timer fires, before its channel is closed.
+type deadlineHook interface {
+	run()
+}
+
+// noHook is a deadline hook doing nothing. Being zero-sized, it adds no memory to a deadline.
+type noHook struct{}
+
+func (noHook) run() {}
+
+// funcHook is a deadline hook calling a non-nil function.
+type funcHook func()
+
+func (f funcHook) run() { f() }
+
+// deadline is an abstraction for handling timeouts.
+// Once a timeout has occurred, it runs its hook.
+type deadline[H deadlineHook] struct {
+	hook   H
 	timer  *time.Timer
 	cancel chan struct{} // Must be non-nil
 	mu     sync.Mutex    // Guards timer and cancel
 }
 
+// SimpleDeadline returns a pointer to the struct that satisfies the Deadline interface.
+func SimpleDeadline() Deadline {
+	return &deadline[noHook]{cancel: make(chan struct{})}
+}
+
 // HookDeadline returns a pointer to the struct that satisfies the Deadline interface.
 // Unless the hook argument is nil, it is run when the timer fires before the channel is closed.
 func HookDeadline(hook func()) Deadline {
-	return &hookDeadline{cancel: make(chan struct{}), hook: hook}
+	if hook == nil {
+		return SimpleDeadline()
+	}
+	return &deadline[funcHook]{cancel: make(chan struct{}), hook: hook}
 }
 
 // Set sets the point in time when the deadline will time out.
 // A timeout event is signaled by closing the channel returned by Wait.
 // Once a timeout has occurred, the deadline can be refreshed by specifying
 // a time value in the future. A zero time value prevents timeout.
-func (d *hookDeadline) Set(t time.Time) {
+func (d *deadline[H]) Set(t time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -75,9 +98,7 @@ func (d *hookDeadline) Set(t time.Time) {
 			d.cancel = make(chan struct{})
 		}
 		d.timer = time.AfterFunc(dur, func() {
-			if d.hook != nil {
-				d.hook() // Call the hook before closing the channel.
-			}
+			d.hook.run() // Run the hook before closing the channel.
 			close(d.cancel)
 		})
 		return
@@ -90,11 +111,14 @@ func (d *hookDeadline) Set(t time.Time) {
 }
 
 // Wait returns a channel that is closed when the deadline is exceeded.
-func (d *hookDeadline) Wait() chan struct{} {
+func (d *deadline[H]) Wait() chan struct{} {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.cancel
 }
 
 // Interface guards
-var _ Deadline = (*hookDeadline)(nil)
+var (
+	_ Deadline = (*deadline[noHook])(nil)
+	_ Deadline = (*deadline[funcHook])(nil)
+)

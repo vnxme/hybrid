@@ -277,8 +277,8 @@ func (i *inlet) newConnection(src, dst net.Addr, idx int, key string) *inletConn
 		localDone:  make(chan struct{}),
 		remoteDone: i.done,
 
-		rdDeadline: HookDeadline(nil),
-		wrDeadline: HookDeadline(nil),
+		rdDeadline: SimpleDeadline(),
+		wrDeadline: SimpleDeadline(),
 
 		localAddr:  dst,
 		remoteAddr: src,

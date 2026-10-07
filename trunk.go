@@ -120,15 +120,15 @@ func Trunk(queueSize int) (SelectivePacketConn, SelectivePacketConn) {
 		rdRx:    chan1,
 		wrTx:    chan2,
 		locDone: done1, remDone: done2,
-		rdDeadline: HookDeadline(nil),
-		wrDeadline: HookDeadline(nil),
+		rdDeadline: SimpleDeadline(),
+		wrDeadline: SimpleDeadline(),
 	}
 	p2 := &trunk{
 		rdRx:    chan2,
 		wrTx:    chan1,
 		locDone: done2, remDone: done1,
-		rdDeadline: HookDeadline(nil),
-		wrDeadline: HookDeadline(nil),
+		rdDeadline: SimpleDeadline(),
+		wrDeadline: SimpleDeadline(),
 	}
 	return p1, p2
 }

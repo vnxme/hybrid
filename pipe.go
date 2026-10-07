@@ -133,16 +133,16 @@ func newPipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
 		rdRx: cb1, rdTx: cn1,
 		wrTx: cb2, wrRx: cn2,
 		localDone: done1, remoteDone: done2,
-		rdDeadline: HookDeadline(nil),
-		wrDeadline: HookDeadline(nil),
+		rdDeadline: SimpleDeadline(),
+		wrDeadline: SimpleDeadline(),
 		retain:     semiSync || queueSize > 0,
 	}
 	p2 := &pipe{
 		rdRx: cb2, rdTx: cn2,
 		wrTx: cb1, wrRx: cn1,
 		localDone: done2, remoteDone: done1,
-		rdDeadline: HookDeadline(nil),
-		wrDeadline: HookDeadline(nil),
+		rdDeadline: SimpleDeadline(),
+		wrDeadline: SimpleDeadline(),
 		retain:     semiSync || queueSize > 0,
 	}
 	return p1, p2
