@@ -158,6 +158,7 @@ func TestPipe(t *testing.T) {
 			t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, test.ctor) })
 			t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, test.ctor) })
 			t.Run(testPipeConcurrentReadName, func(t *testing.T) { testPipeConcurrentRead(t, test.ctor) })
+			t.Run(testPipeDrainName, func(t *testing.T) { testPipeDrain(t, test.ctor) })
 			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
 			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor) })
 			t.Run(testPipeZeroLengthName, func(t *testing.T) { testPipeZeroLength(t, test.ctor) })
@@ -269,6 +270,66 @@ func testPipeConcurrentRead(t *testing.T, ctor pipeCtor) {
 	if got := total.Load(); got != writes*size {
 		t.Errorf("read %d bytes, want %d", got, writes*size)
 	}
+}
+
+// testPipeDrain ensures all bytes written before remote closure are read before io.EOF.
+// Semi-sync and async pipes are also drained after remote closure under a read deadline.
+func testPipeDrain(t *testing.T, ctor pipeCtor) {
+	c1, c2 := ctor()
+	p, _ := c2.(*pipe)
+	retain := p != nil && p.retain
+
+	// A semi-sync pipe holds at most one write pending, an async one up to its queue size
+	writes := 1
+	if p != nil && cap(p.rdRx) > 0 {
+		writes = min(cap(p.rdRx), 3)
+	}
+
+	bWrite := make([]byte, 10)
+	rand.New(rand.NewSource(0)).Read(bWrite)
+
+	_ = c2.SetReadDeadline(time.Now().Add(time.Second)) // Fail instead of hanging
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range writes {
+			if _, err := c1.Write(bWrite); err != nil {
+				t.Errorf("c1.Write() = %v, want nil", err)
+				return
+			}
+		}
+		_ = c1.Close()
+	}()
+
+	var got []byte
+	b := make([]byte, 3)
+	for waited := false; ; {
+		n, err := c2.Read(b)
+		got = append(got, b[:n]...)
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Errorf("c2.Read() = %v, want io.EOF", err)
+			}
+			break
+		}
+		if retain && !waited { // Read the rest after remote closure
+			<-done
+			waited = true
+			if err := c2.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Errorf("c2.SetReadDeadline() = %v, want nil", err)
+			}
+		}
+	}
+	<-done
+
+	if want := bytes.Repeat(bWrite, writes); !bytes.Equal(got, want) {
+		t.Errorf("read %v, want %v", got, want)
+	}
+	if _, err := c2.Read(b); !errors.Is(err, io.EOF) {
+		t.Errorf("c2.Read() = %v, want io.EOF", err)
+	}
+	_ = c2.Close()
 }
 
 func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
@@ -458,6 +519,7 @@ const (
 	testPipeBundleName         = "Bundle"
 	testPipeCloseErrorName     = "CloseError"
 	testPipeConcurrentReadName = "ConcurrentRead"
+	testPipeDrainName          = "Drain"
 	testPipeEmptyAddrName      = "EmptyAddr"
 	testPipeSliceAliasName     = "SliceAlias"
 	testPipeZeroLengthName     = "ZeroLength"
