@@ -53,8 +53,8 @@ func (pipeAddr) Network() string { return pipeNetwork }
 func (pipeAddr) String() string  { return pipeNetwork }
 
 type pipe struct {
-	rdDeadline Deadline
-	wrDeadline Deadline
+	rdDeadline deadline[noHook]
+	wrDeadline deadline[noHook]
 
 	// Used by local Read to interact with remote Write.
 	// For a sync/semi-sync pipe, receive on rdRx is always followed by send on rdTx
@@ -133,16 +133,16 @@ func newPipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
 		rdRx: cb1, rdTx: cn1,
 		wrTx: cb2, wrRx: cn2,
 		localDone: done1, remoteDone: done2,
-		rdDeadline: SimpleDeadline(),
-		wrDeadline: SimpleDeadline(),
+		rdDeadline: makeDeadline(noHook{}),
+		wrDeadline: makeDeadline(noHook{}),
 		retain:     semiSync || queueSize > 0,
 	}
 	p2 := &pipe{
 		rdRx: cb2, rdTx: cn2,
 		wrTx: cb1, wrRx: cn1,
 		localDone: done2, remoteDone: done1,
-		rdDeadline: SimpleDeadline(),
-		wrDeadline: SimpleDeadline(),
+		rdDeadline: makeDeadline(noHook{}),
+		wrDeadline: makeDeadline(noHook{}),
 		retain:     semiSync || queueSize > 0,
 	}
 	return p1, p2

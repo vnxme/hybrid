@@ -56,9 +56,15 @@ type deadline[H deadlineHook] struct {
 	mu     sync.Mutex    // Guards timer and cancel
 }
 
+// makeDeadline returns a deadline value to be embedded in a struct, avoiding a separate allocation.
+func makeDeadline[H deadlineHook](hook H) deadline[H] {
+	return deadline[H]{hook: hook, cancel: make(chan struct{})}
+}
+
 // SimpleDeadline returns a pointer to the struct that satisfies the Deadline interface.
 func SimpleDeadline() Deadline {
-	return &deadline[noHook]{cancel: make(chan struct{})}
+	d := makeDeadline(noHook{})
+	return &d
 }
 
 // HookDeadline returns a pointer to the struct that satisfies the Deadline interface.
@@ -67,7 +73,8 @@ func HookDeadline(hook func()) Deadline {
 	if hook == nil {
 		return SimpleDeadline()
 	}
-	return &deadline[funcHook]{cancel: make(chan struct{}), hook: hook}
+	d := makeDeadline(funcHook(hook))
+	return &d
 }
 
 // Set sets the point in time when the deadline will time out.
