@@ -34,6 +34,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -161,6 +162,7 @@ func TestPipe(t *testing.T) {
 			t.Run(testPipeConcurrentReadName, func(t *testing.T) { testPipeConcurrentRead(t, test.ctor) })
 			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
 			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor) })
+			t.Run(testPipeZeroLengthName, func(t *testing.T) { testPipeZeroLength(t, test.ctor) })
 		})
 	}
 }
@@ -182,7 +184,8 @@ func testPipeCloseError(t *testing.T, ctor pipeCtor) {
 	c1, c2 := ctor()
 	_ = c1.Close()
 
-	if _, err := c1.Read(nil); !errors.Is(err, io.ErrClosedPipe) {
+	b := make([]byte, 1) // Zero-length reads differ, see testPipeZeroLength
+	if _, err := c1.Read(b); !errors.Is(err, io.ErrClosedPipe) {
 		t.Errorf("c1.Read() = %v, want io.ErrClosedPipe", err)
 	}
 	if _, err := c1.Write(nil); !errors.Is(err, io.ErrClosedPipe) {
@@ -191,7 +194,7 @@ func testPipeCloseError(t *testing.T, ctor pipeCtor) {
 	if err := c1.SetDeadline(time.Time{}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Errorf("c1.SetDeadline() = %v, want io.ErrClosedPipe", err)
 	}
-	if _, err := c2.Read(nil); !errors.Is(err, io.EOF) {
+	if _, err := c2.Read(b); !errors.Is(err, io.EOF) {
 		t.Errorf("c2.Read() = %v, want io.EOF", err)
 	}
 	if _, err := c2.Write(nil); !errors.Is(err, io.ErrClosedPipe) {
@@ -387,6 +390,62 @@ func testPipeSliceAlias(t *testing.T, ctor pipeCtor) {
 	}
 }
 
+// testPipeZeroLength ensures zero-length reads and writes behave like TCP ones:
+// they return immediately, and no zero-length write is ever observed by a read.
+func testPipeZeroLength(t *testing.T, ctor pipeCtor) {
+	t.Helper()
+	c1, c2 := ctor()
+	if _, ok := c1.(*pipe); !ok {
+		t.Skip("net.Pipe matches a zero-length write with a read")
+	}
+
+	// Fail instead of hanging, should a zero-length operation wait for the other end
+	_ = c1.SetDeadline(time.Now().Add(time.Second))
+	_ = c2.SetDeadline(time.Now().Add(time.Second))
+
+	if n, err := c1.Write(nil); n != 0 || err != nil {
+		t.Errorf("c1.Write() = %d, %v, want 0, nil", n, err)
+	}
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		if _, err := c1.Write([]byte{1}); err != nil {
+			t.Errorf("c1.Write() = %v, want nil", err)
+		}
+	})
+	if n, err := c2.Read(make([]byte, 2)); n != 1 || err != nil {
+		t.Errorf("c2.Read() = %d, %v, want 1, nil", n, err)
+	}
+	wg.Wait()
+	if n, err := c2.Read(nil); n != 0 || err != nil {
+		t.Errorf("c2.Read() = %d, %v, want 0, nil", n, err)
+	}
+
+	// Like on Unix, a deadline fails a zero-length write but not a zero-length read
+	_ = c1.SetDeadline(time.Now().Add(-time.Second))
+	if _, err := c1.Write(nil); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("c1.Write() = %v, want os.ErrDeadlineExceeded", err)
+	}
+	if n, err := c1.Read(nil); n != 0 || err != nil {
+		t.Errorf("c1.Read() = %d, %v, want 0, nil", n, err)
+	}
+
+	// Closure fails a zero-length write, but remote closure doesn't fail a zero-length read
+	_ = c1.Close()
+	if _, err := c1.Write(nil); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("c1.Write() = %v, want io.ErrClosedPipe", err)
+	}
+	if _, err := c1.Read(nil); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("c1.Read() = %v, want io.ErrClosedPipe", err)
+	}
+	if _, err := c2.Write(nil); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("c2.Write() = %v, want io.ErrClosedPipe", err)
+	}
+	if n, err := c2.Read(nil); n != 0 || err != nil {
+		t.Errorf("c2.Read() = %d, %v, want 0, nil", n, err)
+	}
+	_ = c2.Close()
+}
+
 const (
 	benchmarkPipeChunkedReadName  = "ChunkedRead"
 	benchmarkPipeChunkedWriteName = "ChunkedWrite"
@@ -396,4 +455,5 @@ const (
 	testPipeConcurrentReadName = "ConcurrentRead"
 	testPipeEmptyAddrName      = "EmptyAddr"
 	testPipeSliceAliasName     = "SliceAlias"
+	testPipeZeroLengthName     = "ZeroLength"
 )

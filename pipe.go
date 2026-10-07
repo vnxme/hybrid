@@ -158,6 +158,8 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	switch {
 	case isClosedChan(p.localDone):
 		return 0, io.ErrClosedPipe
+	case len(b) == 0: // Return immediately like TCP does, without consuming any remote Write
+		return 0, nil
 	case isClosedChan(p.rdDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
 	}
@@ -236,6 +238,8 @@ func (p *pipe) write(b []byte) (n int, err error) {
 		return 0, io.ErrClosedPipe
 	case isClosedChan(p.wrDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
+	case len(b) == 0: // Send nothing like TCP does, so that no remote Read returns 0, nil
+		return 0, nil
 	}
 
 	p.wrMu.Lock() // Ensure entirety of b is written together
@@ -243,7 +247,7 @@ func (p *pipe) write(b []byte) (n int, err error) {
 	if p.retain { // A semi-sync/async pipe requires copy on write, as Write returns before b is read
 		b = append([]byte{}, b...) // TODO(vnxme): use a pool?
 	}
-	for once := true; once || len(b) > 0; once = false {
+	for len(b) > 0 {
 		select {
 		case p.wrTx <- b:
 			if cap(p.wrTx) == 0 { // An unbuffered pipe can be sync or semi-sync
