@@ -49,13 +49,13 @@ func (trunkAddr) Network() string { return trunkNetwork }
 func (trunkAddr) String() string { return trunkNetwork }
 
 // trunkPacket is an internal type that represents a single packet with its payload,
-// remote address, local address, and the interface index. It is used to transfer
+// source address, destination address, and the interface index. It is used to transfer
 // data between the two ends of a trunk connection via channels.
 type trunkPacket struct {
-	r net.Addr
-	l net.Addr
-	b []byte
-	i int
+	src net.Addr
+	dst net.Addr
+	b   []byte
+	i   int
 }
 
 // trunk represents a packet-oriented communication channel between local and remote endpoints.
@@ -169,7 +169,7 @@ func (p *trunk) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 }
 
 // read reads a packet from the trunk and returns the number of bytes copied,
-// the local and remote addresses, the interface index, and any error.
+// the source and destination addresses, the interface index, and any error.
 //
 // It serializes reads and blocks until a packet is received or the trunk is closed or a deadline expires.
 // If the provided buffer is too small, it returns io.ErrShortBuffer and drops the excess bytes.
@@ -228,9 +228,9 @@ success:
 		p.rdTx <- struct{}{}
 	}
 	if nr < len(pkt.b) { // Unread bytes are dropped, i.e. a trunk doesn't support partial read
-		return nr, pkt.l, pkt.r, pkt.i, errTrunkShortBuffer
+		return nr, pkt.src, pkt.dst, pkt.i, errTrunkShortBuffer
 	}
-	return nr, pkt.l, pkt.r, pkt.i, nil
+	return nr, pkt.src, pkt.dst, pkt.i, nil
 }
 
 // WriteTo writes a packet of len(b) bytes to the remote addr.
@@ -274,7 +274,7 @@ func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 		return 0, errTrunkClosed
 	}
 
-	pkt := trunkPacket{b: b, r: r, l: l, i: i}
+	pkt := trunkPacket{b: b, src: l, dst: r, i: i}
 	if cap(p.wrTx) > 0 { // An async buffered trunk requires copy on write
 		pkt.b = slices.Clone(b) // TODO(vnxme): use a pool?
 	}

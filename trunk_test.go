@@ -43,7 +43,7 @@ func TestTrunkReadLLM(t *testing.T) {
 		{
 			name: "NormalRead",
 			setup: func(t *testing.T, trA, trB *trunk) {
-				trB.wrTx <- trunkPacket{b: []byte("hello"), l: laddr, r: raddr, i: 42}
+				trB.wrTx <- trunkPacket{b: []byte("hello"), src: laddr, dst: raddr, i: 42}
 			},
 			bufLen:  64,
 			wantN:   5,
@@ -55,7 +55,7 @@ func TestTrunkReadLLM(t *testing.T) {
 		{
 			name: "ZeroLengthBuffer",
 			setup: func(t *testing.T, trA, trB *trunk) {
-				trB.wrTx <- trunkPacket{b: []byte("hello"), l: laddr, r: raddr, i: 0}
+				trB.wrTx <- trunkPacket{b: []byte("hello"), src: laddr, dst: raddr, i: 0}
 			},
 			bufLen:  0,
 			wantN:   0,
@@ -67,7 +67,7 @@ func TestTrunkReadLLM(t *testing.T) {
 		{
 			name: "ShortBuffer",
 			setup: func(t *testing.T, trA, trB *trunk) {
-				trB.wrTx <- trunkPacket{b: []byte("hello world"), l: laddr, r: raddr, i: 1}
+				trB.wrTx <- trunkPacket{b: []byte("hello world"), src: laddr, dst: raddr, i: 1}
 			},
 			bufLen:  4,
 			wantN:   4,
@@ -103,7 +103,7 @@ func TestTrunkReadLLM(t *testing.T) {
 		{
 			name: "RemoteClosedPendingData",
 			setup: func(t *testing.T, trA, trB *trunk) {
-				trB.wrTx <- trunkPacket{b: []byte("pending"), l: laddr, r: raddr, i: 7}
+				trB.wrTx <- trunkPacket{b: []byte("pending"), src: laddr, dst: raddr, i: 7}
 				_ = trB.Close()
 			},
 			bufLen:  64,
@@ -129,7 +129,7 @@ func TestTrunkReadLLM(t *testing.T) {
 			name: "ReadDeadlineExceededRemoteClosedPendingData",
 			setup: func(t *testing.T, trA, trB *trunk) {
 				_ = trA.SetReadDeadline(time.Now().Add(-time.Second))
-				trB.wrTx <- trunkPacket{b: []byte("pending"), l: laddr, r: raddr, i: 7}
+				trB.wrTx <- trunkPacket{b: []byte("pending"), src: laddr, dst: raddr, i: 7}
 				_ = trB.Close()
 			},
 			bufLen:  64,
@@ -251,7 +251,7 @@ func TestTrunkWriteLLM(t *testing.T) {
 			name: "WriteBlockingThenLocalClose",
 			setup: func(t *testing.T, trA, trB *trunk) {
 				// Fill the write buffer (capacity 1) so next write will block.
-				trA.wrTx <- trunkPacket{b: []byte("fill"), r: nil, l: nil, i: 0}
+				trA.wrTx <- trunkPacket{b: []byte("fill"), src: nil, dst: nil, i: 0}
 				// Then schedule a close to unblock.
 				go func() {
 					time.Sleep(10 * time.Millisecond)
@@ -265,7 +265,7 @@ func TestTrunkWriteLLM(t *testing.T) {
 		{
 			name: "WriteBlockingThenWriteDeadline",
 			setup: func(t *testing.T, trA, trB *trunk) {
-				trA.wrTx <- trunkPacket{b: []byte("fill"), r: nil, l: nil, i: 0}
+				trA.wrTx <- trunkPacket{b: []byte("fill"), src: nil, dst: nil, i: 0}
 				_ = trA.SetWriteDeadline(time.Now().Add(50 * time.Millisecond))
 			},
 			payloadLen: 10,
