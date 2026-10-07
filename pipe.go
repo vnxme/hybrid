@@ -264,8 +264,10 @@ func (p *pipe) write(b []byte) (n int, err error) {
 	return n, nil
 }
 
+// SetDeadline sets the read and write deadlines. Unlike [net.Pipe], it fails only once
+// the local end is closed, since bytes retained or queued may be read after remote closure.
 func (p *pipe) SetDeadline(t time.Time) error {
-	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
+	if isClosedChan(p.localDone) {
 		return io.ErrClosedPipe
 	}
 	p.rdDeadline.Set(t)
@@ -273,14 +275,18 @@ func (p *pipe) SetDeadline(t time.Time) error {
 	return nil
 }
 
+// SetReadDeadline sets the read deadline. Unlike [net.Pipe], it fails only once
+// the local end is closed, since bytes retained or queued may be read after remote closure.
 func (p *pipe) SetReadDeadline(t time.Time) error {
-	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
+	if isClosedChan(p.localDone) {
 		return io.ErrClosedPipe
 	}
 	p.rdDeadline.Set(t)
 	return nil
 }
 
+// SetWriteDeadline sets the write deadline. It fails once either end is closed,
+// since nothing may be written after that.
 func (p *pipe) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
 		return io.ErrClosedPipe

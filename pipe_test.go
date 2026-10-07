@@ -197,8 +197,25 @@ func testPipeCloseError(t *testing.T, ctor pipeCtor) {
 	if _, err := c2.Write(nil); !errors.Is(err, io.ErrClosedPipe) {
 		t.Errorf("c2.Write() = %v, want io.ErrClosedPipe", err)
 	}
-	if err := c2.SetDeadline(time.Time{}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c2.SetDeadline() = %v, want io.ErrClosedPipe", err)
+	if err := c2.SetWriteDeadline(time.Time{}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("c2.SetWriteDeadline() = %v, want io.ErrClosedPipe", err)
+	}
+
+	// Unlike net.Pipe, a hybrid pipe allows setting read deadlines after remote closure
+	var want error
+	if _, ok := c2.(*pipe); !ok {
+		want = io.ErrClosedPipe
+	}
+	if err := c2.SetReadDeadline(time.Time{}); !errors.Is(err, want) {
+		t.Errorf("c2.SetReadDeadline() = %v, want %v", err, want)
+	}
+	if err := c2.SetDeadline(time.Time{}); !errors.Is(err, want) {
+		t.Errorf("c2.SetDeadline() = %v, want %v", err, want)
+	}
+
+	_ = c2.Close()
+	if err := c2.SetReadDeadline(time.Time{}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("c2.SetReadDeadline() = %v, want io.ErrClosedPipe", err)
 	}
 }
 
