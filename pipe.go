@@ -147,11 +147,12 @@ func (p *pipe) Read(b []byte) (int, error) {
 }
 
 func (p *pipe) read(b []byte) (n int, err error) {
+	// Fail fast without waiting for rdMu. Remote closure isn't checked here, because
+	// io.EOF depends on rdBuf guarded by rdMu. A concurrent Read holding rdMu observes
+	// remoteDone as well, so it releases rdMu promptly in this case.
 	switch {
 	case isClosedChan(p.localDone):
 		return 0, io.ErrClosedPipe
-	case isClosedChan(p.remoteDone) && p.rdBuf == nil && len(p.rdRx) == 0:
-		return 0, io.EOF
 	case isClosedChan(p.rdDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
 	}

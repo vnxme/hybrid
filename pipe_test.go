@@ -35,6 +35,7 @@ import (
 	"math/rand"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -157,6 +158,7 @@ func TestPipe(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, test.ctor) })
 			t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, test.ctor) })
+			t.Run(testPipeConcurrentReadName, func(t *testing.T) { testPipeConcurrentRead(t, test.ctor) })
 			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
 			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor) })
 		})
@@ -197,6 +199,47 @@ func testPipeCloseError(t *testing.T, ctor pipeCtor) {
 	}
 	if err := c2.SetDeadline(time.Time{}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Errorf("c2.SetDeadline() = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+// testPipeConcurrentRead ensures concurrent partial reads neither lose bytes nor race.
+func testPipeConcurrentRead(t *testing.T, ctor pipeCtor) {
+	t.Helper()
+	c1, c2 := ctor()
+
+	const writes, size = 1 << 10, 7
+	go func() {
+		for range writes {
+			if _, err := c1.Write(make([]byte, size)); err != nil {
+				t.Errorf("c1.Write() = %v, want nil", err)
+				break
+			}
+		}
+		_ = c1.Close()
+	}()
+
+	var total atomic.Int64
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			b := make([]byte, 3)
+			for {
+				n, err := c2.Read(b)
+				total.Add(int64(n))
+				if err != nil {
+					if !errors.Is(err, io.EOF) {
+						t.Errorf("c2.Read() = %v, want io.EOF", err)
+					}
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	_ = c2.Close()
+
+	if got := total.Load(); got != writes*size {
+		t.Errorf("read %d bytes, want %d", got, writes*size)
 	}
 }
 
@@ -331,8 +374,9 @@ const (
 	benchmarkPipeChunkedReadName  = "ChunkedRead"
 	benchmarkPipeChunkedWriteName = "ChunkedWrite"
 
-	testPipeBundleName     = "Bundle"
-	testPipeCloseErrorName = "CloseError"
-	testPipeEmptyAddrName  = "EmptyAddr"
-	testPipeSliceAliasName = "SliceAlias"
+	testPipeBundleName         = "Bundle"
+	testPipeCloseErrorName     = "CloseError"
+	testPipeConcurrentReadName = "ConcurrentRead"
+	testPipeEmptyAddrName      = "EmptyAddr"
+	testPipeSliceAliasName     = "SliceAlias"
 )
