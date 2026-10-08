@@ -16,6 +16,7 @@ package hybrid
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -152,6 +153,38 @@ func TestNewSelectiveUDPConn(t *testing.T) {
 				t.Errorf("NewSelectiveUDPConn() got = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSelectiveUDPConnNilAddrs ensures unknown addresses are returned as nil net.Addr values,
+// not as nil *net.UDPAddr ones, which wouldn't compare equal to nil.
+func TestSelectiveUDPConnNilAddrs(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pc.Close() }()
+	c, err := NewSelectiveUDPConn(pc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A failed read knows neither address
+	_ = c.SetReadDeadline(time.Now().Add(-time.Second))
+	if _, src, dst, _, err := c.ReadFromTo(make([]byte, 1)); err == nil || src != nil || dst != nil {
+		t.Errorf("ReadFromTo() = %#v, %#v, %v, want nil, nil, an error", src, dst, err)
+	}
+
+	// A write rejected for its addresses reports only the valid ones
+	_, err = c.WriteToFromUDPAddrPort(nil, netip.AddrPort{}, netip.AddrPort{}, 0)
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Source != nil || opErr.Addr != nil {
+		t.Errorf("WriteToFromUDPAddrPort() = %v, want net.OpError with nil Source and Addr", err)
 	}
 }
 

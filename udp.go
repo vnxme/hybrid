@@ -122,9 +122,11 @@ func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
 	return &u, nil
 }
 
-// ReadFromTo wraps around ReadFromToUDP.
+// ReadFromTo wraps around ReadFromToUDPAddrPort. Like [net.UDPConn.ReadFrom], it returns nil
+// instead of a nil *net.UDPAddr for an address it doesn't know, so that it compares equal to nil.
 func (u *udpConnWithDualStackPacketInfo) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	return u.ReadFromToUDP(b)
+	n, src, dst, idx, err := u.ReadFromToUDPAddrPort(b)
+	return n, addrFromValidAddrPort(src), addrFromValidAddrPort(dst), idx, err
 }
 
 // ReadFromToUDP wraps around ReadFromToUDPAddrPort.
@@ -140,6 +142,9 @@ func (u *udpConnWithDualStackPacketInfo) ReadFromToUDPAddrPort(b []byte) (int, n
 	defer u.rdMutex.Unlock()
 
 	n, oobN, _, src, err := u.ReadMsgUDPAddrPort(b, u.rdOOB)
+	if err != nil { // Like [net.UDPConn.ReadFrom], return no addresses, as src is made of an empty sockaddr
+		return n, netip.AddrPort{}, netip.AddrPort{}, 0, err
+	}
 	if oobN > 0 && oobN <= len(u.rdOOB) && src.IsValid() {
 		if dst, idx, ok := parsePacketInfo(u.rdOOB[:oobN]); ok {
 			return n, src, netip.AddrPortFrom(dst, u.port), idx, err
@@ -200,7 +205,7 @@ func (u *udpConnWithDualStackPacketInfo) WriteToFromUDPAddrPort(b []byte, dst, s
 			}
 		}
 	}
-	return 0, &net.OpError{Op: "write", Net: u.net, Source: UDPAddrFromValidAddrPort(src), Addr: UDPAddrFromValidAddrPort(dst), Err: syscall.EINVAL}
+	return 0, &net.OpError{Op: "write", Net: u.net, Source: addrFromValidAddrPort(src), Addr: addrFromValidAddrPort(dst), Err: syscall.EINVAL}
 
 proceed:
 	if idx == 0 && !src.IsValid() {
@@ -228,6 +233,15 @@ proceed:
 	}
 
 	return n, err
+}
+
+// addrFromValidAddrPort returns a *net.UDPAddr if the given netip.AddrPort is valid, or nil.
+// Unlike [UDPAddrFromValidAddrPort], it returns a nil net.Addr, not a nil *net.UDPAddr in it.
+func addrFromValidAddrPort(ap netip.AddrPort) net.Addr {
+	if ap.IsValid() {
+		return net.UDPAddrFromAddrPort(ap)
+	}
+	return nil
 }
 
 // isNilUDPConn reports whether conn is nil, including a nil *net.UDPConn,
