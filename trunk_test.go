@@ -153,6 +153,7 @@ func TestTrunk(t *testing.T) {
 			t.Run(testTrunkDrainName, func(t *testing.T) { testTrunkDrain(t, test.ctor, test.buffered) })
 			t.Run(testTrunkEmptyPacketName, func(t *testing.T) { testTrunkEmptyPacket(t, test.ctor) })
 			t.Run(testTrunkErrorsName, func(t *testing.T) { testTrunkErrors(t, test.ctor) })
+			t.Run(testTrunkLockWaitName, func(t *testing.T) { testTrunkLockWait(t, test.ctor) })
 			t.Run(testTrunkShortBufferName, func(t *testing.T) { testTrunkShortBuffer(t, test.ctor) })
 			t.Run(testTrunkSliceAliasName, func(t *testing.T) { testTrunkSliceAlias(t, test.ctor) })
 			t.Run(testTrunkUnblockName, func(t *testing.T) { testTrunkUnblock(t, test.ctor, test.buffered) })
@@ -544,6 +545,52 @@ func testTrunkErrors(t *testing.T, ctor trunkCtor) {
 	_ = c2.Close()
 }
 
+// testTrunkLockWait ensures a write fails if either trunk end is closed or its deadline is exceeded
+// while the write is waiting for another one to finish, even though a send is ready afterwards.
+// As select chooses randomly between ready cases, every scenario is repeated to catch a success.
+func testTrunkLockWait(t *testing.T, ctor trunkCtor) {
+	events := []struct {
+		name  string
+		event func(c1, c2 SelectivePacketConn)
+		want  error
+	}{
+		{"LocalClose", func(c1, _ SelectivePacketConn) { _ = c1.Close() }, net.ErrClosed},
+		{"RemoteClose", func(_, c2 SelectivePacketConn) { _ = c2.Close() }, net.ErrClosed},
+		{"Deadline", func(c1, _ SelectivePacketConn) { _ = c1.SetWriteDeadline(time.Now()) }, os.ErrDeadlineExceeded},
+	}
+
+	for _, e := range events {
+		t.Run(e.name, func(t *testing.T) {
+			for range 20 {
+				c1, c2 := ctor(nil, nil)
+				tr := c1.(*trunk)
+				tr.wrMu.Lock() // Another write is in progress
+
+				done := make(chan error, 1)
+				go func() {
+					_, err := c1.WriteTo([]byte("x"), nil) // Passes the checks before wrMu, then waits for it
+					done <- err
+				}()
+				go func() { _, _, _ = c2.ReadFrom(make([]byte, 1)) }() // Make a send ready in any mode
+				time.Sleep(time.Millisecond)                           // Let the write wait, though its outcome doesn't depend on it
+				e.event(c1, c2)
+				tr.wrMu.Unlock()
+
+				select {
+				case err := <-done:
+					if !errors.Is(err, e.want) {
+						t.Errorf("c1.WriteTo() = %v, want %v", err, e.want)
+					}
+				case <-time.After(trunkLimit):
+					t.Errorf("c1.WriteTo() doesn't return")
+				}
+				_ = c1.Close()
+				_ = c2.Close()
+			}
+		})
+	}
+}
+
 // testTrunkShortBuffer ensures a packet longer than the read buffer is truncated,
 // its remaining bytes are dropped, and its addresses are still returned.
 func testTrunkShortBuffer(t *testing.T, ctor trunkCtor) {
@@ -722,6 +769,7 @@ const (
 	testTrunkDrainName       = "Drain"
 	testTrunkEmptyPacketName = "EmptyPacket"
 	testTrunkErrorsName      = "Errors"
+	testTrunkLockWaitName    = "LockWait"
 	testTrunkShortBufferName = "ShortBuffer"
 	testTrunkSliceAliasName  = "SliceAlias"
 	testTrunkUnblockName     = "Unblock"
