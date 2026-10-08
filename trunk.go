@@ -53,8 +53,8 @@ func (trunkAddr) String() string { return trunkNetwork }
 type trunkPacket struct {
 	src net.Addr
 	dst net.Addr
-	b   []byte
-	i   int
+	buf []byte
+	idx int
 }
 
 // trunk represents a packet-oriented communication channel between local and remote endpoints.
@@ -220,14 +220,14 @@ success:
 	if pkt.dst == nil { // A packet written without a destination address is destined to this end
 		pkt.dst = cloneAddr(tr.addr)
 	}
-	nr := copy(b, pkt.b)
+	nr := copy(b, pkt.buf)
 	if cap(tr.rdRx) == 0 { // An unbuffered trunk lets remote write return only once the packet is copied
 		tr.rdTx <- struct{}{}
 	}
-	if nr < len(pkt.b) { // Unread bytes are dropped, i.e. a trunk doesn't support partial read
-		return nr, pkt.src, pkt.dst, pkt.i, errTrunkShortBuffer
+	if nr < len(pkt.buf) { // Unread bytes are dropped, i.e. a trunk doesn't support partial read
+		return nr, pkt.src, pkt.dst, pkt.idx, errTrunkShortBuffer
 	}
-	return nr, pkt.src, pkt.dst, pkt.i, nil
+	return nr, pkt.src, pkt.dst, pkt.idx, nil
 }
 
 // WriteTo writes a packet of len(b) bytes to the remote addr.
@@ -276,9 +276,9 @@ func (tr *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 		l = tr.addr
 	}
 	// Copy addresses, as the caller may modify them once write returns, and so may remote read
-	pkt := trunkPacket{b: b, src: cloneAddr(l), dst: cloneAddr(r), i: i}
+	pkt := trunkPacket{buf: b, src: cloneAddr(l), dst: cloneAddr(r), idx: i}
 	if cap(tr.wrTx) > 0 { // An async buffered trunk requires copy on write
-		pkt.b = slices.Clone(b) // TODO(vnxme): use a pool?
+		pkt.buf = slices.Clone(b) // TODO(vnxme): use a pool?
 	}
 
 	select {
