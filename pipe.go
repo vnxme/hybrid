@@ -25,7 +25,6 @@
 package hybrid
 
 import (
-	"bytes"
 	"io"
 	"net"
 	"os"
@@ -42,6 +41,14 @@ func (pipeAddr) Network() string { return pipeNetwork }
 // String returns the network name for the pipe address.
 func (pipeAddr) String() string { return pipeNetwork }
 
+// pipeChunk is an internal type that represents a write, or its part left unread by a sync pipe,
+// along with the reference to its pooled buffer, if any. It is used to transfer data between
+// the two ends of a pipe via channels.
+type pipeChunk struct {
+	ref *[]byte
+	buf []byte
+}
+
 // pipe represents a stream-oriented communication channel between local and remote endpoints.
 type pipe struct {
 	rdDeadline deadline[noHook]
@@ -49,18 +56,19 @@ type pipe struct {
 
 	// Used by local Read to interact with remote Write.
 	// For a sync/semi-sync pipe, receive on rdRx is always followed by send on rdTx
-	rdRx <-chan []byte
+	rdRx <-chan pipeChunk
 	rdTx chan<- int
 
 	// Used by local Write to interact with remote Read.
 	// For a sync/semi-sync pipe, send on wrTx is always followed by receive on wrRx
-	wrTx chan<- []byte
+	wrTx chan<- pipeChunk
 	wrRx <-chan int
 
 	localDone  chan struct{}
 	remoteDone <-chan struct{}
 
-	rdBuf []byte // Unread bytes retained from a remote Write
+	rdRef *[]byte // Reference to the pooled buffer of rdBuf, if any
+	rdBuf []byte  // Unread bytes retained from a remote Write
 
 	once sync.Once  // Protects closing localDone
 	rdMu sync.Mutex // Serialize Read operations
@@ -115,8 +123,8 @@ func UnbufferedPipe(semiSync bool) (StreamConn, StreamConn) {
 func newPipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
 	retain := semiSync || queueSize > 0 // Read retains unread bytes unless the pipe is sync
 
-	cb1 := make(chan []byte, queueSize)
-	cb2 := make(chan []byte, queueSize)
+	cb1 := make(chan pipeChunk, queueSize)
+	cb2 := make(chan pipeChunk, queueSize)
 	cn1 := make(chan int)
 	cn2 := make(chan int)
 	done1 := make(chan struct{})
@@ -188,17 +196,18 @@ func (p *pipe) read(b []byte) (n int, err error) {
 		if nr < len(p.rdBuf) {
 			p.rdBuf = p.rdBuf[nr:]
 		} else {
-			p.rdBuf = nil
+			putBuf(p.rdRef) // Nothing refers to a pooled buffer once its bytes are read
+			p.rdBuf, p.rdRef = nil, nil
 		}
 		return nr, nil
 	}
 
-	var bw []byte
+	var chunk pipeChunk
 	select { // Receive a pending write without a blocking select, which is much slower
-	case bw = <-p.rdRx:
+	case chunk = <-p.rdRx:
 	default:
 		select {
-		case bw = <-p.rdRx:
+		case chunk = <-p.rdRx:
 		case <-p.localDone:
 			return 0, errPipeClosed
 		case <-p.remoteDone:
@@ -207,24 +216,28 @@ func (p *pipe) read(b []byte) (n int, err error) {
 			if len(p.rdRx) == 0 {
 				return 0, io.EOF
 			}
-			bw = <-p.rdRx
+			chunk = <-p.rdRx
 		case <-p.rdDeadline.Wait():
 			return 0, errPipeDeadlineExceeded
 		}
 	}
 
+	bw := chunk.buf
 	nr := copy(b, bw)
 	if cap(p.rdRx) == 0 { // An unbuffered pipe can be sync or semi-sync
 		if p.retain { // A semi-sync pipe retains unread bytes and reports all of them written
 			if nr < len(bw) { // Copy before reporting, as remote Write returns and b may be reused
-				p.rdBuf = bytes.Clone(bw[nr:])
+				p.rdBuf, p.rdRef = getBuf(len(bw) - nr)
+				copy(p.rdBuf, bw[nr:])
 			}
 			p.rdTx <- len(bw)
 		} else { // A sync pipe reports only read bytes, so Write resends the rest
 			p.rdTx <- nr
 		}
 	} else if nr < len(bw) { // A buffered pipe is async by definition and retains unread bytes
-		p.rdBuf = bw[nr:]
+		p.rdBuf, p.rdRef = bw[nr:], chunk.ref
+	} else {
+		putBuf(chunk.ref) // Nothing refers to a pooled buffer once its bytes are read
 	}
 	return nr, nil
 }
@@ -257,8 +270,12 @@ func (p *pipe) write(b []byte) (n int, err error) {
 
 	p.wrMu.Lock() // Ensure entirety of b is written together
 	defer p.wrMu.Unlock()
-	if cap(p.wrTx) > 0 { // An async pipe requires copy on write, as Write returns before b is read
-		b = bytes.Clone(b) // TODO(vnxme): use a pool?
+	// An async pipe requires copy on write, as Write returns before b is read
+	var ref *[]byte // Reference to the pooled buffer of b, if any
+	if cap(p.wrTx) > 0 {
+		src := b
+		b, ref = getBuf(len(src))
+		copy(b, src)
 	}
 	for len(b) > 0 {
 		// Check again before every send, as the pipe may have been closed or the deadline exceeded
@@ -274,10 +291,10 @@ func (p *pipe) write(b []byte) (n int, err error) {
 		}
 
 		select { // Send without a blocking select if possible, which is much slower
-		case p.wrTx <- b:
+		case p.wrTx <- pipeChunk{ref: ref, buf: b}:
 		default:
 			select {
-			case p.wrTx <- b:
+			case p.wrTx <- pipeChunk{ref: ref, buf: b}:
 			case <-p.localDone:
 				return n, errPipeClosed
 			case <-p.remoteDone:

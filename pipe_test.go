@@ -157,6 +157,7 @@ func TestPipe(t *testing.T) {
 			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor, test.mode) })
 			t.Run(testPipeUnblockName, func(t *testing.T) { testPipeUnblock(t, test.ctor, test.mode) })
 			t.Run(testPipeWriteReturnName, func(t *testing.T) { testPipeWriteReturn(t, test.ctor, test.mode) })
+			t.Run(testPipeWriteSizesName, func(t *testing.T) { testPipeWriteSizes(t, test.ctor) })
 			t.Run(testPipeZeroLengthName, func(t *testing.T) { testPipeZeroLength(t, test.ctor) })
 		})
 	}
@@ -799,6 +800,52 @@ func testPipeWriteReturn(t *testing.T, ctor pipeCtor, mode pipeMode) {
 	}
 }
 
+// testPipeWriteSizes ensures writes of various sizes are read intact in parts, so that bytes are
+// retained between reads, including sizes around buffer size classes, longer writes followed by
+// shorter ones of the same class, and sizes beyond the pooled ones, so that no bytes of a reused
+// buffer leak into a write, and no buffer is reused while its bytes are retained.
+func testPipeWriteSizes(t *testing.T, ctor pipeCtor) {
+	poisonBufs(t)
+	c1, c2 := ctor()
+	defer func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	}()
+
+	b := make([]byte, 1000)
+	sizes := []int{1, 2, 3, 4, 6, 5, 1536, 1025, 1472, 1537, 2048, 1 << bufPoolMaxBits, 49153, 1<<bufPoolMaxBits + 1}
+	for i, size := range sizes {
+		want := bytes.Repeat([]byte{byte(i + 1)}, size)
+		done := make(chan error, 1)
+		go func() {
+			_, err := c1.Write(want)
+			done <- err
+		}()
+
+		_ = c2.SetReadDeadline(time.Now().Add(time.Second))
+		got := make([]byte, 0, size)
+		for len(got) < size {
+			n, err := c2.Read(b[:min(len(b), size-len(got))])
+			if err != nil {
+				t.Fatalf("c2.Read() after %d of %d bytes = %v, want nil", len(got), size, err)
+			}
+			got = append(got, b[:n]...)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("c2.Read() of %d bytes = %d bytes not all equal to %d", size, len(got), i+1)
+		}
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("c1.Write() of %d bytes = %v, want nil", size, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("c1.Write() of %d bytes doesn't return", size)
+		}
+	}
+}
+
 // testPipeZeroLength ensures zero-length reads and writes behave like TCP ones:
 // they return immediately, and no zero-length write is ever observed by a read.
 func testPipeZeroLength(t *testing.T, ctor pipeCtor) {
@@ -870,5 +917,6 @@ const (
 	testPipeSliceAliasName      = "SliceAlias"
 	testPipeUnblockName         = "Unblock"
 	testPipeWriteReturnName     = "WriteReturn"
+	testPipeWriteSizesName      = "WriteSizes"
 	testPipeZeroLengthName      = "ZeroLength"
 )
