@@ -146,8 +146,11 @@ func TestPipe(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Run(testPipeBundleName, func(t *testing.T) { testPipeBundle(t, test.ctor) })
+			t.Run(testPipeCloseName, func(t *testing.T) { testPipeClose(t, test.ctor) })
 			t.Run(testPipeCloseErrorName, func(t *testing.T) { testPipeCloseError(t, test.ctor) })
 			t.Run(testPipeConcurrentReadName, func(t *testing.T) { testPipeConcurrentRead(t, test.ctor) })
+			t.Run(testPipeConcurrentWriteName, func(t *testing.T) { testPipeConcurrentWrite(t, test.ctor) })
+			t.Run(testPipeDeadlineName, func(t *testing.T) { testPipeDeadline(t, test.ctor, test.mode) })
 			t.Run(testPipeDrainName, func(t *testing.T) { testPipeDrain(t, test.ctor, test.mode) })
 			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
 			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor, test.mode) })
@@ -180,6 +183,37 @@ func testPipeBundle(t *testing.T, ctor pipeCtor) {
 		}
 		return
 	})
+}
+
+// testPipeClose ensures only the first closing of a hybrid pipe end succeeds, even if concurrent,
+// while closing a net.Pipe end always succeeds.
+func testPipeClose(t *testing.T, ctor pipeCtor) {
+	c1, c2 := ctor()
+	_, hybrid := c1.(*pipe)
+	defer func() { _ = c2.Close() }()
+
+	const closers = 20
+	var succeeded atomic.Int32
+	var wg sync.WaitGroup
+	for range closers {
+		wg.Go(func() {
+			switch err := c1.Close(); {
+			case err == nil:
+				succeeded.Add(1)
+			case !errors.Is(err, net.ErrClosed):
+				t.Errorf("c1.Close() = %v, want nil or %v", err, net.ErrClosed)
+			}
+		})
+	}
+	wg.Wait()
+
+	want := int32(closers)
+	if hybrid {
+		want = 1
+	}
+	if n := succeeded.Load(); n != want {
+		t.Errorf("c1.Close() succeeded %d times, want %d", n, want)
+	}
 }
 
 // testPipeCloseError ensures closure errors are reported the same way as by net.Pipe, or
@@ -277,6 +311,138 @@ func testPipeConcurrentRead(t *testing.T, ctor pipeCtor) {
 	if got := total.Load(); got != writes*size {
 		t.Errorf("read %d bytes, want %d", got, writes*size)
 	}
+}
+
+// testPipeConcurrentWrite ensures concurrent writes aren't interleaved, i.e. each of them is read
+// as a contiguous run of bytes, even if reads are shorter than writes.
+func testPipeConcurrentWrite(t *testing.T, ctor pipeCtor) {
+	c1, c2 := ctor()
+	defer func() { _ = c2.Close() }()
+	_ = c1.SetWriteDeadline(time.Now().Add(5 * time.Second)) // Fail instead of hanging
+	_ = c2.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	// Every write consists of a byte unique to it
+	const writers, writes, size = 4, 64, 1 << 10
+	var wg sync.WaitGroup
+	for w := range writers {
+		wg.Go(func() {
+			b := make([]byte, size)
+			for i := range writes {
+				for j := range b {
+					b[j] = byte(w*writes + i)
+				}
+				if _, err := c1.Write(b); err != nil {
+					t.Errorf("c1.Write() = %v, want nil", err)
+					return
+				}
+			}
+		})
+	}
+	go func() {
+		wg.Wait()
+		_ = c1.Close()
+	}()
+
+	var stream []byte
+	b := make([]byte, 100)
+	for {
+		n, err := c2.Read(b)
+		stream = append(stream, b[:n]...)
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Errorf("c2.Read() = %v, want io.EOF", err)
+			}
+			break
+		}
+	}
+
+	if len(stream) != writers*writes*size {
+		t.Fatalf("read %d bytes, want %d", len(stream), writers*writes*size)
+	}
+	seen := make(map[byte]bool)
+	for off := 0; off < len(stream); off += size {
+		w := stream[off : off+size]
+		if bytes.Count(w, w[:1]) != size {
+			t.Fatalf("write read at offset %d is interleaved with another one", off)
+		}
+		if seen[w[0]] {
+			t.Fatalf("write %d is read twice", w[0])
+		}
+		seen[w[0]] = true
+	}
+}
+
+// testPipeDeadline ensures an exceeded read deadline prevails over pending bytes, even if
+// the remote end is closed, while local closure prevails over pending bytes too, and remote
+// closure prevails over an exceeded write deadline.
+func testPipeDeadline(t *testing.T, ctor pipeCtor, mode pipeMode) {
+	c1, c2 := ctor()
+	_, hybrid := c1.(*pipe)
+	_ = c1.SetWriteDeadline(time.Now().Add(time.Second)) // Fail instead of hanging
+	_ = c2.SetReadDeadline(time.Now().Add(time.Second))
+
+	// Bytes are retained or queued by a semi-sync or async pipe, while a sync pipe write is blocked
+	done := make(chan error, 1)
+	go func() {
+		_, err := c1.Write([]byte("abcd"))
+		done <- err
+	}()
+	b := make([]byte, 16)
+	if n, err := c2.Read(b[:1]); err != nil || string(b[:n]) != "a" {
+		t.Errorf("c2.Read() = %q, %v, want %q, nil", b[:n], err, "a")
+	}
+
+	_ = c2.SetReadDeadline(time.Now().Add(-time.Second))
+	if _, err := c2.Read(b); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("c2.Read() with bytes pending = %v, want %v", err, os.ErrDeadlineExceeded)
+	}
+	_ = c2.SetReadDeadline(time.Now().Add(time.Second))
+	if n, err := c2.Read(b); err != nil || string(b[:n]) != "bcd" {
+		t.Errorf("c2.Read() = %q, %v, want %q, nil", b[:n], err, "bcd")
+	}
+	if err := <-done; err != nil {
+		t.Errorf("c1.Write() = %v, want nil", err)
+	}
+
+	if mode != pipeModeSync { // Only a semi-sync or async pipe may have bytes pending after remote closure
+		go func() {
+			_, err := c1.Write([]byte("efgh"))
+			done <- err
+		}()
+		if n, err := c2.Read(b[:1]); err != nil || string(b[:n]) != "e" {
+			t.Errorf("c2.Read() = %q, %v, want %q, nil", b[:n], err, "e")
+		}
+		if err := <-done; err != nil {
+			t.Errorf("c1.Write() = %v, want nil", err)
+		}
+		_ = c1.Close()
+
+		_ = c2.SetReadDeadline(time.Now().Add(-time.Second))
+		if _, err := c2.Read(b); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("c2.Read() with bytes pending after remote closure = %v, want %v", err, os.ErrDeadlineExceeded)
+		}
+		_ = c2.Close()
+		if _, err := c2.Read(b); !errors.Is(err, net.ErrClosed) {
+			t.Errorf("c2.Read() with bytes pending after local closure = %v, want %v", err, net.ErrClosed)
+		}
+	}
+	_ = c1.Close()
+	_ = c2.Close()
+
+	broken := io.ErrClosedPipe
+	if hybrid {
+		broken = errPipeBroken
+	}
+	c1, c2 = ctor()
+	_ = c1.SetWriteDeadline(time.Now().Add(-time.Second))
+	if _, err := c1.Write(b); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("c1.Write() = %v, want %v", err, os.ErrDeadlineExceeded)
+	}
+	_ = c2.Close()
+	if _, err := c1.Write(b); !errors.Is(err, broken) {
+		t.Errorf("c1.Write() after remote closure = %v, want %v", err, broken)
+	}
+	_ = c1.Close()
 }
 
 // testPipeDrain ensures all bytes written before remote closure are read before io.EOF.
@@ -616,13 +782,16 @@ const (
 	benchmarkPipeChunkedReadName  = "ChunkedRead"
 	benchmarkPipeChunkedWriteName = "ChunkedWrite"
 
-	testPipeBundleName         = "Bundle"
-	testPipeCloseErrorName     = "CloseError"
-	testPipeConcurrentReadName = "ConcurrentRead"
-	testPipeDrainName          = "Drain"
-	testPipeEmptyAddrName      = "EmptyAddr"
-	testPipeSliceAliasName     = "SliceAlias"
-	testPipeUnblockName        = "Unblock"
-	testPipeWriteReturnName    = "WriteReturn"
-	testPipeZeroLengthName     = "ZeroLength"
+	testPipeBundleName          = "Bundle"
+	testPipeCloseName           = "Close"
+	testPipeCloseErrorName      = "CloseError"
+	testPipeConcurrentReadName  = "ConcurrentRead"
+	testPipeConcurrentWriteName = "ConcurrentWrite"
+	testPipeDeadlineName        = "Deadline"
+	testPipeDrainName           = "Drain"
+	testPipeEmptyAddrName       = "EmptyAddr"
+	testPipeSliceAliasName      = "SliceAlias"
+	testPipeUnblockName         = "Unblock"
+	testPipeWriteReturnName     = "WriteReturn"
+	testPipeZeroLengthName      = "ZeroLength"
 )
