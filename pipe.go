@@ -309,8 +309,12 @@ func (p *pipe) Close() error {
 	return nil
 }
 
-// opError wraps err in net.OpError the same way as a TCP connection does.
+// opError wraps err in net.OpError the same way as a TCP connection does: Source is the local
+// address, and Addr is the remote one. Setting a deadline reports the local address as Addr only.
 func (*pipe) opError(op string, err error) error {
+	if op == "set" {
+		return &net.OpError{Op: op, Net: pipeNetwork, Addr: onePipeAddr, Err: err}
+	}
 	return &net.OpError{Op: op, Net: pipeNetwork, Source: onePipeAddr, Addr: onePipeAddr, Err: err}
 }
 

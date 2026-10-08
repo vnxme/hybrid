@@ -217,6 +217,8 @@ func testPipeCloseError(t *testing.T, ctor pipeCtor) {
 			t.Errorf("%s = %v, want %v", name, err, target)
 		case hybrid && (!errors.As(err, &opErr) || opErr.Op != op):
 			t.Errorf("%s = %#v, want net.OpError for %q", name, err, op)
+		case hybrid && (op == "set") != (opErr.Source == nil):
+			t.Errorf("%s = net.OpError from %v, want from %s", name, opErr.Source, map[bool]string{true: "nil", false: "the local address"}[op == "set"])
 		}
 	}
 
