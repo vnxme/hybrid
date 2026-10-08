@@ -363,9 +363,9 @@ const trunkNetwork = "trunk"
 
 // Shared variables
 var (
-	errTrunkClosed           = net.ErrClosed
+	errTrunkClosed           = net.ErrClosed // Reported by using a trunk after closure of either end, the same way as by UDP after local closure
 	errTrunkDeadlineExceeded = os.ErrDeadlineExceeded
-	errTrunkShortBuffer      = io.ErrShortBuffer
+	errTrunkShortBuffer      = io.ErrShortBuffer // Reported by reading a packet longer than the read buffer
 
 	oneTrunkAddr = trunkAddr{}
 )
