@@ -177,10 +177,10 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	switch {
 	case isClosedChan(p.localDone):
 		return 0, errPipeClosed
+	case isClosedChan(p.rdDeadline.Wait()): // Like TCP, an exceeded deadline prevails over io.EOF and retained bytes
+		return 0, errPipeDeadlineExceeded
 	case isClosedChan(p.remoteDone) && p.rdBuf == nil && len(p.rdRx) == 0:
 		return 0, io.EOF
-	case isClosedChan(p.rdDeadline.Wait()):
-		return 0, errPipeDeadlineExceeded
 	case p.rdBuf != nil: // Only a semi-sync/async pipe retains unread bytes
 		nr := copy(b, p.rdBuf)
 		if nr < len(p.rdBuf) {

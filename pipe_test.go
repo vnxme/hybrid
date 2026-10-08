@@ -529,8 +529,8 @@ func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
 	_ = c2.Close()
 }
 
-// testPipeLockWait ensures a write fails if its pipe end is closed or its deadline is exceeded
-// while the write is waiting for another one to finish, even though a send is ready afterwards.
+// testPipeLockWait ensures an operation fails if its pipe end is closed or its deadline is exceeded
+// while the operation is waiting for another one to finish, even though it is ready to proceed afterwards.
 // As select chooses randomly between ready cases, every scenario is repeated to catch a success.
 func testPipeLockWait(t *testing.T, ctor pipeCtor) {
 	c1, c2 := ctor()
@@ -541,40 +541,61 @@ func testPipeLockWait(t *testing.T, ctor pipeCtor) {
 		t.Skip("relies on the internals of a hybrid pipe")
 	}
 
-	events := []struct {
+	scenarios := []struct {
 		name  string
+		read  bool
 		event func(c1, c2 StreamConn)
 		want  error
 	}{
-		{"LocalClose", func(c1, _ StreamConn) { _ = c1.Close() }, net.ErrClosed},
-		{"RemoteClose", func(_, c2 StreamConn) { _ = c2.Close() }, errPipeBroken},
-		{"Deadline", func(c1, _ StreamConn) { _ = c1.SetWriteDeadline(time.Now()) }, os.ErrDeadlineExceeded},
+		{"ReadLocalClose", true, func(c1, _ StreamConn) { _ = c1.Close() }, net.ErrClosed},
+		{"ReadDeadline", true, func(c1, _ StreamConn) { _ = c1.SetReadDeadline(time.Now()) }, os.ErrDeadlineExceeded},
+		{"ReadDeadlineAfterRemoteClose", true, func(c1, c2 StreamConn) { // Like TCP, an exceeded deadline prevails over io.EOF
+			_ = c2.Close()
+			_ = c1.SetReadDeadline(time.Now())
+		}, os.ErrDeadlineExceeded},
+		{"WriteLocalClose", false, func(c1, _ StreamConn) { _ = c1.Close() }, net.ErrClosed},
+		{"WriteRemoteClose", false, func(_, c2 StreamConn) { _ = c2.Close() }, errPipeBroken},
+		{"WriteDeadline", false, func(c1, _ StreamConn) { _ = c1.SetWriteDeadline(time.Now()) }, os.ErrDeadlineExceeded},
 	}
 
-	for _, e := range events {
-		t.Run(e.name, func(t *testing.T) {
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
 			for range 20 {
 				c1, c2 := ctor()
-				p := c1.(*pipe)
-				p.wrMu.Lock() // Another write is in progress
+				mu := &c1.(*pipe).wrMu
+				if sc.read {
+					mu = &c1.(*pipe).rdMu
+				}
+				mu.Lock() // Another operation is in progress
 
 				done := make(chan error, 1)
 				go func() {
-					_, err := c1.Write([]byte("x")) // Passes the checks before wrMu, then waits for it
+					var err error
+					if sc.read { // Pass the checks before the lock, then wait for it
+						_, err = c1.Read(make([]byte, 1))
+					} else {
+						_, err = c1.Write([]byte("x"))
+					}
 					done <- err
 				}()
-				go func() { _, _ = c2.Read(make([]byte, 1)) }() // Make a send ready in any mode
-				time.Sleep(time.Millisecond)                    // Let the write wait, though its outcome doesn't depend on it
-				e.event(c1, c2)
-				p.wrMu.Unlock()
+				go func() { // Make the operation ready to proceed in any mode
+					if sc.read {
+						_, _ = c2.Write([]byte("x"))
+					} else {
+						_, _ = c2.Read(make([]byte, 1))
+					}
+				}()
+				time.Sleep(time.Millisecond) // Let the operation wait, though its outcome doesn't depend on it
+				sc.event(c1, c2)
+				mu.Unlock()
 
 				select {
 				case err := <-done:
-					if !errors.Is(err, e.want) {
-						t.Errorf("c1.Write() = %v, want %v", err, e.want)
+					if !errors.Is(err, sc.want) {
+						t.Errorf("c1 operation = %v, want %v", err, sc.want)
 					}
 				case <-time.After(time.Second):
-					t.Errorf("c1.Write() doesn't return")
+					t.Errorf("c1 operation doesn't return")
 				}
 				_ = c1.Close()
 				_ = c2.Close()
