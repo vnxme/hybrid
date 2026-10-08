@@ -82,41 +82,13 @@ type trunk struct {
 	wrMu sync.Mutex // Serialize write operations
 }
 
-// BufferedTrunk creates an in-memory, full duplex network connection with buffered
-// and asynchronous behavior, using the specified internal queue size for each end.
-// See Trunk for more details.
-func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
-	return Trunk(queueSize, addr1, addr2)
-}
-
-// UnbufferedTrunk creates an unbuffered, synchronous in-memory full-duplex connection pair.
-// See Trunk for more details.
-func UnbufferedTrunk(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
-	return Trunk(0, addr1, addr2)
-}
-
-// Trunk creates an in-memory, full duplex network connection;
-// both ends implement the SelectivePacketConn interface. It can be:
-//
-// (a) Unbuffered and synchronous.
-// Reads on one end are matched with writes on the other,
-// copying data directly between the two; there is no internal
-// buffering, and partial reading isn't supported. A write
-// returns once its packet has been copied by a read.
-//
-// (b) Buffered and asynchronous.
-// Reads on one end aren't matched with writes on the other;
-// data are copied internally to prevent slice aliasing issues;
-// partial reading isn't supported, i.e. unread bytes are dropped.
-//
-// Note: when the remote end is closed, (a) returns io.EOF immediately
-// after that, but (b) returns io.EOF only once there are no more
-// packets left in the read channel. When a read buffer is shorter than
-// a packet buffer, both (a) and (b) return ErrPacketTruncated.
-//
-// Note: the queue size must be within the range of 0 to 1024.
-// Any negative value is replaced with 0, and any value exceeding
-// the upper limit is adjusted to that limit.
+// BufferedTrunk creates an in-memory, full duplex packet-oriented network connection
+// that is buffered and asynchronous; both ends implement the SelectivePacketConn interface.
+// Reads on one end aren't matched with writes on the other: a write returns once its
+// packet has been queued, unless the queue already holds queueSize packets, in which
+// case it blocks. Packets are copied internally, so the write buffer may be reused
+// once a write returns. When the remote end is closed, reads return io.EOF once
+// all the packets queued have been read.
 //
 // The ends have local addresses addr1 and addr2 respectively, or a generic
 // trunk address if nil. A local address is returned by LocalAddr, used as
@@ -124,8 +96,31 @@ func UnbufferedTrunk(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacke
 // as the destination address of a packet read that was written without one.
 // A packet is delivered to the other end whatever its destination address is,
 // so that multiple packet flows may share a trunk, told apart by addresses.
-func Trunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
-	queueSize = min(1<<10, max(0, queueSize))
+//
+// A packet longer than the read buffer is truncated: a read returns the bytes
+// copied along with io.ErrShortBuffer, and the rest of the packet is dropped.
+//
+// BufferedTrunk panics if queueSize isn't positive.
+func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+	if queueSize <= 0 {
+		panic("hybrid: BufferedTrunk: non-positive queueSize")
+	}
+	return newTrunk(queueSize, addr1, addr2)
+}
+
+// UnbufferedTrunk creates an in-memory, full duplex packet-oriented network connection
+// that is unbuffered and synchronous; both ends implement the SelectivePacketConn interface.
+// Reads on one end are matched with writes on the other, copying packets directly
+// between the two; there is no internal buffering. A write returns once its packet
+// has been copied by a read, so the write buffer may be reused after that. When the
+// remote end is closed, reads return io.EOF. Local addresses and packet truncation
+// are handled the same way as by [BufferedTrunk].
+func UnbufferedTrunk(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+	return newTrunk(0, addr1, addr2)
+}
+
+// newTrunk creates a trunk with the given queue size, see [BufferedTrunk] and [UnbufferedTrunk].
+func newTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
 	if addr1 == nil {
 		addr1 = oneTrunkAddr
 	}

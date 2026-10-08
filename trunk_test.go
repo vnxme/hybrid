@@ -714,3 +714,16 @@ func TestTrunkDrain(t *testing.T) {
 		t.Errorf("c2.SetReadDeadline() = %v, want %v", err, errTrunkClosed)
 	}
 }
+
+func TestBufferedTrunkPanic(t *testing.T) {
+	for _, queueSize := range []int{0, -1} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("BufferedTrunk(%d) didn't panic", queueSize)
+				}
+			}()
+			BufferedTrunk(queueSize, nil, nil)
+		}()
+	}
+}
