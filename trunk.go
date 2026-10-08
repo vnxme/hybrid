@@ -115,6 +115,8 @@ func UnbufferedTrunk(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacke
 
 // newTrunk creates a trunk with the given queue size, see [BufferedTrunk] and [UnbufferedTrunk].
 func newTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+	// Copy addresses, as the caller may modify them once the trunk is created
+	addr1, addr2 = cloneAddr(addr1), cloneAddr(addr2)
 	if addr1 == nil {
 		addr1 = oneTrunkAddr
 	}

@@ -198,12 +198,22 @@ func testTrunkAddrs(t *testing.T, ctor trunkCtor) {
 		_ = c1.Close()
 		_ = c2.Close()
 	}()
-	if got := c1.LocalAddr(); got != addr1 {
+	if got := c1.LocalAddr(); !equalAddr(got, addr1) {
 		t.Errorf("c1.LocalAddr() = %v, want %v", got, addr1)
 	}
-	if got := c2.LocalAddr(); got != addr2 {
+	if got := c2.LocalAddr(); !equalAddr(got, addr2) {
 		t.Errorf("c2.LocalAddr() = %v, want %v", got, addr2)
 	}
+
+	// A caller modifying an address once a trunk is created doesn't affect its local address
+	own := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 3).To4(), Port: 53}
+	c3, c4 := ctor(own, nil)
+	own.IP[3], own.Port = 99, 9999
+	if got := c3.LocalAddr(); got.String() != "10.0.0.3:53" {
+		t.Errorf("c3.LocalAddr() = %v, want 10.0.0.3:53", got)
+	}
+	_ = c3.Close()
+	_ = c4.Close()
 
 	// transfer writes a packet on w, reads it on r and waits for the write to return
 	transfer := func(w, r SelectivePacketConn, payload string, dst, src net.Addr, idx int) (net.Addr, net.Addr) {
