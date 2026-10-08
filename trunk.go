@@ -57,37 +57,6 @@ type trunkPacket struct {
 	i   int
 }
 
-// cloneAddr returns a copy of a standard address, so that they don't share memory.
-// Any other address, including a nil pointer of a standard type, is returned as is.
-func cloneAddr(addr net.Addr) net.Addr {
-	switch a := addr.(type) {
-	case *net.UDPAddr:
-		if a != nil {
-			c := *a
-			c.IP = slices.Clone(a.IP)
-			return &c
-		}
-	case *net.TCPAddr:
-		if a != nil {
-			c := *a
-			c.IP = slices.Clone(a.IP)
-			return &c
-		}
-	case *net.IPAddr:
-		if a != nil {
-			c := *a
-			c.IP = slices.Clone(a.IP)
-			return &c
-		}
-	case *net.UnixAddr:
-		if a != nil {
-			c := *a
-			return &c
-		}
-	}
-	return addr
-}
-
 // trunk represents a packet-oriented communication channel between local and remote endpoints.
 type trunk struct {
 	addr net.Addr // Local address

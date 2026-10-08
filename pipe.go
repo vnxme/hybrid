@@ -38,15 +38,6 @@ import (
 	"time"
 )
 
-func isClosedChan(c <-chan struct{}) bool {
-	select {
-	case <-c:
-		return true
-	default:
-		return false
-	}
-}
-
 type pipeAddr struct{}
 
 func (pipeAddr) Network() string { return pipeNetwork }
