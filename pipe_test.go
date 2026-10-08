@@ -155,6 +155,7 @@ func TestPipe(t *testing.T) {
 			t.Run(testPipeDrainName, func(t *testing.T) { testPipeDrain(t, test.ctor, test.mode) })
 			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
 			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor, test.mode) })
+			t.Run(testPipeUnblockName, func(t *testing.T) { testPipeUnblock(t, test.ctor, test.mode) })
 			t.Run(testPipeWriteReturnName, func(t *testing.T) { testPipeWriteReturn(t, test.ctor, test.mode) })
 			t.Run(testPipeZeroLengthName, func(t *testing.T) { testPipeZeroLength(t, test.ctor) })
 		})
@@ -185,46 +186,59 @@ func testPipeBundle(t *testing.T, ctor pipeCtor) {
 	})
 }
 
+// testPipeCloseError ensures closure errors are reported the same way as by net.Pipe, or
+// by TCP for a hybrid pipe: net.ErrClosed once the local end is closed, a bare io.EOF on read
+// and a broken pipe on write after remote closure, and any other error wrapped in net.OpError.
 func testPipeCloseError(t *testing.T, ctor pipeCtor) {
 	c1, c2 := ctor()
+	_, hybrid := c1.(*pipe)
+
+	// Errors expected after local closure, after remote closure on write and on setting a deadline,
+	// and on closing a closed end, where nil means no error is expected
+	closed, broken, deadline, reclose := io.ErrClosedPipe, io.ErrClosedPipe, io.ErrClosedPipe, error(nil)
+	if hybrid {
+		closed, broken, deadline, reclose = net.ErrClosed, errPipeBroken, nil, net.ErrClosed
+	}
+
+	// expect fails unless err is target, wrapped in net.OpError for op by a hybrid pipe
+	expect := func(name string, err error, op string, target error) {
+		t.Helper()
+		var opErr *net.OpError
+		switch {
+		case target == nil:
+			if err != nil {
+				t.Errorf("%s = %v, want nil", name, err)
+			}
+		case target == io.EOF:
+			if err != io.EOF { // io.EOF must not be wrapped, as callers compare it with ==
+				t.Errorf("%s = %#v, want a bare io.EOF", name, err)
+			}
+		case !errors.Is(err, target):
+			t.Errorf("%s = %v, want %v", name, err, target)
+		case hybrid && (!errors.As(err, &opErr) || opErr.Op != op):
+			t.Errorf("%s = %#v, want net.OpError for %q", name, err, op)
+		}
+	}
+
+	b := make([]byte, 1) // Zero-length reads and writes differ, see testPipeZeroLength
 	_ = c1.Close()
+	_, err := c1.Read(b)
+	expect("c1.Read()", err, "read", closed)
+	_, err = c1.Write(b)
+	expect("c1.Write()", err, "write", closed)
+	expect("c1.SetDeadline()", c1.SetDeadline(time.Time{}), "set", closed)
+	expect("c1.SetReadDeadline()", c1.SetReadDeadline(time.Time{}), "set", closed)
+	expect("c1.SetWriteDeadline()", c1.SetWriteDeadline(time.Time{}), "set", closed)
+	expect("c1.Close()", c1.Close(), "close", reclose)
 
-	b := make([]byte, 1) // Zero-length reads differ, see testPipeZeroLength
-	if _, err := c1.Read(b); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c1.Read() = %v, want io.ErrClosedPipe", err)
-	}
-	if _, err := c1.Write(nil); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c1.Write() = %v, want io.ErrClosedPipe", err)
-	}
-	if err := c1.SetDeadline(time.Time{}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c1.SetDeadline() = %v, want io.ErrClosedPipe", err)
-	}
-	if _, err := c2.Read(b); !errors.Is(err, io.EOF) {
-		t.Errorf("c2.Read() = %v, want io.EOF", err)
-	}
-	if _, err := c2.Write(nil); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c2.Write() = %v, want io.ErrClosedPipe", err)
-	}
-	if err := c2.SetWriteDeadline(time.Time{}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c2.SetWriteDeadline() = %v, want io.ErrClosedPipe", err)
-	}
-
-	// Unlike net.Pipe, a hybrid pipe allows setting read deadlines after remote closure
-	var want error
-	if _, ok := c2.(*pipe); !ok {
-		want = io.ErrClosedPipe
-	}
-	if err := c2.SetReadDeadline(time.Time{}); !errors.Is(err, want) {
-		t.Errorf("c2.SetReadDeadline() = %v, want %v", err, want)
-	}
-	if err := c2.SetDeadline(time.Time{}); !errors.Is(err, want) {
-		t.Errorf("c2.SetDeadline() = %v, want %v", err, want)
-	}
-
-	_ = c2.Close()
-	if err := c2.SetReadDeadline(time.Time{}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c2.SetReadDeadline() = %v, want io.ErrClosedPipe", err)
-	}
+	_, err = c2.Read(b)
+	expect("c2.Read()", err, "read", io.EOF)
+	_, err = c2.Write(b)
+	expect("c2.Write()", err, "write", broken)
+	expect("c2.SetDeadline()", c2.SetDeadline(time.Time{}), "set", deadline)
+	expect("c2.SetReadDeadline()", c2.SetReadDeadline(time.Time{}), "set", deadline)
+	expect("c2.SetWriteDeadline()", c2.SetWriteDeadline(time.Time{}), "set", deadline)
+	expect("c2.Close()", c2.Close(), "close", nil)
 }
 
 // testPipeConcurrentRead ensures concurrent partial reads neither lose bytes nor race.
@@ -404,6 +418,74 @@ func testPipeSliceAlias(t *testing.T, ctor pipeCtor, mode pipeMode) {
 	}
 }
 
+// testPipeUnblock ensures a blocked read or write returns once either end is closed
+// or the deadline is exceeded, with the same errors as by net.Pipe, or by TCP for a hybrid pipe.
+func testPipeUnblock(t *testing.T, ctor pipeCtor, mode pipeMode) {
+	c1, c2 := ctor()
+	_, hybrid := c1.(*pipe)
+	_ = c1.Close()
+	_ = c2.Close()
+
+	closed, broken := io.ErrClosedPipe, io.ErrClosedPipe
+	if hybrid {
+		closed, broken = net.ErrClosed, errPipeBroken
+	}
+	unblockers := []struct {
+		name      string
+		unblock   func(c1, c2 StreamConn)
+		wantRead  error
+		wantWrite error
+	}{
+		{"LocalClose", func(c1, _ StreamConn) { _ = c1.Close() }, closed, closed},
+		{"RemoteClose", func(_, c2 StreamConn) { _ = c2.Close() }, io.EOF, broken},
+		{"Deadline", func(c1, _ StreamConn) { _ = c1.SetDeadline(time.Now()) }, os.ErrDeadlineExceeded, os.ErrDeadlineExceeded},
+	}
+
+	for _, read := range []bool{true, false} {
+		for _, u := range unblockers {
+			name, want := "Read"+u.name, u.wantRead
+			if !read {
+				name, want = "Write"+u.name, u.wantWrite
+			}
+			t.Run(name, func(t *testing.T) {
+				c1, c2 := ctor()
+				defer func() {
+					_ = c1.Close()
+					_ = c2.Close()
+				}()
+				b := make([]byte, 16)
+				if !read && mode == pipeModeAsync { // Fill the queue for the write to block
+					for range pipeQueueSize {
+						_, _ = c1.Write(b)
+					}
+				}
+
+				done := make(chan error, 1)
+				go func() {
+					var err error
+					if read {
+						_, err = c1.Read(b)
+					} else {
+						_, err = c1.Write(b)
+					}
+					done <- err
+				}()
+				time.Sleep(100 * time.Millisecond) // Let the operation block, though its outcome doesn't depend on it
+				u.unblock(c1, c2)
+
+				select {
+				case err := <-done:
+					if !errors.Is(err, want) {
+						t.Errorf("c1 operation = %v, want %v", err, want)
+					}
+				case <-time.After(time.Second):
+					t.Errorf("c1 operation doesn't return")
+				}
+			})
+		}
+	}
+}
+
 // testPipeWriteReturn ensures a write returns once all its bytes have been read in a sync pipe,
 // once it has been received by a read in a semi-sync pipe, or once it has been queued in an async pipe.
 // A write expected to block is detected by exceeding a short deadline.
@@ -517,14 +599,14 @@ func testPipeZeroLength(t *testing.T, ctor pipeCtor) {
 
 	// Closure fails a zero-length write, but remote closure doesn't fail a zero-length read
 	_ = c1.Close()
-	if _, err := c1.Write(nil); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c1.Write() = %v, want io.ErrClosedPipe", err)
+	if _, err := c1.Write(nil); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("c1.Write() = %v, want %v", err, net.ErrClosed)
 	}
-	if _, err := c1.Read(nil); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c1.Read() = %v, want io.ErrClosedPipe", err)
+	if _, err := c1.Read(nil); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("c1.Read() = %v, want %v", err, net.ErrClosed)
 	}
-	if _, err := c2.Write(nil); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("c2.Write() = %v, want io.ErrClosedPipe", err)
+	if _, err := c2.Write(nil); !errors.Is(err, errPipeBroken) {
+		t.Errorf("c2.Write() = %v, want %v", err, errPipeBroken)
 	}
 	if n, err := c2.Read(nil); n != 0 || err != nil {
 		t.Errorf("c2.Read() = %d, %v, want 0, nil", n, err)
@@ -542,6 +624,7 @@ const (
 	testPipeDrainName          = "Drain"
 	testPipeEmptyAddrName      = "EmptyAddr"
 	testPipeSliceAliasName     = "SliceAlias"
+	testPipeUnblockName        = "Unblock"
 	testPipeWriteReturnName    = "WriteReturn"
 	testPipeZeroLengthName     = "ZeroLength"
 )

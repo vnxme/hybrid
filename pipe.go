@@ -30,7 +30,6 @@ package hybrid
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"net"
 	"os"
@@ -144,8 +143,8 @@ func (*pipe) RemoteAddr() net.Addr { return pipeAddr{} }
 
 func (p *pipe) Read(b []byte) (int, error) {
 	n, err := p.read(b)
-	if err != nil && err != io.EOF && !errors.Is(err, io.ErrClosedPipe) {
-		err = &net.OpError{Op: "read", Net: pipeNetwork, Err: err}
+	if err != nil && err != io.EOF { // Like TCP, io.EOF isn't wrapped, as callers compare it with ==
+		err = p.opError("read", err)
 	}
 	return n, err
 }
@@ -156,7 +155,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	// remoteDone as well, so it releases rdMu promptly in this case.
 	switch {
 	case isClosedChan(p.localDone):
-		return 0, io.ErrClosedPipe
+		return 0, errPipeClosed
 	case len(b) == 0: // Return immediately like TCP does, without consuming any remote Write
 		return 0, nil
 	case isClosedChan(p.rdDeadline.Wait()):
@@ -167,7 +166,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	defer p.rdMu.Unlock()
 	switch {
 	case isClosedChan(p.localDone):
-		return 0, io.ErrClosedPipe
+		return 0, errPipeClosed
 	case isClosedChan(p.remoteDone) && p.rdBuf == nil && len(p.rdRx) == 0:
 		return 0, io.EOF
 	case isClosedChan(p.rdDeadline.Wait()):
@@ -201,7 +200,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 		}
 		return nr, nil
 	case <-p.localDone:
-		return 0, io.ErrClosedPipe
+		return 0, errPipeClosed
 	case <-p.remoteDone:
 		// Only an async pipe may have queued bytes. No need to check p.rdBuf here:
 		// unless it was empty, the function would return above
@@ -221,8 +220,8 @@ func (p *pipe) read(b []byte) (n int, err error) {
 
 func (p *pipe) Write(b []byte) (int, error) {
 	n, err := p.write(b)
-	if err != nil && !errors.Is(err, io.ErrClosedPipe) {
-		err = &net.OpError{Op: "write", Net: pipeNetwork, Err: err}
+	if err != nil {
+		err = p.opError("write", err)
 	}
 	return n, err
 }
@@ -230,9 +229,9 @@ func (p *pipe) Write(b []byte) (int, error) {
 func (p *pipe) write(b []byte) (n int, err error) {
 	switch {
 	case isClosedChan(p.localDone):
-		return 0, io.ErrClosedPipe
+		return 0, errPipeClosed
 	case isClosedChan(p.remoteDone):
-		return 0, io.ErrClosedPipe
+		return 0, errPipeBroken
 	case isClosedChan(p.wrDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
 	case len(b) == 0: // Send nothing like TCP does, so that no remote Read returns 0, nil
@@ -255,9 +254,9 @@ func (p *pipe) write(b []byte) (n int, err error) {
 				return len(b), nil
 			}
 		case <-p.localDone:
-			return n, io.ErrClosedPipe
+			return n, errPipeClosed
 		case <-p.remoteDone:
-			return n, io.ErrClosedPipe
+			return n, errPipeBroken
 		case <-p.wrDeadline.Wait():
 			return n, os.ErrDeadlineExceeded
 		}
@@ -265,43 +264,60 @@ func (p *pipe) write(b []byte) (n int, err error) {
 	return n, nil
 }
 
-// SetDeadline sets the read and write deadlines. Unlike [net.Pipe], it fails only once
-// the local end is closed, since bytes retained or queued may be read after remote closure.
+// SetDeadline sets the read and write deadlines. Like TCP and unlike [net.Pipe], it fails
+// only once the local end is closed, since bytes retained or queued may be read after remote closure.
 func (p *pipe) SetDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) {
-		return io.ErrClosedPipe
+		return p.opError("set", errPipeClosed)
 	}
 	p.rdDeadline.Set(t)
 	p.wrDeadline.Set(t)
 	return nil
 }
 
-// SetReadDeadline sets the read deadline. Unlike [net.Pipe], it fails only once
-// the local end is closed, since bytes retained or queued may be read after remote closure.
+// SetReadDeadline sets the read deadline. Like TCP and unlike [net.Pipe], it fails only
+// once the local end is closed, since bytes retained or queued may be read after remote closure.
 func (p *pipe) SetReadDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) {
-		return io.ErrClosedPipe
+		return p.opError("set", errPipeClosed)
 	}
 	p.rdDeadline.Set(t)
 	return nil
 }
 
-// SetWriteDeadline sets the write deadline. It fails once either end is closed,
-// since nothing may be written after that.
+// SetWriteDeadline sets the write deadline. Like TCP and unlike [net.Pipe], it fails only
+// once the local end is closed, while a write fails with a broken pipe error after remote closure.
 func (p *pipe) SetWriteDeadline(t time.Time) error {
-	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
-		return io.ErrClosedPipe
+	if isClosedChan(p.localDone) {
+		return p.opError("set", errPipeClosed)
 	}
 	p.wrDeadline.Set(t)
 	return nil
 }
 
+// Close closes the pipe end. Like TCP and unlike [net.Pipe], it returns net.ErrClosed
+// if the pipe end is already closed.
 func (p *pipe) Close() error {
-	p.once.Do(func() { close(p.localDone) })
+	closed := false
+	p.once.Do(func() {
+		close(p.localDone)
+		closed = true
+	})
+	if !closed {
+		return p.opError("close", errPipeClosed)
+	}
 	return nil
+}
+
+// opError wraps err in net.OpError the same way as a TCP connection does.
+func (*pipe) opError(op string, err error) error {
+	return &net.OpError{Op: op, Net: pipeNetwork, Source: pipeAddr{}, Addr: pipeAddr{}, Err: err}
 }
 
 const pipeNetwork = "pipe"
+
+// errPipeClosed is reported by using a closed pipe end, the same way as by TCP.
+var errPipeClosed = net.ErrClosed
 
 // Interface guards
 var (
