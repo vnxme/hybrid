@@ -79,7 +79,6 @@ type trunk struct {
 	wrDeadline deadline[noHook]
 
 	once sync.Once  // Protects closing localDone
-	rdMu sync.Mutex // Serialize read operations
 	wrMu sync.Mutex // Serialize write operations
 }
 
@@ -182,27 +181,12 @@ func (p *trunk) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 // read reads a packet from the trunk and returns the number of bytes copied,
 // the source and destination addresses, the interface index, and any error.
 //
-// It serializes reads and blocks until a packet is received or the trunk is closed or a deadline expires.
+// It blocks until a packet is received or the trunk is closed or a deadline expires. Reads needn't
+// be serialized, since each of them receives a whole packet, the same way as UDP reads do.
 // If the provided buffer is too small, it returns io.ErrShortBuffer and drops the excess bytes.
 func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 	var pkt trunkPacket
 
-	switch {
-	case isClosedChan(p.localDone):
-		return 0, nil, nil, 0, errTrunkClosed
-	case isClosedChan(p.rdDeadline.Wait()): // An exceeded deadline prevails over pending packets
-		return 0, nil, nil, 0, errTrunkDeadlineExceeded
-	case isClosedChan(p.remoteDone):
-		select {
-		case pkt = <-p.rdRx:
-			goto success
-		default:
-			return 0, nil, nil, 0, errTrunkEOF
-		}
-	}
-
-	p.rdMu.Lock()
-	defer p.rdMu.Unlock()
 	switch {
 	case isClosedChan(p.localDone):
 		return 0, nil, nil, 0, errTrunkClosed
@@ -265,16 +249,17 @@ func (p *trunk) WriteToFrom(b []byte, r, l net.Addr, i int) (int, error) {
 
 // write sends a packet with the given byte slice b from local address l to remote address r on interface i.
 //
-// It serializes writes and blocks until a packet is sent or the trunk is closed or a deadline expires.
+// It blocks until a packet is sent or the trunk is closed or a deadline expires. Writes are serialized,
+// so that a single packet is in flight in an unbuffered trunk, and its acknowledgement can't be mixed up.
 // For buffered trunks, it copies b to avoid slice aliasing issues.
 func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 	switch {
 	case isClosedChan(p.localDone):
 		return 0, errTrunkClosed
-	case isClosedChan(p.wrDeadline.Wait()):
-		return 0, errTrunkDeadlineExceeded
 	case isClosedChan(p.remoteDone):
 		return 0, errTrunkClosed
+	case isClosedChan(p.wrDeadline.Wait()):
+		return 0, errTrunkDeadlineExceeded
 	}
 
 	p.wrMu.Lock()
@@ -282,10 +267,10 @@ func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 	switch {
 	case isClosedChan(p.localDone):
 		return 0, errTrunkClosed
-	case isClosedChan(p.wrDeadline.Wait()):
-		return 0, errTrunkDeadlineExceeded
 	case isClosedChan(p.remoteDone):
 		return 0, errTrunkClosed
+	case isClosedChan(p.wrDeadline.Wait()):
+		return 0, errTrunkDeadlineExceeded
 	}
 
 	if l == nil { // A packet written without a source address originates from this end

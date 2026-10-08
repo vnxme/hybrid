@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -258,7 +259,7 @@ func TestTrunkWriteLLM(t *testing.T) {
 			},
 			payloadLen: 10,
 			wantN:      0,
-			wantErr:    errTrunkDeadlineExceeded,
+			wantErr:    errTrunkClosed,
 		},
 		{
 			name: "WriteBlockingThenLocalClose",
@@ -607,5 +608,73 @@ func TestTrunkAddrs(t *testing.T) {
 	_ = c2.SetReadDeadline(time.Now().Add(-time.Second))
 	if _, src, dst, _, err := c2.ReadFromTo(make([]byte, 16)); err == nil || src != nil || dst != nil {
 		t.Errorf("ReadFromTo() = %v, %v, %v, want nil, nil, an error", src, dst, err)
+	}
+}
+
+// TestTrunkConcurrent ensures concurrent writers and readers neither lose, duplicate nor corrupt
+// packets, while every writer reuses its buffer right after a write has returned.
+func TestTrunkConcurrent(t *testing.T) {
+	for name, ctor := range map[string]func() (SelectivePacketConn, SelectivePacketConn){
+		"Unbuffered": func() (SelectivePacketConn, SelectivePacketConn) { return UnbufferedTrunk(nil, nil) },
+		"Buffered":   func() (SelectivePacketConn, SelectivePacketConn) { return BufferedTrunk(10, nil, nil) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c1, c2 := ctor()
+			const writers, readers, packets, size = 4, 4, 1 << 8, 1 << 12
+
+			// A packet starts with its writer and sequence numbers followed by the latter repeated
+			var wwg sync.WaitGroup
+			for w := range writers {
+				wwg.Go(func() {
+					b := make([]byte, size)
+					for seq := range packets {
+						b[0] = byte(w)
+						for i := 1; i < size; i++ {
+							b[i] = byte(seq)
+						}
+						if _, err := c1.WriteTo(b, nil); err != nil {
+							t.Errorf("c1.WriteTo() = %v, want nil", err)
+							return
+						}
+						clear(b)
+					}
+				})
+			}
+
+			var mu sync.Mutex
+			seen := make(map[[2]byte]bool)
+			var rwg sync.WaitGroup
+			for range readers {
+				rwg.Go(func() {
+					b := make([]byte, size)
+					for {
+						_ = c2.SetReadDeadline(time.Now().Add(deadlineQuiet))
+						n, _, err := c2.ReadFrom(b)
+						if errors.Is(err, os.ErrDeadlineExceeded) {
+							return // All packets have been read
+						}
+						if err != nil || n != size || bytes.Count(b[1:n], b[1:2]) != n-1 {
+							t.Errorf("c2.ReadFrom() = %d, %v, want an intact packet of %d bytes", n, err, size)
+							return
+						}
+						key := [2]byte{b[0], b[1]}
+						mu.Lock()
+						if seen[key] {
+							t.Errorf("packet %v is read twice", key)
+						}
+						seen[key] = true
+						mu.Unlock()
+					}
+				})
+			}
+
+			wwg.Wait()
+			rwg.Wait()
+			if len(seen) != writers*packets {
+				t.Errorf("read %d packets, want %d", len(seen), writers*packets)
+			}
+			_ = c1.Close()
+			_ = c2.Close()
+		})
 	}
 }
