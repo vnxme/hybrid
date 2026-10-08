@@ -113,6 +113,8 @@ func UnbufferedPipe(semiSync bool) (StreamConn, StreamConn) {
 // newPipe creates a pipe of the mode specified by queueSize and semiSync,
 // see [BufferedPipe] and [UnbufferedPipe]. A positive queueSize implies semiSync.
 func newPipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
+	retain := semiSync || queueSize > 0 // Read retains unread bytes unless the pipe is sync
+
 	cb1 := make(chan []byte, queueSize)
 	cb2 := make(chan []byte, queueSize)
 	cn1 := make(chan int)
@@ -126,7 +128,7 @@ func newPipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
 		localDone: done1, remoteDone: done2,
 		rdDeadline: makeDeadline(noHook{}),
 		wrDeadline: makeDeadline(noHook{}),
-		retain:     semiSync || queueSize > 0,
+		retain:     retain,
 	}
 	p2 := &pipe{
 		rdRx: cb2, rdTx: cn2,
@@ -134,7 +136,7 @@ func newPipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
 		localDone: done2, remoteDone: done1,
 		rdDeadline: makeDeadline(noHook{}),
 		wrDeadline: makeDeadline(noHook{}),
-		retain:     semiSync || queueSize > 0,
+		retain:     retain,
 	}
 	return p1, p2
 }
