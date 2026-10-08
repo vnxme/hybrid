@@ -17,14 +17,20 @@ package hybrid
 import (
 	"math/bits"
 	"sync"
+	"sync/atomic"
 )
 
 // bufPoolMaxBits limits the capacity of pooled buffers to 1<<bufPoolMaxBits, i.e. 64 KiB,
 // which covers the maximum UDP payload. Longer buffers aren't pooled.
 const bufPoolMaxBits = 16
 
-// bufPools hold reusable buffers by size class, see bufClass.
-var bufPools [2*bufPoolMaxBits + 1]sync.Pool
+var (
+	// bufPools hold reusable buffers by size class, see bufClass.
+	bufPools [2*bufPoolMaxBits + 1]sync.Pool
+
+	// bufPoison makes putBuf clear buffers, so that tests detect any use of a buffer after its return.
+	bufPoison atomic.Bool
+)
 
 // bufClass returns the index and the capacity of the smallest size class fitting n > 0.
 // Classes alternate between 1<<k and 3<<(k-1), i.e. 1, 2, 3, 4, 6, 8, 12, 16, ...,
@@ -54,6 +60,9 @@ func getBuf(n int) ([]byte, *[]byte) {
 // putBuf makes a buffer obtained from getBuf reusable. The buffer must not be used afterwards.
 func putBuf(ref *[]byte) {
 	if ref != nil {
+		if bufPoison.Load() {
+			clear(*ref)
+		}
 		i, _ := bufClass(cap(*ref))
 		bufPools[i].Put(ref)
 	}

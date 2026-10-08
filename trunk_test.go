@@ -606,6 +606,7 @@ func testTrunkLockWait(t *testing.T, ctor trunkCtor) {
 // buffer size classes, longer packets followed by shorter ones of the same class, and sizes
 // beyond the pooled ones, so that no bytes of a reused buffer leak into a packet.
 func testTrunkPacketSizes(t *testing.T, ctor trunkCtor) {
+	poisonBufs(t)
 	c1, c2 := ctor(nil, nil)
 	defer func() {
 		_ = c1.Close()

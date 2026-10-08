@@ -16,6 +16,13 @@ package hybrid
 
 import "testing"
 
+// poisonBufs makes putBuf clear buffers until the test ends, so that any use of a buffer
+// after its return is detected, whichever goroutine gets the buffer next, if any.
+func poisonBufs(t *testing.T) {
+	bufPoison.Store(true)
+	t.Cleanup(func() { bufPoison.Store(false) })
+}
+
 func TestBufClass(t *testing.T) {
 	tests := []struct{ n, idx, size int }{
 		{1, 0, 1}, {2, 2, 2}, {3, 3, 3}, {4, 4, 4}, {5, 5, 6}, {6, 5, 6}, {7, 6, 8}, {8, 6, 8},
@@ -73,4 +80,12 @@ func TestGetBuf(t *testing.T) {
 		}
 	}
 	putBuf(nil) // Doesn't panic
+
+	poisonBufs(t)
+	buf, ref := getBuf(3)
+	copy(buf, "abc")
+	putBuf(ref)
+	if string(buf) != "\x00\x00\x00" {
+		t.Errorf("putBuf() with poisoning left %q, want zeros", buf)
+	}
 }
