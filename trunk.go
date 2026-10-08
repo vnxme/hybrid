@@ -176,35 +176,26 @@ func (tr *trunk) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 // be serialized, since each of them receives a whole packet, the same way as UDP reads do.
 // If the provided buffer is too small, it returns io.ErrShortBuffer and drops the excess bytes.
 func (tr *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
-	var pkt trunkPacket
-
 	switch {
 	case isClosedChan(tr.localDone):
 		return 0, nil, nil, 0, errTrunkClosed
 	case isClosedChan(tr.rdDeadline.Wait()): // An exceeded deadline prevails over pending packets
 		return 0, nil, nil, 0, errTrunkDeadlineExceeded
-	case isClosedChan(tr.remoteDone):
-		select {
-		case pkt = <-tr.rdRx:
-			goto success
-		default:
-			return 0, nil, nil, 0, errTrunkClosed
-		}
+	case isClosedChan(tr.remoteDone) && len(tr.rdRx) == 0: // Queued packets may be read after remote closure
+		return 0, nil, nil, 0, errTrunkClosed
 	}
 
-	select {
+	var pkt trunkPacket
+	select { // Receive a pending packet without a blocking select, which is much slower
 	case pkt = <-tr.rdRx:
-		goto success
 	default:
 		select {
 		case pkt = <-tr.rdRx:
-			goto success
 		case <-tr.localDone:
 			return 0, nil, nil, 0, errTrunkClosed
 		case <-tr.remoteDone:
 			select { // A packet may have been queued just before remote closure
 			case pkt = <-tr.rdRx:
-				goto success
 			default:
 				return 0, nil, nil, 0, errTrunkClosed
 			}
@@ -213,7 +204,6 @@ func (tr *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 		}
 	}
 
-success:
 	if pkt.dst == nil { // A packet written without a destination address is destined to this end
 		pkt.dst = cloneAddr(tr.addr)
 	}
@@ -280,13 +270,11 @@ func (tr *trunk) write(b []byte, dst, src net.Addr, idx int) (int, error) {
 		pkt.buf = slices.Clone(b) // TODO(vnxme): use a pool?
 	}
 
-	select {
+	select { // Send without a blocking select if possible, which is much slower
 	case tr.wrTx <- pkt:
-		goto success
 	default:
 		select {
 		case tr.wrTx <- pkt:
-			goto success
 		case <-tr.localDone:
 			return 0, errTrunkClosed
 		case <-tr.remoteDone:
@@ -296,7 +284,6 @@ func (tr *trunk) write(b []byte, dst, src net.Addr, idx int) (int, error) {
 		}
 	}
 
-success:
 	if cap(tr.wrTx) == 0 { // An unbuffered trunk doesn't copy on write, so wait until remote read copies the packet
 		<-tr.wrRx
 	}
