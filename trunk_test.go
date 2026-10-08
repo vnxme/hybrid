@@ -445,8 +445,8 @@ func testTrunkDrain(t *testing.T, ctor trunkCtor, buffered bool) {
 
 	if buffered { // Read after remote closure
 		<-done
-		if err := c2.SetWriteDeadline(time.Time{}); !errors.Is(err, net.ErrClosed) {
-			t.Errorf("c2.SetWriteDeadline() = %v, want %v", err, net.ErrClosed)
+		if err := c2.SetWriteDeadline(time.Time{}); err != nil {
+			t.Errorf("c2.SetWriteDeadline() = %v, want nil", err)
 		}
 		if err := c2.SetDeadline(time.Time{}); err != nil {
 			t.Errorf("c2.SetDeadline() = %v, want nil", err)

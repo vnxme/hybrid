@@ -322,10 +322,10 @@ func (tr *trunk) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
-// SetWriteDeadline sets the write deadline to t. It returns net.ErrClosed
-// once either end is closed, since nothing may be written after that.
+// SetWriteDeadline sets the write deadline to t. Like UDP, it returns net.ErrClosed
+// only once the local end is closed, while a write fails with it after remote closure too.
 func (tr *trunk) SetWriteDeadline(t time.Time) error {
-	if isClosedChan(tr.localDone) || isClosedChan(tr.remoteDone) {
+	if isClosedChan(tr.localDone) {
 		return tr.opError("set", nil, nil, errTrunkClosed)
 	}
 	tr.wrDeadline.Set(t)
