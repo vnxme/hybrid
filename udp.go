@@ -61,9 +61,12 @@ func NeedSelectiveUDPConn(conn UDPConn) bool {
 	return addr.AddrPort().Addr().Unmap().IsUnspecified()
 }
 
+// NewSelectiveUDPConn enables packet info on conn for every IP version it accepts, and wraps it
+// to read the local address and interface index of each packet, and to write them with each packet.
+// It returns conn as is if it already implements SelectiveUDPConn.
 func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
 	if isNilUDPConn(conn) {
-		return nil, errors.New("UDPConn must not be nil")
+		return nil, errors.New("hybrid: nil UDPConn")
 	}
 
 	if u, ok := conn.(SelectiveUDPConn); ok {
@@ -72,7 +75,7 @@ func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
 
 	addr, ok := conn.LocalAddr().(*net.UDPAddr)
 	if !ok {
-		return nil, errors.New("UDPConn must have a local *net.UDPAddr")
+		return nil, errors.New("hybrid: UDPConn has no local *net.UDPAddr")
 	}
 
 	raw, err := conn.SyscallConn()
@@ -160,7 +163,8 @@ func (u *udpConnWithDualStackPacketInfo) ReadFromToUDPAddrPort(b []byte) (int, n
 	return n, src, netip.AddrPort{}, 0, nil
 }
 
-// WriteToFrom wraps around WriteToFromUDP.
+// WriteToFrom wraps around WriteToFromUDP. It fails with [syscall.EINVAL] unless dst is a *net.UDPAddr,
+// and src is nil or a *net.UDPAddr.
 func (u *udpConnWithDualStackPacketInfo) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	dstAddr, dstOk := dst.(*net.UDPAddr)
 	if !dstOk {
@@ -180,9 +184,11 @@ func (u *udpConnWithDualStackPacketInfo) WriteToFromUDP(b []byte, dst, src *net.
 	return u.WriteToFromUDPAddrPort(b, dst.AddrPort(), src.AddrPort(), idx)
 }
 
-// WriteToFromUDPAddrPort does a few checks and calls a platform/protocol-specific marshaller
-// to fill a pooled control message buffer before it proceeds to [net.UDPConn.WriteMsgUDPAddrPort].
-// If idx is zero and src is invalid, it calls [net.UDPConn.WriteToUDPAddrPort].
+// WriteToFromUDPAddrPort calls a platform-specific packet info marshaller to fill a pooled control
+// message buffer before it proceeds to [net.UDPConn.WriteMsgUDPAddrPort], or, if idx is zero and src
+// is invalid, it calls [net.UDPConn.WriteToUDPAddrPort]. It fails with [syscall.EINVAL] if idx is negative,
+// dst isn't of an IP version the socket accepts, or src is valid but not of the same IP version as dst.
+// Mapped IPv4 addresses count as IPv4 ones.
 func (u *udpConnWithDualStackPacketInfo) WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error) {
 	// Require dst of an IP version the socket accepts, and src, if any, of the same IP version
 	bits, srcBits := dst.Addr().Unmap().BitLen(), src.Addr().Unmap().BitLen()
@@ -250,7 +256,7 @@ var (
 // It's meant to be [net.ListenConfig.Control], or to be called from another Control function.
 func ControlUDPPacketInfo(network, _ string, c syscall.RawConn) error {
 	if !strings.HasPrefix(network, "udp") {
-		return errors.New("network must begin with udp")
+		return errors.New("hybrid: packet info on non-UDP network " + network)
 	}
 	v4Only := strings.HasSuffix(network, "4")
 	v6Only := !v4Only && strings.HasSuffix(network, "6")

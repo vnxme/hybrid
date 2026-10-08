@@ -18,6 +18,7 @@ package hybrid
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"runtime"
 	"syscall"
@@ -27,6 +28,8 @@ const (
 	cMsgBufferSize = 0
 	cMsgTruncated  = 0
 )
+
+var errPacketInfoUnsupported = fmt.Errorf("hybrid: packet info on %s/%s: %w", runtime.GOOS, runtime.GOARCH, errors.ErrUnsupported)
 
 // marshalPacketInfo4 writes a platform-specific IPv4 packet info control message into the given OOB buffer.
 // It returns the number of bytes written/required, and true if the buffer has been large enough.
@@ -48,10 +51,10 @@ func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
 
 // rawConnEnablePacketInfo enables IPv4 and/or IPv6 packet info for the given raw network connection.
 func rawConnEnablePacketInfo(c syscall.RawConn, v4Only, v6Only bool) error {
-	return errors.New("not implemented on " + runtime.GOOS + "/" + runtime.GOARCH)
+	return errPacketInfoUnsupported
 }
 
 // rawConnIsV6Only returns true if IPV6_V6ONLY socket option is enabled.
 func rawConnIsV6Only(c syscall.RawConn) (bool, error) {
-	return false, errors.New("not implemented on " + runtime.GOOS + "/" + runtime.GOARCH)
+	return false, errPacketInfoUnsupported
 }
