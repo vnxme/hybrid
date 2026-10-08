@@ -265,7 +265,9 @@ var (
 	_ UDPConn = (*net.UDPConn)(nil)
 )
 
-var UDPListenWithPacketInfo = net.ListenConfig{Control: func(network, _ string, c syscall.RawConn) error {
+// ControlUDPPacketInfo enables packet info on a UDP socket for every IP version it accepts.
+// It's meant to be [net.ListenConfig.Control], or to be called from another Control function.
+func ControlUDPPacketInfo(network, _ string, c syscall.RawConn) error {
 	if !strings.HasPrefix(network, "udp") {
 		return errors.New("network must begin with udp")
 	}
@@ -279,4 +281,4 @@ var UDPListenWithPacketInfo = net.ListenConfig{Control: func(network, _ string, 
 		v6Only = only
 	}
 	return rawConnEnablePacketInfo(c, v4Only, v6Only)
-}}
+}

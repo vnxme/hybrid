@@ -33,9 +33,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// TestUDPListenWithPacketInfo ensures packet info is enabled for every IP version a socket accepts,
+// TestControlUDPPacketInfo ensures packet info is enabled for every IP version a socket accepts,
 // including IPv4 on a dual-stack socket, for which Control is called with network udp6.
-func TestUDPListenWithPacketInfo(t *testing.T) {
+func TestControlUDPPacketInfo(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -52,9 +52,10 @@ func TestUDPListenWithPacketInfo(t *testing.T) {
 		{"udp", "[::]:0", []netip.Addr{lo4, lo6}},
 		{"udp", ":0", []netip.Addr{lo4, lo6}},
 	}
+	lc := net.ListenConfig{Control: ControlUDPPacketInfo}
 	for _, test := range tests {
 		t.Run(test.network+","+test.address, func(t *testing.T) {
-			pc, err := UDPListenWithPacketInfo.ListenPacket(context.Background(), test.network, test.address)
+			pc, err := lc.ListenPacket(context.Background(), test.network, test.address)
 			if err != nil {
 				t.Skipf("ListenPacket() = %v", err) // E.g. no IPv6 support
 			}
@@ -87,6 +88,13 @@ func TestUDPListenWithPacketInfo(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("NotUDP", func(t *testing.T) {
+		if ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0"); err == nil {
+			_ = ln.Close()
+			t.Errorf("Listen(tcp) = nil, want an error")
+		}
+	})
 }
 
 func TestNeedSelectiveUDPConn(t *testing.T) {
