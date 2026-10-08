@@ -41,6 +41,10 @@ type udpConnWithDualStackPacketInfo struct {
 	v6Only bool // Equals true if no IPv4 could be expected
 }
 
+// NeedSelectiveUDPConn reports whether conn is bound to an unspecified address, so that the local
+// address a packet comes to is only known from packet info, e.g. by wrapping conn with
+// [NewSelectiveUDPConn]. It returns false if conn already implements SelectiveUDPConn,
+// or if it doesn't provide access to the underlying socket.
 func NeedSelectiveUDPConn(conn UDPConn) bool {
 	if conn == nil {
 		return false
@@ -55,18 +59,11 @@ func NeedSelectiveUDPConn(conn UDPConn) bool {
 		return false
 	}
 
-	raw, err := conn.SyscallConn()
-	if err != nil {
+	if _, err := conn.SyscallConn(); err != nil {
 		return false
 	}
 
-	var only bool
-	only, err = rawConnIsV6Only(raw)
-	if err != nil {
-		return false
-	}
-
-	return addr.AddrPort().Addr().Unmap().IsUnspecified() && !only
+	return addr.AddrPort().Addr().Unmap().IsUnspecified()
 }
 
 func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
