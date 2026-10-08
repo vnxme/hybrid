@@ -191,41 +191,40 @@ func (p *pipe) read(b []byte) (n int, err error) {
 		return nr, nil
 	}
 
-	select {
-	case bw := <-p.rdRx:
-		nr := copy(b, bw)
-		if cap(p.rdRx) == 0 { // An unbuffered pipe can be sync or semi-sync
-			if p.retain { // A semi-sync pipe retains unread bytes and reports all of them written
-				if nr < len(bw) { // Copy before reporting, as remote Write returns and b may be reused
-					p.rdBuf = bytes.Clone(bw[nr:])
-				}
-				p.rdTx <- len(bw)
-			} else { // A sync pipe reports only read bytes, so Write resends the rest
-				p.rdTx <- nr
+	var bw []byte
+	select { // Receive a pending write without a blocking select, which is much slower
+	case bw = <-p.rdRx:
+	default:
+		select {
+		case bw = <-p.rdRx:
+		case <-p.localDone:
+			return 0, errPipeClosed
+		case <-p.remoteDone:
+			// Only an async pipe may have queued bytes. No need to check p.rdBuf here:
+			// unless it was empty, the function would return above
+			if len(p.rdRx) == 0 {
+				return 0, io.EOF
 			}
-		} else { // A buffered pipe is async by definition and retains unread bytes
-			if nr < len(bw) {
-				p.rdBuf = bw[nr:]
-			}
+			bw = <-p.rdRx
+		case <-p.rdDeadline.Wait():
+			return 0, errPipeDeadlineExceeded
 		}
-		return nr, nil
-	case <-p.localDone:
-		return 0, errPipeClosed
-	case <-p.remoteDone:
-		// Only an async pipe may have queued bytes. No need to check p.rdBuf here:
-		// unless it was empty, the function would return above
-		if len(p.rdRx) > 0 {
-			bw := <-p.rdRx
-			nr := copy(b, bw)
-			if nr < len(bw) {
-				p.rdBuf = bw[nr:]
-			}
-			return nr, nil
-		}
-		return 0, io.EOF
-	case <-p.rdDeadline.Wait():
-		return 0, errPipeDeadlineExceeded
 	}
+
+	nr := copy(b, bw)
+	if cap(p.rdRx) == 0 { // An unbuffered pipe can be sync or semi-sync
+		if p.retain { // A semi-sync pipe retains unread bytes and reports all of them written
+			if nr < len(bw) { // Copy before reporting, as remote Write returns and b may be reused
+				p.rdBuf = bytes.Clone(bw[nr:])
+			}
+			p.rdTx <- len(bw)
+		} else { // A sync pipe reports only read bytes, so Write resends the rest
+			p.rdTx <- nr
+		}
+	} else if nr < len(bw) { // A buffered pipe is async by definition and retains unread bytes
+		p.rdBuf = bw[nr:]
+	}
+	return nr, nil
 }
 
 // Write writes len(b) bytes to the pipe, returning the number of bytes written and an error.
@@ -272,22 +271,26 @@ func (p *pipe) write(b []byte) (n int, err error) {
 			return n, errPipeDeadlineExceeded
 		}
 
-		select {
+		select { // Send without a blocking select if possible, which is much slower
 		case p.wrTx <- b:
-			if cap(p.wrTx) == 0 { // An unbuffered pipe can be sync or semi-sync
-				nw := <-p.wrRx
-				b = b[nw:]
-				n += nw
-			} else { // A buffered pipe is async by definition
-				return len(b), nil
+		default:
+			select {
+			case p.wrTx <- b:
+			case <-p.localDone:
+				return n, errPipeClosed
+			case <-p.remoteDone:
+				return n, errPipeBroken
+			case <-p.wrDeadline.Wait():
+				return n, errPipeDeadlineExceeded
 			}
-		case <-p.localDone:
-			return n, errPipeClosed
-		case <-p.remoteDone:
-			return n, errPipeBroken
-		case <-p.wrDeadline.Wait():
-			return n, errPipeDeadlineExceeded
 		}
+
+		if cap(p.wrTx) > 0 { // A buffered pipe is async by definition
+			return len(b), nil
+		}
+		nw := <-p.wrRx // An unbuffered pipe can be sync or semi-sync
+		b = b[nw:]
+		n += nw
 	}
 	return n, nil
 }
