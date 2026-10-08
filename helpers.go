@@ -61,7 +61,7 @@ func cloneAddr(addr net.Addr) net.Addr {
 }
 
 // equalAddr compares two net.Addr values, handling nil.
-func equalAddr(a, b net.Addr) bool {
+func equalAddr(a, b net.Addr) bool { //nolint:unused // used by tests
 	if a == nil && b == nil {
 		return true
 	}
