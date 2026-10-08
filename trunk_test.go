@@ -146,7 +146,7 @@ func testTrunkAddrs(t *testing.T, ctor trunkCtor) {
 	// expect fails unless the addresses got are equal to the ones wanted
 	expect := func(src, dst, wantSrc, wantDst net.Addr) {
 		t.Helper()
-		if !equalNetAddr(src, wantSrc) || !equalNetAddr(dst, wantDst) {
+		if !equalAddr(src, wantSrc) || !equalAddr(dst, wantDst) {
 			t.Errorf("ReadFromTo() = %v, %v, want %v, %v", src, dst, wantSrc, wantDst)
 		}
 	}
@@ -469,7 +469,7 @@ func testTrunkShortBuffer(t *testing.T, ctor trunkCtor) {
 	for _, size := range []int{0, 4} {
 		wait := trunkWrite(t, c1, "long payload", nil, nil, 0)
 		b := make([]byte, size)
-		if n, src, err := c2.ReadFrom(b); n != size || !equalNetAddr(src, addr1) || !errors.Is(err, io.ErrShortBuffer) {
+		if n, src, err := c2.ReadFrom(b); n != size || !equalAddr(src, addr1) || !errors.Is(err, io.ErrShortBuffer) {
 			t.Errorf("c2.ReadFrom() into %d bytes = %d, %v, %v, want %d, %v, %v", size, n, src, err, size, addr1, io.ErrShortBuffer)
 		}
 		wait()

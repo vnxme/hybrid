@@ -29,16 +29,6 @@ import (
 	"slices"
 )
 
-// isClosedChan reports whether c is closed, without blocking.
-func isClosedChan(c <-chan struct{}) bool {
-	select {
-	case <-c:
-		return true
-	default:
-		return false
-	}
-}
-
 // cloneAddr returns a copy of a standard address, so that they don't share memory.
 // Any other address, including a nil pointer of a standard type, is returned as is.
 func cloneAddr(addr net.Addr) net.Addr {
@@ -68,4 +58,25 @@ func cloneAddr(addr net.Addr) net.Addr {
 		}
 	}
 	return addr
+}
+
+// equalAddr compares two net.Addr values, handling nil.
+func equalAddr(a, b net.Addr) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.String() == b.String() && a.Network() == b.Network()
+}
+
+// isClosedChan reports whether c is closed, without blocking.
+func isClosedChan(c <-chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
+	}
 }

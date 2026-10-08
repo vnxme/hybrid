@@ -27,17 +27,6 @@ func logfIf(t *testing.T, condition bool, format string, args ...any) {
 	}
 }
 
-// equalNetAddr compares two net.Addr values, handling nil.
-func equalNetAddr(a, b net.Addr) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return a.String() == b.String() && a.Network() == b.Network()
-}
-
 func TestCloneAddr(t *testing.T) {
 	ip := func() net.IP { return net.IPv4(192, 0, 2, 1).To4() }
 	for _, addr := range []net.Addr{
@@ -47,7 +36,7 @@ func TestCloneAddr(t *testing.T) {
 		&net.UnixAddr{Name: "/tmp/sock", Net: "unixgram"},
 	} {
 		c := cloneAddr(addr)
-		if c == addr || !equalNetAddr(c, addr) {
+		if c == addr || !equalAddr(c, addr) {
 			t.Errorf("cloneAddr(%v) = %v, want an equal copy", addr, c)
 		}
 		want := addr.String()
