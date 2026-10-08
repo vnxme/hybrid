@@ -22,6 +22,7 @@ import (
 	"net/netip"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -193,6 +194,84 @@ func TestSelectiveUDPConnNilAddrs(t *testing.T) {
 	var opErr *net.OpError
 	if !errors.As(err, &opErr) || opErr.Source != nil || opErr.Addr != nil {
 		t.Errorf("WriteToFromUDPAddrPort() = %v, want net.OpError with nil Source and Addr", err)
+	}
+}
+
+// TestSelectiveUDPConnWriteValidation ensures a write is rejected unless dst is of an IP version
+// the socket accepts and src, if any, is of the same IP version, whether or not they are mapped.
+func TestSelectiveUDPConnWriteValidation(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	sink4, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sink4.Close() }()
+	sink6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})
+	if err != nil {
+		t.Skipf("ListenUDP() = %v", err) // E.g. no IPv6 support
+	}
+	defer func() { _ = sink6.Close() }()
+	port4, port6 := uint16(sink4.LocalAddr().(*net.UDPAddr).Port), uint16(sink6.LocalAddr().(*net.UDPAddr).Port) //nolint:gosec // G115
+
+	addrs := map[string]netip.Addr{
+		"none":   {},
+		"v4":     netip.MustParseAddr("127.0.0.1"),
+		"mapped": netip.MustParseAddr("::ffff:127.0.0.1"),
+		"v6":     netip.IPv6Loopback(),
+	}
+	srcs := map[string][]string{ // Kinds of dst mapped to kinds of src accepted with it
+		"v4":     {"none", "v4", "mapped"},
+		"mapped": {"none", "v4", "mapped"},
+		"v6":     {"none", "v6"},
+	}
+	sockets := []struct {
+		network, address string
+		dsts             []string // Kinds of dst accepted
+	}{
+		{"udp4", "127.0.0.1:0", []string{"v4", "mapped"}},
+		{"udp6", "[::1]:0", []string{"v6"}},
+		{"udp", "[::]:0", []string{"v4", "mapped", "v6"}},
+	}
+	for _, socket := range sockets {
+		t.Run(socket.network+","+socket.address, func(t *testing.T) {
+			pc, err := net.ListenPacket(socket.network, socket.address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = pc.Close() }()
+			c, err := NewSelectiveUDPConn(pc.(*net.UDPConn))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for dstKind, dstIP := range addrs {
+				port := port4
+				if dstKind == "v6" {
+					port = port6
+				}
+				dst := netip.AddrPortFrom(dstIP, port)
+				if !dstIP.IsValid() {
+					dst = netip.AddrPort{}
+				}
+				for srcKind, srcIP := range addrs {
+					src := netip.AddrPortFrom(srcIP, 0)
+					if !srcIP.IsValid() {
+						src = netip.AddrPort{}
+					}
+					for _, idx := range []int{-1, 0} {
+						valid := idx >= 0 && slices.Contains(socket.dsts, dstKind) && slices.Contains(srcs[dstKind], srcKind)
+						_, err := c.WriteToFromUDPAddrPort([]byte{1}, dst, src, idx)
+						if invalid := errors.Is(err, syscall.EINVAL); valid && err != nil || !valid && !invalid {
+							t.Errorf("WriteToFromUDPAddrPort(dst %s, src %s, idx %d) = %v, want valid %v", dstKind, srcKind, idx, err, valid)
+						}
+					}
+				}
+			}
+		})
 	}
 }
 

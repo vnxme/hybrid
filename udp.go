@@ -184,33 +184,14 @@ func (u *udpConnWithDualStackPacketInfo) WriteToFromUDP(b []byte, dst, src *net.
 // to fill a pooled control message buffer before it proceeds to [net.UDPConn.WriteMsgUDPAddrPort].
 // If idx is zero and src is invalid, it calls [net.UDPConn.WriteToUDPAddrPort].
 func (u *udpConnWithDualStackPacketInfo) WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error) {
-	var is4 bool
-	switch {
-	case u.v4Only:
-		if idx >= 0 && dst.Addr().Unmap().BitLen() == 32 && src.Addr().Unmap().BitLen() != 128 {
-			is4 = true
-			goto proceed
-		}
-	case u.v6Only:
-		if idx >= 0 && dst.Addr().Unmap().BitLen() == 128 && src.Addr().Unmap().BitLen() != 32 {
-			goto proceed
-		}
-	default:
-		switch dst.Addr().Unmap().BitLen() {
-		case 32:
-			if idx >= 0 && src.Addr().Unmap().BitLen() != 128 {
-				is4 = true
-				goto proceed
-			}
-		case 128:
-			if idx >= 0 && src.Addr().Unmap().BitLen() != 32 {
-				goto proceed
-			}
-		}
+	// Require dst of an IP version the socket accepts, and src, if any, of the same IP version
+	bits, srcBits := dst.Addr().Unmap().BitLen(), src.Addr().Unmap().BitLen()
+	is4 := bits == 32
+	accepted := is4 && !u.v6Only || bits == 128 && !u.v4Only
+	if idx < 0 || !accepted || srcBits != 0 && srcBits != bits {
+		return 0, &net.OpError{Op: "write", Net: u.net, Source: addrFromValidAddrPort(src), Addr: addrFromValidAddrPort(dst), Err: syscall.EINVAL}
 	}
-	return 0, &net.OpError{Op: "write", Net: u.net, Source: addrFromValidAddrPort(src), Addr: addrFromValidAddrPort(dst), Err: syscall.EINVAL}
 
-proceed:
 	if idx == 0 && !src.IsValid() {
 		return u.WriteToUDPAddrPort(b, dst)
 	}
