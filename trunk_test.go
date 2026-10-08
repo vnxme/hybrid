@@ -154,6 +154,7 @@ func TestTrunk(t *testing.T) {
 			t.Run(testTrunkEmptyPacketName, func(t *testing.T) { testTrunkEmptyPacket(t, test.ctor) })
 			t.Run(testTrunkErrorsName, func(t *testing.T) { testTrunkErrors(t, test.ctor) })
 			t.Run(testTrunkLockWaitName, func(t *testing.T) { testTrunkLockWait(t, test.ctor) })
+			t.Run(testTrunkPacketSizesName, func(t *testing.T) { testTrunkPacketSizes(t, test.ctor) })
 			t.Run(testTrunkShortBufferName, func(t *testing.T) { testTrunkShortBuffer(t, test.ctor) })
 			t.Run(testTrunkSliceAliasName, func(t *testing.T) { testTrunkSliceAlias(t, test.ctor) })
 			t.Run(testTrunkUnblockName, func(t *testing.T) { testTrunkUnblock(t, test.ctor, test.buffered) })
@@ -601,6 +602,30 @@ func testTrunkLockWait(t *testing.T, ctor trunkCtor) {
 	}
 }
 
+// testTrunkPacketSizes ensures packets of various sizes are read intact, including sizes around
+// buffer size classes, longer packets followed by shorter ones of the same class, and sizes
+// beyond the pooled ones, so that no bytes of a reused buffer leak into a packet.
+func testTrunkPacketSizes(t *testing.T, ctor trunkCtor) {
+	c1, c2 := ctor(nil, nil)
+	defer func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	}()
+
+	b := make([]byte, 1<<(bufPoolMaxBits+1))
+	sizes := []int{1, 2, 3, 4, 6, 5, 1536, 1025, 1472, 1537, 2048, 0, 1 << bufPoolMaxBits, 49153, 1<<bufPoolMaxBits + 1}
+	for i, size := range sizes {
+		payload := string(bytes.Repeat([]byte{byte(i + 1)}, size))
+		wait := trunkWrite(t, c1, payload, nil, nil, 0)
+		_ = c2.SetReadDeadline(time.Now().Add(trunkLimit))
+		n, _, err := c2.ReadFrom(b)
+		if err != nil || string(b[:n]) != payload {
+			t.Errorf("c2.ReadFrom() = %d bytes, %v, want %d bytes of %d, nil", n, err, size, i+1)
+		}
+		wait()
+	}
+}
+
 // testTrunkShortBuffer ensures a packet longer than the read buffer is truncated,
 // its remaining bytes are dropped, and its addresses are still returned.
 func testTrunkShortBuffer(t *testing.T, ctor trunkCtor) {
@@ -780,6 +805,7 @@ const (
 	testTrunkEmptyPacketName = "EmptyPacket"
 	testTrunkErrorsName      = "Errors"
 	testTrunkLockWaitName    = "LockWait"
+	testTrunkPacketSizesName = "PacketSizes"
 	testTrunkShortBufferName = "ShortBuffer"
 	testTrunkSliceAliasName  = "SliceAlias"
 	testTrunkUnblockName     = "Unblock"

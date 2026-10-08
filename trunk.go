@@ -28,7 +28,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"slices"
 	"sync"
 	"time"
 )
@@ -48,6 +47,7 @@ func (trunkAddr) String() string { return trunkNetwork }
 type trunkPacket struct {
 	src net.Addr
 	dst net.Addr
+	ref *[]byte // Reference to the pooled buffer of buf, if any
 	buf []byte
 	idx int
 }
@@ -208,6 +208,8 @@ func (tr *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 		pkt.dst = cloneAddr(tr.addr)
 	}
 	nr := copy(b, pkt.buf)
+	// Nothing refers to a pooled buffer once its packet is copied, as unread bytes are dropped
+	putBuf(pkt.ref)
 	if cap(tr.rdRx) == 0 { // An unbuffered trunk lets remote write return only once the packet is copied
 		tr.rdTx <- struct{}{}
 	}
@@ -267,7 +269,8 @@ func (tr *trunk) write(b []byte, dst, src net.Addr, idx int) (int, error) {
 	// Copy addresses, as the caller may modify them once write returns, and so may remote read
 	pkt := trunkPacket{buf: b, src: cloneAddr(src), dst: cloneAddr(dst), idx: idx}
 	if cap(tr.wrTx) > 0 { // An async buffered trunk requires copy on write
-		pkt.buf = slices.Clone(b) // TODO(vnxme): use a pool?
+		pkt.buf, pkt.ref = getBuf(len(b))
+		copy(pkt.buf, b)
 	}
 
 	select { // Send without a blocking select if possible, which is much slower
