@@ -22,9 +22,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Major changes to the standard deadline implementation:
-// - deadlines can run a hook when a timeout has occurred
-
 package hybrid
 
 import (

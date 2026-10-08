@@ -22,10 +22,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Major changes to the standard pipe implementation:
-// - read and write channels can be buffered or unbuffered
-// - pipes can be sync, semi-sync or async
-
 package hybrid
 
 import (
