@@ -134,7 +134,8 @@ func (u *udpConnWithDualStackPacketInfo) ReadFromToUDP(b []byte) (int, *net.UDPA
 // to obtain dst and idx from the control messages read into a pooled buffer. If they are truncated,
 // e.g. as other socket options add control messages, the buffers for subsequent reads grow up to 64 KiB.
 // The truncated read returns dst and idx only if packet info fits, and on Windows, it fails like
-// [net.UDPConn.ReadMsgUDPAddrPort] does.
+// [net.UDPConn.ReadMsgUDPAddrPort] does. Unlike the latter, it returns IPv4 addresses unmapped
+// on dual-stack sockets, so that src and dst are in the same form on any platform.
 func (u *udpConnWithDualStackPacketInfo) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort, netip.AddrPort, int, error) {
 	stored := u.rdOOBSize.Load()
 	size := int(stored)
@@ -152,8 +153,9 @@ func (u *udpConnWithDualStackPacketInfo) ReadFromToUDPAddrPort(b []byte) (int, n
 	if err != nil { // Like [net.UDPConn.ReadFrom], return no addresses, as src is made of an empty sockaddr
 		return n, netip.AddrPort{}, netip.AddrPort{}, 0, err
 	}
+	src = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
 	if dst, idx, ok := parsePacketInfo(oob[:min(oobN, len(oob))]); ok {
-		return n, src, netip.AddrPortFrom(dst, u.port), idx, nil
+		return n, src, netip.AddrPortFrom(dst.Unmap(), u.port), idx, nil
 	}
 	return n, src, netip.AddrPort{}, 0, nil
 }

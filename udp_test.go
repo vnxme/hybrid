@@ -273,6 +273,67 @@ func TestSelectiveUDPConnTruncatedOOB(t *testing.T) {
 	t.Errorf("ReadFromToUDPAddrPort() hasn't returned dst %s after control message buffers grew", lo)
 }
 
+// TestSelectiveUDPConnUnmapped ensures a dual-stack socket returns src and dst of IPv4 packets unmapped,
+// and that it replies to them.
+func TestSelectiveUDPConnUnmapped(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6unspecified})
+	if err != nil {
+		t.Skipf("ListenUDP() = %v", err) // E.g. no IPv6 support
+	}
+	defer func() { _ = pc.Close() }()
+	c, err := NewSelectiveUDPConn(pc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+
+	for _, ip := range []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.IPv6Loopback()} {
+		t.Run(ip.String(), func(t *testing.T) {
+			client, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: ip.AsSlice(), Port: port})
+			if err != nil {
+				t.Skipf("DialUDP() = %v", err)
+			}
+			defer func() { _ = client.Close() }()
+			from := client.LocalAddr().(*net.UDPAddr).AddrPort()
+			to := netip.AddrPortFrom(ip, uint16(port)) //nolint:gosec // G115
+
+			b := make([]byte, 8)
+			for range 2 {
+				if _, err := client.Write([]byte("abc")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = c.SetReadDeadline(time.Now().Add(time.Second))
+
+			_, src, dst, idx, err := c.ReadFromToUDPAddrPort(b)
+			if src != from || dst != to || err != nil {
+				t.Errorf("ReadFromToUDPAddrPort() = src %s, dst %s, %v, want %s, %s, nil", src, dst, err, from, to)
+			}
+
+			// The *net.UDPAddr variant has 4-byte IPs for IPv4 too
+			_, srcUDP, dstUDP, _, err := c.ReadFromToUDP(b)
+			if err != nil || srcUDP == nil || dstUDP == nil ||
+				len(srcUDP.IP) != ip.BitLen()/8 || len(dstUDP.IP) != ip.BitLen()/8 {
+				t.Errorf("ReadFromToUDP() = src %v, dst %v, %v, want %d-byte IPs", srcUDP, dstUDP, err, ip.BitLen()/8)
+			}
+
+			// Reply with the addresses read
+			if _, err := c.WriteToFromUDPAddrPort([]byte("def"), src, dst, idx); err != nil {
+				t.Fatalf("WriteToFromUDPAddrPort() = %v, want nil", err)
+			}
+			_ = client.SetReadDeadline(time.Now().Add(time.Second))
+			if n, err := client.Read(b); string(b[:n]) != "def" || err != nil {
+				t.Errorf("client.Read() = %q, %v, want %q, nil", b[:n], err, "def")
+			}
+		})
+	}
+}
+
 // localAddrConn is a UDPConn whose local address is replaced, e.g. with an address of another type.
 type localAddrConn struct {
 	*net.UDPConn
