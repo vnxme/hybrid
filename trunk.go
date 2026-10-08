@@ -361,6 +361,6 @@ var (
 
 // Interface guards
 var (
-	_ net.Addr            = (*trunkAddr)(nil)
+	_ net.Addr            = trunkAddr{}
 	_ SelectivePacketConn = (*trunk)(nil)
 )

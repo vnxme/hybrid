@@ -361,6 +361,6 @@ var (
 
 // Interface guards
 var (
-	_ net.Addr   = (*pipeAddr)(nil)
+	_ net.Addr   = pipeAddr{}
 	_ StreamConn = (*pipe)(nil)
 )
