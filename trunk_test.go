@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-type trunkCtor func(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn)
+type trunkCtor func(addr1, addr2 net.Addr) (FromToPacketConn, FromToPacketConn)
 
 const (
 	trunkQueueSize = 10
@@ -38,7 +38,7 @@ const (
 // trunkWrite writes a packet on c in a separate goroutine, so that an unbuffered trunk
 // doesn't block until the packet is read. The returned function waits for the write
 // to return and checks it has succeeded.
-func trunkWrite(t *testing.T, c SelectivePacketConn, payload string, dst, src net.Addr, idx int) (wait func()) {
+func trunkWrite(t *testing.T, c FromToPacketConn, payload string, dst, src net.Addr, idx int) (wait func()) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := c.WriteToFrom([]byte(payload), dst, src, idx)
@@ -63,7 +63,7 @@ func BenchmarkTrunk(b *testing.B) {
 		ctor trunkCtor
 	}{
 		{"Unbuffered", UnbufferedTrunk},
-		{"Buffered", func(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+		{"Buffered", func(addr1, addr2 net.Addr) (FromToPacketConn, FromToPacketConn) {
 			return BufferedTrunk(trunkQueueSize, addr1, addr2)
 		}},
 	}
@@ -139,7 +139,7 @@ func TestTrunk(t *testing.T) {
 		buffered bool
 	}{
 		{"Unbuffered", UnbufferedTrunk, false},
-		{"Buffered", func(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+		{"Buffered", func(addr1, addr2 net.Addr) (FromToPacketConn, FromToPacketConn) {
 			return BufferedTrunk(trunkQueueSize, addr1, addr2)
 		}, true},
 	}
@@ -217,7 +217,7 @@ func testTrunkAddrs(t *testing.T, ctor trunkCtor) {
 	_ = c4.Close()
 
 	// transfer writes a packet on w, reads it on r and waits for the write to return
-	transfer := func(w, r SelectivePacketConn, payload string, dst, src net.Addr, idx int) (net.Addr, net.Addr) {
+	transfer := func(w, r FromToPacketConn, payload string, dst, src net.Addr, idx int) (net.Addr, net.Addr) {
 		t.Helper()
 		wait := trunkWrite(t, w, payload, dst, src, idx)
 		_ = r.SetReadDeadline(time.Now().Add(trunkLimit))
@@ -562,12 +562,12 @@ func testTrunkErrors(t *testing.T, ctor trunkCtor) {
 func testTrunkLockWait(t *testing.T, ctor trunkCtor) {
 	events := []struct {
 		name  string
-		event func(c1, c2 SelectivePacketConn)
+		event func(c1, c2 FromToPacketConn)
 		want  error
 	}{
-		{"LocalClose", func(c1, _ SelectivePacketConn) { _ = c1.Close() }, net.ErrClosed},
-		{"RemoteClose", func(_, c2 SelectivePacketConn) { _ = c2.Close() }, net.ErrClosed},
-		{"Deadline", func(c1, _ SelectivePacketConn) { _ = c1.SetWriteDeadline(time.Now()) }, os.ErrDeadlineExceeded},
+		{"LocalClose", func(c1, _ FromToPacketConn) { _ = c1.Close() }, net.ErrClosed},
+		{"RemoteClose", func(_, c2 FromToPacketConn) { _ = c2.Close() }, net.ErrClosed},
+		{"Deadline", func(c1, _ FromToPacketConn) { _ = c1.SetWriteDeadline(time.Now()) }, os.ErrDeadlineExceeded},
 	}
 
 	for _, e := range events {
@@ -704,12 +704,12 @@ func testTrunkSliceAlias(t *testing.T, ctor trunkCtor) {
 func testTrunkUnblock(t *testing.T, ctor trunkCtor, buffered bool) {
 	unblockers := []struct {
 		name    string
-		unblock func(c1, c2 SelectivePacketConn)
+		unblock func(c1, c2 FromToPacketConn)
 		want    error
 	}{
-		{"LocalClose", func(c1, _ SelectivePacketConn) { _ = c1.Close() }, net.ErrClosed},
-		{"RemoteClose", func(_, c2 SelectivePacketConn) { _ = c2.Close() }, net.ErrClosed},
-		{"Deadline", func(c1, _ SelectivePacketConn) { _ = c1.SetDeadline(time.Now()) }, os.ErrDeadlineExceeded},
+		{"LocalClose", func(c1, _ FromToPacketConn) { _ = c1.Close() }, net.ErrClosed},
+		{"RemoteClose", func(_, c2 FromToPacketConn) { _ = c2.Close() }, net.ErrClosed},
+		{"Deadline", func(c1, _ FromToPacketConn) { _ = c1.SetDeadline(time.Now()) }, os.ErrDeadlineExceeded},
 	}
 
 	for _, read := range []bool{true, false} {

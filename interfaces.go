@@ -84,10 +84,10 @@ type PacketListenerWrapper interface {
 	Unwrap() PacketListener
 }
 
-// ReaderFromTo is a capability of a generic packet-oriented network connection
+// FromToReader is a capability of a generic packet-oriented network connection
 // to return the local address and the local interface index in addition to the
 // remote address while reading packets.
-type ReaderFromTo interface {
+type FromToReader interface {
 	// ReadFromTo reads a packet from the connection, copying the payload into p.
 	// It returns the number of bytes copied into p, the return address that was
 	// on the packet, the local address the packet came to and the local interface
@@ -100,21 +100,21 @@ type ReaderFromTo interface {
 	ReadFromTo(p []byte) (n int, src, dst net.Addr, idx int, err error)
 }
 
-// SelectivePacketConn is a generic packet-oriented network connection that
+// FromToPacketConn is a generic packet-oriented network connection that
 // is aware of the local addresses and the local interface indices when it
 // comes to reading and writing packets.
-type SelectivePacketConn interface {
+type FromToPacketConn interface {
 	PacketConn
-	ReaderFromTo
-	WriterToFrom
+	FromToReader
+	FromToWriter
 }
 
-// SelectiveUDPConn is a UDP connection that is aware of the local addresses
+// FromToUDPConn is a UDP connection that is aware of the local addresses
 // and the local interface indices when it comes to reading and writing packets.
-type SelectiveUDPConn interface {
+type FromToUDPConn interface {
 	UDPConn
-	ReaderFromTo
-	WriterToFrom
+	FromToReader
+	FromToWriter
 
 	ReadFromToUDP(b []byte) (n int, src *net.UDPAddr, dst *net.UDPAddr, idx int, err error)
 	ReadFromToUDPAddrPort(b []byte) (n int, src netip.AddrPort, dst netip.AddrPort, idx int, err error)
@@ -150,10 +150,10 @@ type UDPConn interface {
 	WriteMsgUDPAddrPort(b []byte, oob []byte, addr netip.AddrPort) (n int, oobn int, err error)
 }
 
-// WriterToFrom is a capability of a generic packet-oriented network connection
+// FromToWriter is a capability of a generic packet-oriented network connection
 // to consider the local address and the local interface index in addition to the
 // remote address while writing packets.
-type WriterToFrom interface {
+type FromToWriter interface {
 	// WriteToFrom writes a packet with payload p to the remote address from
 	// the local address assigned to the local interface with the given index.
 	//

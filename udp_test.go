@@ -98,7 +98,7 @@ func TestControlUDPPacketInfo(t *testing.T) {
 	})
 }
 
-func TestNeedSelectiveUDPConn(t *testing.T) {
+func TestNeedPacketInfoUDPConn(t *testing.T) {
 	l41, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	l42, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 0})
 	l43, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 0})
@@ -124,8 +124,8 @@ func TestNeedSelectiveUDPConn(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := NeedSelectiveUDPConn(tt.args.conn); got != tt.want {
-				t.Errorf("NeedSelectiveUDPConn() = %v, want %v", got, tt.want)
+			if got := NeedPacketInfoUDPConn(tt.args.conn); got != tt.want {
+				t.Errorf("NeedPacketInfoUDPConn() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -138,14 +138,14 @@ func TestNeedSelectiveUDPConn(t *testing.T) {
 	_ = l63.Close()
 }
 
-func TestNewSelectiveUDPConn(t *testing.T) {
+func TestPacketInfoUDPConn(t *testing.T) {
 	type args struct {
 		conn *net.UDPConn
 	}
 	tests := []struct {
 		name    string
 		args    args
-		want    SelectivePacketConn
+		want    FromToPacketConn
 		wantErr bool
 	}{
 		{"nil", args{nil}, nil, true},
@@ -153,21 +153,21 @@ func TestNewSelectiveUDPConn(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSelectiveUDPConn(tt.args.conn)
+			got, err := PacketInfoUDPConn(tt.args.conn)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("NewSelectiveUDPConn() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("PacketInfoUDPConn() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("NewSelectiveUDPConn() got = %v, want %v", got, tt.want)
+				t.Errorf("PacketInfoUDPConn() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestSelectiveUDPConnNilAddrs ensures unknown addresses are returned as nil net.Addr values,
+// TestPacketInfoUDPConnNilAddrs ensures unknown addresses are returned as nil net.Addr values,
 // not as nil *net.UDPAddr ones, which wouldn't compare equal to nil.
-func TestSelectiveUDPConnNilAddrs(t *testing.T) {
+func TestPacketInfoUDPConnNilAddrs(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -178,7 +178,7 @@ func TestSelectiveUDPConnNilAddrs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = pc.Close() }()
-	c, err := NewSelectiveUDPConn(pc)
+	c, err := PacketInfoUDPConn(pc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,9 +197,9 @@ func TestSelectiveUDPConnNilAddrs(t *testing.T) {
 	}
 }
 
-// TestSelectiveUDPConnWriteValidation ensures a write is rejected unless dst is of an IP version
+// TestPacketInfoUDPConnWriteValidation ensures a write is rejected unless dst is of an IP version
 // the socket accepts and src, if any, is of the same IP version, whether or not they are mapped.
-func TestSelectiveUDPConnWriteValidation(t *testing.T) {
+func TestPacketInfoUDPConnWriteValidation(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -243,7 +243,7 @@ func TestSelectiveUDPConnWriteValidation(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = pc.Close() }()
-			c, err := NewSelectiveUDPConn(pc.(*net.UDPConn))
+			c, err := PacketInfoUDPConn(pc.(*net.UDPConn))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -275,9 +275,9 @@ func TestSelectiveUDPConnWriteValidation(t *testing.T) {
 	}
 }
 
-// TestSelectiveUDPConnWriteCount ensures a write with packet info reports all the bytes
+// TestPacketInfoUDPConnWriteCount ensures a write with packet info reports all the bytes
 // of a datagram as written, which WriteMsgUDPAddrPort doesn't on Windows since Go 1.26.
-func TestSelectiveUDPConnWriteCount(t *testing.T) {
+func TestPacketInfoUDPConnWriteCount(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -289,7 +289,7 @@ func TestSelectiveUDPConnWriteCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = pc.Close() }()
-	c, err := NewSelectiveUDPConn(pc)
+	c, err := PacketInfoUDPConn(pc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,9 +311,9 @@ func TestSelectiveUDPConnWriteCount(t *testing.T) {
 	}
 }
 
-// TestSelectiveUDPConnTruncatedOOB ensures control message buffers grow once a read finds its control
+// TestPacketInfoUDPConnTruncatedOOB ensures control message buffers grow once a read finds its control
 // messages truncated, so that packet info is read again, rather than lost for every packet afterwards.
-func TestSelectiveUDPConnTruncatedOOB(t *testing.T) {
+func TestPacketInfoUDPConnTruncatedOOB(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -325,12 +325,12 @@ func TestSelectiveUDPConnTruncatedOOB(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = pc.Close() }()
-	c, err := NewSelectiveUDPConn(pc)
+	c, err := PacketInfoUDPConn(pc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	const size = 8 // Too short for any control message header
-	c.(*udpConnWithDualStackPacketInfo).rdOOBSize.Store(size)
+	c.(*packetInfoUDPConn).rdOOBSize.Store(size)
 
 	client, err := net.DialUDP("udp4", nil, pc.LocalAddr().(*net.UDPAddr))
 	if err != nil {
@@ -351,7 +351,7 @@ func TestSelectiveUDPConnTruncatedOOB(t *testing.T) {
 		case i == 0 && dst.IsValid():
 			t.Fatalf("ReadFromToUDPAddrPort() #0 = %v, want an invalid dst, as control messages are truncated", dst)
 		case dst.Addr() == lo:
-			if got := c.(*udpConnWithDualStackPacketInfo).rdOOBSize.Load(); got <= size {
+			if got := c.(*packetInfoUDPConn).rdOOBSize.Load(); got <= size {
 				t.Errorf("rdOOBSize = %d, want more than %d", got, size)
 			}
 			return
@@ -360,9 +360,9 @@ func TestSelectiveUDPConnTruncatedOOB(t *testing.T) {
 	t.Errorf("ReadFromToUDPAddrPort() hasn't returned dst %s after control message buffers grew", lo)
 }
 
-// TestSelectiveUDPConnUnmapped ensures a dual-stack socket returns src and dst of IPv4 packets unmapped,
+// TestPacketInfoUDPConnUnmapped ensures a dual-stack socket returns src and dst of IPv4 packets unmapped,
 // and that it replies to them.
-func TestSelectiveUDPConnUnmapped(t *testing.T) {
+func TestPacketInfoUDPConnUnmapped(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -373,7 +373,7 @@ func TestSelectiveUDPConnUnmapped(t *testing.T) {
 		t.Skipf("ListenUDP() = %v", err) // E.g. no IPv6 support
 	}
 	defer func() { _ = pc.Close() }()
-	c, err := NewSelectiveUDPConn(pc)
+	c, err := PacketInfoUDPConn(pc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,9 +429,9 @@ type localAddrConn struct {
 
 func (c localAddrConn) LocalAddr() net.Addr { return c.addr }
 
-// TestNewSelectiveUDPConnFamily ensures the IP versions a socket accepts are detected from its local address
+// TestPacketInfoUDPConnFamily ensures the IP versions a socket accepts are detected from its local address
 // and IPV6_V6ONLY, and that a connection without a local *net.UDPAddr is rejected.
-func TestNewSelectiveUDPConnFamily(t *testing.T) {
+func TestPacketInfoUDPConnFamily(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -457,17 +457,17 @@ func TestNewSelectiveUDPConnFamily(t *testing.T) {
 				t.Skipf("ListenPacket() = %v", err) // E.g. no IPv6 support
 			}
 			defer func() { _ = pc.Close() }()
-			c, err := NewSelectiveUDPConn(pc.(*net.UDPConn))
+			c, err := PacketInfoUDPConn(pc.(*net.UDPConn))
 			if err != nil {
-				t.Fatalf("NewSelectiveUDPConn() = %v, want nil", err)
+				t.Fatalf("PacketInfoUDPConn() = %v, want nil", err)
 			}
-			u := c.(*udpConnWithDualStackPacketInfo)
+			u := c.(*packetInfoUDPConn)
 			if u.v4Only != test.v4Only || u.v6Only != test.v6Only || u.net != test.net {
-				t.Errorf("NewSelectiveUDPConn() = v4Only %v, v6Only %v, net %s, want %v, %v, %s",
+				t.Errorf("PacketInfoUDPConn() = v4Only %v, v6Only %v, net %s, want %v, %v, %s",
 					u.v4Only, u.v6Only, u.net, test.v4Only, test.v6Only, test.net)
 			}
 			if want := uint16(pc.LocalAddr().(*net.UDPAddr).Port); u.port != want { //nolint:gosec // G115
-				t.Errorf("NewSelectiveUDPConn() = port %d, want %d", u.port, want)
+				t.Errorf("PacketInfoUDPConn() = port %d, want %d", u.port, want)
 			}
 		})
 	}
@@ -478,8 +478,8 @@ func TestNewSelectiveUDPConnFamily(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = pc.Close() }()
-		if _, err = NewSelectiveUDPConn(localAddrConn{pc, oneTrunkAddr}); err == nil {
-			t.Errorf("NewSelectiveUDPConn() = nil, want an error")
+		if _, err = PacketInfoUDPConn(localAddrConn{pc, oneTrunkAddr}); err == nil {
+			t.Errorf("PacketInfoUDPConn() = nil, want an error")
 		}
 	})
 }
@@ -533,7 +533,7 @@ func TestUDPAddrFromValidAddrPort(t *testing.T) {
 //	}
 //	for _, tt := range tests {
 //		t.Run(tt.name, func(t *testing.T) {
-//			u := &selectiveUDPConn{
+//			u := &packetInfoUDPConn{
 //				UDPConn:   tt.fields.UDPConn,
 //				rdOOB:     tt.fields.rdOOB,
 //				wr4OOB:    tt.fields.wr4OOB,
@@ -593,7 +593,7 @@ func TestUDPAddrFromValidAddrPort(t *testing.T) {
 //	}
 //	for _, tt := range tests {
 //		t.Run(tt.name, func(t *testing.T) {
-//			u := &selectiveUDPConn{
+//			u := &packetInfoUDPConn{
 //				UDPConn:   tt.fields.UDPConn,
 //				rdOOB:     tt.fields.rdOOB,
 //				wrOOB:     tt.fields.wrOOB,
@@ -652,7 +652,7 @@ func TestUDPAddrFromValidAddrPort(t *testing.T) {
 //	}
 //	for _, tt := range tests {
 //		t.Run(tt.name, func(t *testing.T) {
-//			u := &selectiveUDPConn{
+//			u := &packetInfoUDPConn{
 //				UDPConn:   tt.fields.UDPConn,
 //				rdOOB:     tt.fields.rdOOB,
 //				wrOOB:     tt.fields.wrOOB,
@@ -711,7 +711,7 @@ func TestUDPAddrFromValidAddrPort(t *testing.T) {
 //	}
 //	for _, tt := range tests {
 //		t.Run(tt.name, func(t *testing.T) {
-//			u := &selectiveUDPConn{
+//			u := &packetInfoUDPConn{
 //				UDPConn:   tt.fields.UDPConn,
 //				rdOOB:     tt.fields.rdOOB,
 //				wrOOB:     tt.fields.wrOOB,
@@ -761,7 +761,7 @@ func TestUDPAddrFromValidAddrPort(t *testing.T) {
 //	}
 //	for _, tt := range tests {
 //		t.Run(tt.name, func(t *testing.T) {
-//			u := &selectiveUDPConn{
+//			u := &packetInfoUDPConn{
 //				UDPConn:   tt.fields.UDPConn,
 //				rdOOB:     tt.fields.rdOOB,
 //				wrOOB:     tt.fields.wrOOB,
@@ -811,7 +811,7 @@ func TestUDPAddrFromValidAddrPort(t *testing.T) {
 //	}
 //	for _, tt := range tests {
 //		t.Run(tt.name, func(t *testing.T) {
-//			u := &selectiveUDPConn{
+//			u := &packetInfoUDPConn{
 //				UDPConn:   tt.fields.UDPConn,
 //				rdOOB:     tt.fields.rdOOB,
 //				wrOOB:     tt.fields.wrOOB,
@@ -967,7 +967,7 @@ func TestDualStackPacketInfo(t *testing.T) {
 
 	var done chan struct{}
 	var lc net.ListenConfig
-	var rdc, wrc SelectiveUDPConn
+	var rdc, wrc FromToUDPConn
 	var rdErr, wrErr error
 	var rdPC, wrPC PacketConn
 	var rdPort, wrPort uint16
@@ -989,14 +989,14 @@ func TestDualStackPacketInfo(t *testing.T) {
 				return
 			}
 
-			rdc, rdErr = NewSelectiveUDPConn(rdPC.(*net.UDPConn))
+			rdc, rdErr = PacketInfoUDPConn(rdPC.(*net.UDPConn))
 			if rdErr != nil {
 				t.Error(rdErr)
 				_ = rdPC.Close()
 				_ = wrPC.Close()
 				return
 			}
-			wrc, wrErr = NewSelectiveUDPConn(wrPC.(*net.UDPConn))
+			wrc, wrErr = PacketInfoUDPConn(wrPC.(*net.UDPConn))
 			if wrErr != nil {
 				t.Error(wrErr)
 				_ = rdPC.Close()
@@ -1008,7 +1008,7 @@ func TestDualStackPacketInfo(t *testing.T) {
 
 			done = make(chan struct{})
 			wg.Add(1)
-			go func(t *testing.T, c SelectiveUDPConn, b []byte, dst, src netip.AddrPort, idx int, done chan struct{}, wg *sync.WaitGroup) {
+			go func(t *testing.T, c FromToUDPConn, b []byte, dst, src netip.AddrPort, idx int, done chan struct{}, wg *sync.WaitGroup) {
 				var err error
 				for {
 					_ = c.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))

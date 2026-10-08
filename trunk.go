@@ -77,7 +77,7 @@ type trunk struct {
 }
 
 // BufferedTrunk creates an in-memory, full duplex packet-oriented network connection
-// that is buffered and asynchronous; both ends implement the SelectivePacketConn interface.
+// that is buffered and asynchronous; both ends implement the FromToPacketConn interface.
 // Reads on one end aren't matched with writes on the other: a write returns once its
 // packet has been queued, unless the queue already holds queueSize packets, in which
 // case it blocks. Packets are copied internally, so the write buffer may be reused
@@ -95,7 +95,7 @@ type trunk struct {
 // copied along with io.ErrShortBuffer, and the rest of the packet is dropped.
 //
 // BufferedTrunk panics if queueSize isn't positive.
-func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (FromToPacketConn, FromToPacketConn) {
 	if queueSize <= 0 {
 		panic("hybrid: BufferedTrunk: non-positive queueSize")
 	}
@@ -103,18 +103,18 @@ func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, S
 }
 
 // UnbufferedTrunk creates an in-memory, full duplex packet-oriented network connection
-// that is unbuffered and synchronous; both ends implement the SelectivePacketConn interface.
+// that is unbuffered and synchronous; both ends implement the FromToPacketConn interface.
 // Reads on one end are matched with writes on the other, copying packets directly
 // between the two; there is no internal buffering. A write returns once its packet
 // has been copied by a read, so the write buffer may be reused after that. When the
 // remote end is closed, reads and writes return net.ErrClosed. Local addresses and packet truncation
 // are handled the same way as by [BufferedTrunk].
-func UnbufferedTrunk(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+func UnbufferedTrunk(addr1, addr2 net.Addr) (FromToPacketConn, FromToPacketConn) {
 	return newTrunk(0, addr1, addr2)
 }
 
 // newTrunk creates a trunk with the given queue size, see [BufferedTrunk] and [UnbufferedTrunk].
-func newTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+func newTrunk(queueSize int, addr1, addr2 net.Addr) (FromToPacketConn, FromToPacketConn) {
 	// Copy addresses, as the caller may modify them once the trunk is created
 	addr1, addr2 = cloneAddr(addr1), cloneAddr(addr2)
 	if addr1 == nil {
@@ -364,6 +364,6 @@ var (
 
 // Interface guards
 var (
-	_ net.Addr            = trunkAddr{}
-	_ SelectivePacketConn = (*trunk)(nil)
+	_ net.Addr         = trunkAddr{}
+	_ FromToPacketConn = (*trunk)(nil)
 )

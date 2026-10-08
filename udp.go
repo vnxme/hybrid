@@ -23,8 +23,8 @@ import (
 	"syscall"
 )
 
-// udpConnWithDualStackPacketInfo is a UDP connection with dual-stack packet info support.
-type udpConnWithDualStackPacketInfo struct {
+// packetInfoUDPConn is a FromToUDPConn wrapping a UDPConn with packet info enabled for every IP version it accepts.
+type packetInfoUDPConn struct {
 	UDPConn
 
 	net string // Equals `udp`, `udp4` or `udp6`
@@ -36,16 +36,16 @@ type udpConnWithDualStackPacketInfo struct {
 	v6Only bool // Equals true if no IPv4 could be expected
 }
 
-// NeedSelectiveUDPConn reports whether conn is bound to an unspecified address, so that the local
+// NeedPacketInfoUDPConn reports whether conn is bound to an unspecified address, so that the local
 // address a packet comes to is only known from packet info, e.g. by wrapping conn with
-// [NewSelectiveUDPConn]. It returns false if conn already implements SelectiveUDPConn,
+// [PacketInfoUDPConn]. It returns false if conn already implements FromToUDPConn,
 // or if it doesn't provide access to the underlying socket.
-func NeedSelectiveUDPConn(conn UDPConn) bool {
+func NeedPacketInfoUDPConn(conn UDPConn) bool {
 	if isNilUDPConn(conn) {
 		return false
 	}
 
-	if _, ok := conn.(SelectiveUDPConn); ok {
+	if _, ok := conn.(FromToUDPConn); ok {
 		return false
 	}
 
@@ -61,15 +61,15 @@ func NeedSelectiveUDPConn(conn UDPConn) bool {
 	return addr.AddrPort().Addr().Unmap().IsUnspecified()
 }
 
-// NewSelectiveUDPConn enables packet info on conn for every IP version it accepts, and wraps it
+// PacketInfoUDPConn enables packet info on conn for every IP version it accepts, and wraps it
 // to read the local address and interface index of each packet, and to write them with each packet.
-// It returns conn as is if it already implements SelectiveUDPConn.
-func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
+// It returns conn as is if it already implements FromToUDPConn.
+func PacketInfoUDPConn(conn UDPConn) (FromToUDPConn, error) {
 	if isNilUDPConn(conn) {
 		return nil, errors.New("hybrid: nil UDPConn")
 	}
 
-	if u, ok := conn.(SelectiveUDPConn); ok {
+	if u, ok := conn.(FromToUDPConn); ok {
 		return u, nil
 	}
 
@@ -111,7 +111,7 @@ func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
 		network = "udp6"
 	}
 
-	return &udpConnWithDualStackPacketInfo{
+	return &packetInfoUDPConn{
 		UDPConn: conn,
 		net:     network,
 		port:    addr.AddrPort().Port(),
@@ -122,13 +122,13 @@ func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
 
 // ReadFromTo wraps around ReadFromToUDPAddrPort. Like [net.UDPConn.ReadFrom], it returns nil
 // instead of a nil *net.UDPAddr for an address it doesn't know, so that it compares equal to nil.
-func (u *udpConnWithDualStackPacketInfo) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
+func (u *packetInfoUDPConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, src, dst, idx, err := u.ReadFromToUDPAddrPort(b)
 	return n, addrFromValidAddrPort(src), addrFromValidAddrPort(dst), idx, err
 }
 
 // ReadFromToUDP wraps around ReadFromToUDPAddrPort.
-func (u *udpConnWithDualStackPacketInfo) ReadFromToUDP(b []byte) (int, *net.UDPAddr, *net.UDPAddr, int, error) {
+func (u *packetInfoUDPConn) ReadFromToUDP(b []byte) (int, *net.UDPAddr, *net.UDPAddr, int, error) {
 	n, src, dst, idx, err := u.ReadFromToUDPAddrPort(b)
 	return n, UDPAddrFromValidAddrPort(src), UDPAddrFromValidAddrPort(dst), idx, err
 }
@@ -139,7 +139,7 @@ func (u *udpConnWithDualStackPacketInfo) ReadFromToUDP(b []byte) (int, *net.UDPA
 // The truncated read returns dst and idx only if packet info fits, and on Windows, it fails like
 // [net.UDPConn.ReadMsgUDPAddrPort] does. Unlike the latter, it returns IPv4 addresses unmapped
 // on dual-stack sockets, so that src and dst are in the same form on any platform.
-func (u *udpConnWithDualStackPacketInfo) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort, netip.AddrPort, int, error) {
+func (u *packetInfoUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort, netip.AddrPort, int, error) {
 	stored := u.rdOOBSize.Load()
 	size := int(stored)
 	if size == 0 {
@@ -165,7 +165,7 @@ func (u *udpConnWithDualStackPacketInfo) ReadFromToUDPAddrPort(b []byte) (int, n
 
 // WriteToFrom wraps around WriteToFromUDP. It fails with [syscall.EINVAL] unless dst is a *net.UDPAddr,
 // and src is nil or a *net.UDPAddr.
-func (u *udpConnWithDualStackPacketInfo) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
+func (u *packetInfoUDPConn) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	dstAddr, dstOk := dst.(*net.UDPAddr)
 	if !dstOk {
 		return 0, &net.OpError{Op: "write", Net: u.net, Source: src, Addr: dst, Err: syscall.EINVAL}
@@ -180,7 +180,7 @@ func (u *udpConnWithDualStackPacketInfo) WriteToFrom(b []byte, dst, src net.Addr
 }
 
 // WriteToFromUDP wraps around WriteToFromUDPAddrPort.
-func (u *udpConnWithDualStackPacketInfo) WriteToFromUDP(b []byte, dst, src *net.UDPAddr, idx int) (int, error) {
+func (u *packetInfoUDPConn) WriteToFromUDP(b []byte, dst, src *net.UDPAddr, idx int) (int, error) {
 	return u.WriteToFromUDPAddrPort(b, dst.AddrPort(), src.AddrPort(), idx)
 }
 
@@ -189,7 +189,7 @@ func (u *udpConnWithDualStackPacketInfo) WriteToFromUDP(b []byte, dst, src *net.
 // is invalid, it calls [net.UDPConn.WriteToUDPAddrPort]. It fails with [syscall.EINVAL] if idx is negative,
 // dst isn't of an IP version the socket accepts, or src is valid but not of the same IP version as dst.
 // Mapped IPv4 addresses count as IPv4 ones.
-func (u *udpConnWithDualStackPacketInfo) WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error) {
+func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error) {
 	// Require dst of an IP version the socket accepts, and src, if any, of the same IP version
 	bits, srcBits := dst.Addr().Unmap().BitLen(), src.Addr().Unmap().BitLen()
 	is4 := bits == 32
@@ -247,7 +247,7 @@ func UDPAddrFromValidAddrPort(ap netip.AddrPort) *net.UDPAddr {
 
 // Interface guards
 var (
-	_ SelectiveUDPConn = (*udpConnWithDualStackPacketInfo)(nil)
+	_ FromToUDPConn = (*packetInfoUDPConn)(nil)
 
 	_ UDPConn = (*net.UDPConn)(nil)
 )

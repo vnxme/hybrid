@@ -39,20 +39,20 @@ type inletConfig struct {
 
 	activeConnLimit int
 
-	trySelectiveUDP bool
+	tryPacketInfoUDP bool
 }
 
 var defaultInletConfig = inletConfig{
-	idleTimeout:     poIdleTimeoutDef,
-	readTimeout:     piReadTimeoutDef,
-	writeTimeout:    piWriteTimeoutDef,
-	acceptQueueSize: piAcceptQueueSizeDef,
-	deleteQueueSize: piDeleteQueueSizeDef,
-	readBufferSize:  piReadBufferSizeDef,
-	readQueueSize:   poReadQueueSizeDef,
-	writeQueueSize:  piWriteQueueSizeDef,
-	activeConnLimit: piActiveConnLimitDef,
-	trySelectiveUDP: piTrySelectiveUDPDef,
+	idleTimeout:      poIdleTimeoutDef,
+	readTimeout:      piReadTimeoutDef,
+	writeTimeout:     piWriteTimeoutDef,
+	acceptQueueSize:  piAcceptQueueSizeDef,
+	deleteQueueSize:  piDeleteQueueSizeDef,
+	readBufferSize:   piReadBufferSizeDef,
+	readQueueSize:    poReadQueueSizeDef,
+	writeQueueSize:   piWriteQueueSizeDef,
+	activeConnLimit:  piActiveConnLimitDef,
+	tryPacketInfoUDP: piTryPacketInfoUDPDef,
 }
 
 type InletOption interface {
@@ -101,13 +101,13 @@ func WithIdleTimeout(value time.Duration) InletOption {
 	return inletOptionFunc(func(cfg *inletConfig) { cfg.idleTimeout = value })
 }
 
-// WithTrySelectiveUDP sets whether to try creating a selective UDP connection
+// WithTryPacketInfoUDP sets whether to try enabling packet info with [PacketInfoUDPConn]
 // if the underlying PacketConn satisfies UDPConn.
-func WithTrySelectiveUDP(value bool) InletOption {
-	if value == piTrySelectiveUDPDef {
+func WithTryPacketInfoUDP(value bool) InletOption {
+	if value == piTryPacketInfoUDPDef {
 		return noOpInletOption
 	}
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.trySelectiveUDP = value })
+	return inletOptionFunc(func(cfg *inletConfig) { cfg.tryPacketInfoUDP = value })
 }
 
 // WithWriteQueueSize sets the maximum number of packets waiting to be written
@@ -140,7 +140,7 @@ type inletPacketLarge struct {
 
 // inlet implements PacketListener for any underlying PacketConn.
 type inlet struct {
-	pc SelectivePacketConn // Underlying PacketConn
+	pc FromToPacketConn // Underlying PacketConn
 
 	acChan chan *inletConn        // Accept channel
 	deChan chan *inletConn        // Delete channel
@@ -167,7 +167,7 @@ func Inlet(pc PacketConn, opts ...InletOption) PacketListener {
 	}
 
 	i := &inlet{
-		pc:     PacketToSelectivePacketConn(pc, cfg.trySelectiveUDP),
+		pc:     PacketToFromToPacketConn(pc, cfg.tryPacketInfoUDP),
 		acChan: make(chan *inletConn, cfg.acceptQueueSize),
 		deChan: make(chan *inletConn, cfg.deleteQueueSize),
 		wrChan: make(chan *inletPacketSmall, cfg.writeQueueSize),
@@ -346,12 +346,12 @@ func (i *inlet) cleanLoop() {
 //	readWithDeadline:
 //		err = i.pc.SetReadDeadline(time.Now().Add(piReadTimeoutDef))
 //		if err != nil {
-//			// Log an error, unless the underlying SelectivePacketConn is closed.
+//			// Log an error, unless the underlying FromToPacketConn is closed.
 //			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 //				i.logError(err)
 //			}
 //
-//			// If the underlying SelectivePacketConn has unexpectedly closed while
+//			// If the underlying FromToPacketConn has unexpectedly closed while
 //			// the inlet's done channel remains open, spawn a closing goroutine.
 //			// Close() waits until readLoop() returns, so it can't be done in sync.
 //			if !isClosedChan(i.done) {
@@ -363,7 +363,7 @@ func (i *inlet) cleanLoop() {
 //			break
 //		}
 //
-//		// Read from the underlying SelectivePacketConn and check for errors.
+//		// Read from the underlying FromToPacketConn and check for errors.
 //		// Note: any error is ignored, if at least one byte has been read.
 //		n, src, dst, idx, err = i.pc.ReadFromTo(buf)
 //		if n == 0 {
@@ -377,12 +377,12 @@ func (i *inlet) cleanLoop() {
 //					goto readWithDeadline
 //				}
 //
-//				// Log an error, unless the underlying SelectivePacketConn is closed.
+//				// Log an error, unless the underlying FromToPacketConn is closed.
 //				if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 //					i.logError(err)
 //				}
 //
-//				// If the underlying SelectivePacketConn has unexpectedly closed while
+//				// If the underlying FromToPacketConn has unexpectedly closed while
 //				// the inlet's done channel remains open, spawn a closing goroutine.
 //				// Close() waits until readLoop() returns, so it can't be done in sync.
 //				if !isClosedChan(i.done) {
@@ -545,12 +545,12 @@ loop:
 		if i.cfg.readTimeout > 0 {
 			err = i.pc.SetReadDeadline(time.Now().Add(i.cfg.readTimeout))
 			if err != nil {
-				// Log an error, unless the underlying SelectivePacketConn is closed.
+				// Log an error, unless the underlying FromToPacketConn is closed.
 				if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 					i.logError(err)
 				}
 
-				// If the underlying SelectivePacketConn has unexpectedly closed while
+				// If the underlying FromToPacketConn has unexpectedly closed while
 				// the inlet's done channel remains open, spawn a closing goroutine.
 				// Close() waits until readLoop() returns, so it can't be done in sync.
 				if !isClosedChan(i.done) {
@@ -563,7 +563,7 @@ loop:
 			}
 		}
 
-		// Read from the underlying SelectivePacketConn and check for errors.
+		// Read from the underlying FromToPacketConn and check for errors.
 		// Note: any error is ignored, if at least one byte has been read.
 		n, src, dst, idx, err = i.pc.ReadFromTo(buf)
 		if n == 0 {
@@ -573,12 +573,12 @@ loop:
 					goto repeatReading
 				}
 
-				// Log an error, unless the underlying SelectivePacketConn is closed.
+				// Log an error, unless the underlying FromToPacketConn is closed.
 				if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 					i.logError(err)
 				}
 
-				// If the underlying SelectivePacketConn has unexpectedly closed while
+				// If the underlying FromToPacketConn has unexpectedly closed while
 				// the inlet's done channel remains open, spawn a closing goroutine.
 				// Close() waits until readLoop() returns, so it can't be done in sync.
 				if !isClosedChan(i.done) {
@@ -696,12 +696,12 @@ loop:
 			if i.cfg.writeTimeout > 0 {
 				err = i.pc.SetWriteDeadline(time.Now().Add(i.cfg.writeTimeout))
 				if err != nil {
-					// Log an error, unless the underlying SelectivePacketConn is closed.
+					// Log an error, unless the underlying FromToPacketConn is closed.
 					if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 						i.logError(err)
 					}
 
-					// If the underlying SelectivePacketConn has unexpectedly closed while
+					// If the underlying FromToPacketConn has unexpectedly closed while
 					// the inlet's done channel remains open, spawn a closing goroutine.
 					// Close() waits until writeLoop() returns, so it can't be done in sync.
 					if !isClosedChan(i.done) {
@@ -714,7 +714,7 @@ loop:
 				}
 			}
 
-			// Write to the underlying SelectivePacketConn and check for errors.
+			// Write to the underlying FromToPacketConn and check for errors.
 			// Note: any error is ignored, if at least one byte has been written.
 			n, err = i.pc.WriteToFrom(pkt.b[:pkt.n], pkt.c.remoteAddr, pkt.c.localAddr, pkt.c.localIfIdx)
 			if n == 0 && err != nil {
@@ -727,12 +727,12 @@ loop:
 					goto repeatWriting
 				}
 
-				// Log an error, unless the underlying SelectivePacketConn is closed.
+				// Log an error, unless the underlying FromToPacketConn is closed.
 				if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 					i.logError(err)
 				}
 
-				// If the underlying SelectivePacketConn has unexpectedly closed while
+				// If the underlying FromToPacketConn has unexpectedly closed while
 				// the inlet's done channel remains open, spawn a closing goroutine.
 				// Close() waits until writeLoop() returns, so it can't be done in sync.
 				if !isClosedChan(i.done) {
@@ -1001,7 +1001,7 @@ const (
 
 	piCleanInterval = 120 * time.Second
 
-	piTrySelectiveUDPDef = true
+	piTryPacketInfoUDPDef = true
 
 	piActiveConnLimitDef = 8192
 	piActiveConnLimitMin = 64

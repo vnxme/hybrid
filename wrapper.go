@@ -205,46 +205,46 @@ func (w *idleTimeoutStreamConn) Unwrap() StreamConn {
 	return w.StreamConn
 }
 
-// packetToSelectivePacketConn is a PacketConnWrapper that implements SelectivePacketConn.
-type packetToSelectivePacketConn struct {
+// packetToFromToPacketConn is a PacketConnWrapper that implements FromToPacketConn.
+type packetToFromToPacketConn struct {
 	PacketConn
 }
 
-// PacketToSelectivePacketConn returns a SelectivePacketConn implementation
+// PacketToFromToPacketConn returns a FromToPacketConn implementation
 // based on the underlying PacketConn.
 //
-// If the given PacketConn satisfies SelectivePacketConn, no wrapping is done at all.
-// If the trySelectiveUDP is true, the PacketConn implements UDPConn, and system calls succeed,
-// a SelectiveUDPConn is returned. Otherwise, this function creates a simple wrapper
+// If the given PacketConn satisfies FromToPacketConn, no wrapping is done at all.
+// If tryPacketInfoUDP is true, the PacketConn implements UDPConn, and system calls succeed,
+// a FromToUDPConn made by [PacketInfoUDPConn] is returned. Otherwise, this function creates a simple wrapper
 // that returns zero values for the destination address and the local interface index
 // on read, and ignores any values assigned to these parameters on write.
-func PacketToSelectivePacketConn(pc PacketConn, trySelectiveUDP bool) SelectivePacketConn {
-	if spc, ok := pc.(SelectivePacketConn); ok {
-		return spc
+func PacketToFromToPacketConn(pc PacketConn, tryPacketInfoUDP bool) FromToPacketConn {
+	if fpc, ok := pc.(FromToPacketConn); ok {
+		return fpc
 	}
 
-	if trySelectiveUDP {
+	if tryPacketInfoUDP {
 		if conn, ok := pc.(UDPConn); ok {
-			udp, err := NewSelectiveUDPConn(conn)
+			udp, err := PacketInfoUDPConn(conn)
 			if err == nil {
 				return udp
 			}
 		}
 	}
 
-	return &packetToSelectivePacketConn{pc}
+	return &packetToFromToPacketConn{pc}
 }
 
-func (w *packetToSelectivePacketConn) ReadFromTo(p []byte) (n int, src, dst net.Addr, idx int, err error) {
+func (w *packetToFromToPacketConn) ReadFromTo(p []byte) (n int, src, dst net.Addr, idx int, err error) {
 	n, src, err = w.ReadFrom(p)
 	return n, src, nil, 0, err
 }
 
-func (w *packetToSelectivePacketConn) WriteToFrom(p []byte, dst, _ net.Addr, _ int) (n int, err error) {
+func (w *packetToFromToPacketConn) WriteToFrom(p []byte, dst, _ net.Addr, _ int) (n int, err error) {
 	return w.WriteTo(p, dst)
 }
 
-func (w *packetToSelectivePacketConn) Unwrap() PacketConn {
+func (w *packetToFromToPacketConn) Unwrap() PacketConn {
 	return w.PacketConn
 }
 
@@ -325,12 +325,12 @@ var (
 
 	_ PacketConnWrapper = (*fakeAddressPacketConn)(nil)
 	_ PacketConnWrapper = (*idleTimeoutPacketConn)(nil)
-	_ PacketConnWrapper = (*packetToSelectivePacketConn)(nil)
+	_ PacketConnWrapper = (*packetToFromToPacketConn)(nil)
 	_ PacketConnWrapper = (*packetToStreamConn)(nil)
 
 	_ PacketListenerWrapper = (*packetToStreamListener)(nil)
 
-	_ SelectivePacketConn = (*packetToSelectivePacketConn)(nil)
+	_ FromToPacketConn = (*packetToFromToPacketConn)(nil)
 
 	_ StreamConn = (*fakeAddressStreamConn)(nil)
 	_ StreamConn = (*idleTimeoutStreamConn)(nil)
