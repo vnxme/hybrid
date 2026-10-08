@@ -46,6 +46,8 @@ const (
 
 	cMsgIPv4PacketInfoType = cMsgIPv4PacketInfoOpt
 	cMsgIPv6PacketInfoType = cMsgIPv6PacketInfoOpt
+
+	cMsgTruncated = windows.MSG_CTRUNC // Set in the flags of a read whose control messages are truncated
 )
 
 var (

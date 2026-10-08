@@ -25,6 +25,7 @@ import (
 
 const (
 	cMsgBufferSize = 0
+	cMsgTruncated  = 0
 )
 
 // marshalPacketInfo4 writes a platform-specific IPv4 packet info control message into the given OOB buffer.

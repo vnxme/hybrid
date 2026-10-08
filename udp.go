@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -26,8 +27,10 @@ import (
 type udpConnWithDualStackPacketInfo struct {
 	UDPConn
 
-	net  string // Equals `udp`, `udp4` or `udp6`
-	port uint16 // Contains the local port number
+	net string // Equals `udp`, `udp4` or `udp6`
+
+	rdOOBSize atomic.Int32 // Size of control message buffers for reading, if grown from cMsgBufferSize
+	port      uint16       // Contains the local port number
 
 	v4Only bool // Equals true if no IPv6 could be expected
 	v6Only bool // Equals true if no IPv4 could be expected
@@ -123,12 +126,24 @@ func (u *udpConnWithDualStackPacketInfo) ReadFromToUDP(b []byte) (int, *net.UDPA
 }
 
 // ReadFromToUDPAddrPort calls [net.UDPConn.ReadMsgUDPAddrPort] and a platform-specific packet info parser
-// to obtain dst and idx from the control messages read into a pooled buffer.
+// to obtain dst and idx from the control messages read into a pooled buffer. If they are truncated,
+// e.g. as other socket options add control messages, the buffers for subsequent reads grow up to 64 KiB.
+// The truncated read returns dst and idx only if packet info fits, and on Windows, it fails like
+// [net.UDPConn.ReadMsgUDPAddrPort] does.
 func (u *udpConnWithDualStackPacketInfo) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort, netip.AddrPort, int, error) {
-	oob, ref := getBuf(cMsgBufferSize)
+	stored := u.rdOOBSize.Load()
+	size := int(stored)
+	if size == 0 {
+		size = cMsgBufferSize
+	}
+	oob, ref := getBuf(size)
 	defer putBuf(ref)
 
-	n, oobN, _, src, err := u.ReadMsgUDPAddrPort(b, oob)
+	n, oobN, flags, src, err := u.ReadMsgUDPAddrPort(b, oob)
+	if flags&cMsgTruncated != 0 && size < 1<<bufPoolMaxBits {
+		// Windows reports the size control messages take, while other platforms report the size read
+		u.rdOOBSize.CompareAndSwap(stored, int32(min(max(2*size, oobN), 1<<bufPoolMaxBits))) //nolint:gosec // G115
+	}
 	if err != nil { // Like [net.UDPConn.ReadFrom], return no addresses, as src is made of an empty sockaddr
 		return n, netip.AddrPort{}, netip.AddrPort{}, 0, err
 	}

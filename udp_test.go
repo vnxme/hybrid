@@ -224,6 +224,55 @@ func TestSelectiveUDPConnWriteCount(t *testing.T) {
 	}
 }
 
+// TestSelectiveUDPConnTruncatedOOB ensures control message buffers grow once a read finds its control
+// messages truncated, so that packet info is read again, rather than lost for every packet afterwards.
+func TestSelectiveUDPConnTruncatedOOB(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	lo := netip.MustParseAddr("127.0.0.1")
+	pc, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(lo, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pc.Close() }()
+	c, err := NewSelectiveUDPConn(pc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 8 // Too short for any control message header
+	c.(*udpConnWithDualStackPacketInfo).rdOOBSize.Store(size)
+
+	client, err := net.DialUDP("udp4", nil, pc.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	b := make([]byte, 8)
+	for i := range 8 { // Enough to double the buffer up to any size packet info takes
+		if _, err = client.Write([]byte{byte(i)}); err != nil {
+			t.Fatal(err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(time.Second))
+		_, _, dst, _, err := c.ReadFromToUDPAddrPort(b)
+		switch {
+		case err != nil && (i > 0 || runtime.GOOS != "windows"): // Windows fails a read with truncated ones
+			t.Fatalf("ReadFromToUDPAddrPort() #%d = %v, want nil", i, err)
+		case i == 0 && dst.IsValid():
+			t.Fatalf("ReadFromToUDPAddrPort() #0 = %v, want an invalid dst, as control messages are truncated", dst)
+		case dst.Addr() == lo:
+			if got := c.(*udpConnWithDualStackPacketInfo).rdOOBSize.Load(); got <= size {
+				t.Errorf("rdOOBSize = %d, want more than %d", got, size)
+			}
+			return
+		}
+	}
+	t.Errorf("ReadFromToUDPAddrPort() hasn't returned dst %s after control message buffers grew", lo)
+}
+
 func TestUDPAddrFromValidAddrPort(t *testing.T) {
 	type args struct {
 		ap netip.AddrPort

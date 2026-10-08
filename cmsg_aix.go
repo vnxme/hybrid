@@ -61,6 +61,8 @@ const (
 	cMsgIPv4InterfaceType = cMsgIPv4InterfaceOpt
 	// cMsgIPv4PacketInfoType =
 	cMsgIPv6PacketInfoType = unix.IPV6_PKTINFO
+
+	cMsgTruncated = unix.MSG_CTRUNC // Set in the flags of a read whose control messages are truncated
 )
 
 var (
