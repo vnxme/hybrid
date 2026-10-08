@@ -159,7 +159,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	case len(b) == 0: // Return immediately like TCP does, without consuming any remote Write
 		return 0, nil
 	case isClosedChan(p.rdDeadline.Wait()):
-		return 0, os.ErrDeadlineExceeded
+		return 0, errPipeDeadlineExceeded
 	}
 
 	p.rdMu.Lock()
@@ -170,7 +170,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	case isClosedChan(p.remoteDone) && p.rdBuf == nil && len(p.rdRx) == 0:
 		return 0, io.EOF
 	case isClosedChan(p.rdDeadline.Wait()):
-		return 0, os.ErrDeadlineExceeded
+		return 0, errPipeDeadlineExceeded
 	case p.rdBuf != nil: // Only a semi-sync/async pipe retains unread bytes
 		nr := copy(b, p.rdBuf)
 		if nr < len(p.rdBuf) {
@@ -214,7 +214,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 		}
 		return 0, io.EOF
 	case <-p.rdDeadline.Wait():
-		return 0, os.ErrDeadlineExceeded
+		return 0, errPipeDeadlineExceeded
 	}
 }
 
@@ -233,7 +233,7 @@ func (p *pipe) write(b []byte) (n int, err error) {
 	case isClosedChan(p.remoteDone):
 		return 0, errPipeBroken
 	case isClosedChan(p.wrDeadline.Wait()):
-		return 0, os.ErrDeadlineExceeded
+		return 0, errPipeDeadlineExceeded
 	case len(b) == 0: // Send nothing like TCP does, so that no remote Read returns 0, nil
 		return 0, nil
 	}
@@ -258,7 +258,7 @@ func (p *pipe) write(b []byte) (n int, err error) {
 		case <-p.remoteDone:
 			return n, errPipeBroken
 		case <-p.wrDeadline.Wait():
-			return n, os.ErrDeadlineExceeded
+			return n, errPipeDeadlineExceeded
 		}
 	}
 	return n, nil
@@ -318,7 +318,8 @@ const pipeNetwork = "pipe"
 
 // Shared variables
 var (
-	errPipeClosed = net.ErrClosed // Reported by using a closed pipe end, the same way as by TCP
+	errPipeClosed           = net.ErrClosed // Reported by using a closed pipe end, the same way as by TCP
+	errPipeDeadlineExceeded = os.ErrDeadlineExceeded
 
 	onePipeAddr = pipeAddr{}
 )
