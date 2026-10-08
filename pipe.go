@@ -260,6 +260,18 @@ func (p *pipe) write(b []byte) (n int, err error) {
 		b = bytes.Clone(b) // TODO(vnxme): use a pool?
 	}
 	for len(b) > 0 {
+		// Check again before every send, as the pipe may have been closed or the deadline exceeded
+		// while waiting for wrMu or for the previous part of b to be read. Otherwise, select would
+		// choose randomly between them and a send ready to proceed, letting the write succeed.
+		switch {
+		case isClosedChan(p.localDone):
+			return n, errPipeClosed
+		case isClosedChan(p.remoteDone):
+			return n, errPipeBroken
+		case isClosedChan(p.wrDeadline.Wait()):
+			return n, errPipeDeadlineExceeded
+		}
+
 		select {
 		case p.wrTx <- b:
 			if cap(p.wrTx) == 0 { // An unbuffered pipe can be sync or semi-sync

@@ -153,6 +153,7 @@ func TestPipe(t *testing.T) {
 			t.Run(testPipeDeadlineName, func(t *testing.T) { testPipeDeadline(t, test.ctor, test.mode) })
 			t.Run(testPipeDrainName, func(t *testing.T) { testPipeDrain(t, test.ctor, test.mode) })
 			t.Run(testPipeEmptyAddrName, func(t *testing.T) { testPipeEmptyAddr(t, test.ctor) })
+			t.Run(testPipeLockWaitName, func(t *testing.T) { testPipeLockWait(t, test.ctor) })
 			t.Run(testPipeSliceAliasName, func(t *testing.T) { testPipeSliceAlias(t, test.ctor, test.mode) })
 			t.Run(testPipeUnblockName, func(t *testing.T) { testPipeUnblock(t, test.ctor, test.mode) })
 			t.Run(testPipeWriteReturnName, func(t *testing.T) { testPipeWriteReturn(t, test.ctor, test.mode) })
@@ -528,6 +529,60 @@ func testPipeEmptyAddr(t *testing.T, ctor pipeCtor) {
 	_ = c2.Close()
 }
 
+// testPipeLockWait ensures a write fails if its pipe end is closed or its deadline is exceeded
+// while the write is waiting for another one to finish, even though a send is ready afterwards.
+// As select chooses randomly between ready cases, every scenario is repeated to catch a success.
+func testPipeLockWait(t *testing.T, ctor pipeCtor) {
+	c1, c2 := ctor()
+	_, hybrid := c1.(*pipe)
+	_ = c1.Close()
+	_ = c2.Close()
+	if !hybrid {
+		t.Skip("relies on the internals of a hybrid pipe")
+	}
+
+	events := []struct {
+		name  string
+		event func(c1, c2 StreamConn)
+		want  error
+	}{
+		{"LocalClose", func(c1, _ StreamConn) { _ = c1.Close() }, net.ErrClosed},
+		{"RemoteClose", func(_, c2 StreamConn) { _ = c2.Close() }, errPipeBroken},
+		{"Deadline", func(c1, _ StreamConn) { _ = c1.SetWriteDeadline(time.Now()) }, os.ErrDeadlineExceeded},
+	}
+
+	for _, e := range events {
+		t.Run(e.name, func(t *testing.T) {
+			for range 20 {
+				c1, c2 := ctor()
+				p := c1.(*pipe)
+				p.wrMu.Lock() // Another write is in progress
+
+				done := make(chan error, 1)
+				go func() {
+					_, err := c1.Write([]byte("x")) // Passes the checks before wrMu, then waits for it
+					done <- err
+				}()
+				go func() { _, _ = c2.Read(make([]byte, 1)) }() // Make a send ready in any mode
+				time.Sleep(time.Millisecond)                    // Let the write wait, though its outcome doesn't depend on it
+				e.event(c1, c2)
+				p.wrMu.Unlock()
+
+				select {
+				case err := <-done:
+					if !errors.Is(err, e.want) {
+						t.Errorf("c1.Write() = %v, want %v", err, e.want)
+					}
+				case <-time.After(time.Second):
+					t.Errorf("c1.Write() doesn't return")
+				}
+				_ = c1.Close()
+				_ = c2.Close()
+			}
+		})
+	}
+}
+
 // testPipeSliceAlias ensures a pipe doesn't refer to a write buffer once the write has returned,
 // so that the caller may modify it. A sync pipe trivially satisfies that, as its write returns
 // once all the bytes have been read, while the others must have copied the bytes left unread.
@@ -790,6 +845,7 @@ const (
 	testPipeDeadlineName        = "Deadline"
 	testPipeDrainName           = "Drain"
 	testPipeEmptyAddrName       = "EmptyAddr"
+	testPipeLockWaitName        = "LockWait"
 	testPipeSliceAliasName      = "SliceAlias"
 	testPipeUnblockName         = "Unblock"
 	testPipeWriteReturnName     = "WriteReturn"
