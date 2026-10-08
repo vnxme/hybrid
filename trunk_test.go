@@ -291,7 +291,8 @@ func testTrunkConcurrent(t *testing.T, ctor trunkCtor) {
 }
 
 // testTrunkDeadline ensures an exceeded read deadline prevails over a pending packet, even if
-// the remote end is closed, while remote closure prevails over an exceeded write deadline.
+// the remote end is closed, while local closure prevails over a pending packet too, and remote
+// closure prevails over an exceeded write deadline.
 func testTrunkDeadline(t *testing.T, ctor trunkCtor, buffered bool) {
 	b := make([]byte, 16)
 
@@ -326,6 +327,10 @@ func testTrunkDeadline(t *testing.T, ctor trunkCtor, buffered bool) {
 		_ = c2.SetReadDeadline(time.Now().Add(-time.Second))
 		if _, _, err := c2.ReadFrom(b); !errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Errorf("c2.ReadFrom() with a packet pending after remote closure = %v, want %v", err, os.ErrDeadlineExceeded)
+		}
+		_ = c2.Close()
+		if _, _, err := c2.ReadFrom(b); !errors.Is(err, net.ErrClosed) {
+			t.Errorf("c2.ReadFrom() with a packet pending after local closure = %v, want %v", err, net.ErrClosed)
 		}
 	}
 	_ = c1.Close()
