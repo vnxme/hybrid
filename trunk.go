@@ -156,20 +156,20 @@ func newTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, Select
 // LocalAddr returns the local address of the trunk end.
 func (tr *trunk) LocalAddr() net.Addr { return tr.addr }
 
-// ReadFrom reads a packet from the trunk, returning the number of bytes, the remote address, and an error.
+// ReadFrom reads a packet from the trunk, returning the number of bytes, the source address, and an error.
 func (tr *trunk) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, addr, _, _, err := tr.ReadFromTo(b)
-	return n, addr, err
+	n, src, _, _, err := tr.ReadFromTo(b)
+	return n, src, err
 }
 
-// ReadFromTo reads a packet from the trunk and returns the number of bytes read, the remote
-// address, the local address, the interface index, and an error.
+// ReadFromTo reads a packet from the trunk and returns the number of bytes read, the source
+// address, the destination address, the interface index, and an error.
 func (tr *trunk) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	n, r, l, i, err := tr.read(b)
+	n, src, dst, idx, err := tr.read(b)
 	if err != nil {
-		err = &net.OpError{Op: "read", Net: trunkNetwork, Source: l, Addr: r, Err: err}
+		err = &net.OpError{Op: "read", Net: trunkNetwork, Source: dst, Addr: src, Err: err}
 	}
-	return n, r, l, i, err
+	return n, src, dst, idx, err
 }
 
 // read reads a packet from the trunk and returns the number of bytes copied,
@@ -230,28 +230,30 @@ success:
 	return nr, pkt.src, pkt.dst, pkt.idx, nil
 }
 
-// WriteTo writes a packet of len(b) bytes to the remote addr.
+// WriteTo writes a packet of len(b) bytes to the destination address dst.
 // It returns the number of bytes written and any error.
-func (tr *trunk) WriteTo(b []byte, addr net.Addr) (int, error) {
-	return tr.WriteToFrom(b, addr, nil, 0)
+func (tr *trunk) WriteTo(b []byte, dst net.Addr) (int, error) {
+	return tr.WriteToFrom(b, dst, nil, 0)
 }
 
-// WriteToFrom writes len(b) bytes to remote addr r from local addr l on interface i.
+// WriteToFrom writes a packet of len(b) bytes to the destination address dst
+// from the source address src on the interface with index idx.
 // It returns the number of bytes written and any error.
-func (tr *trunk) WriteToFrom(b []byte, r, l net.Addr, i int) (int, error) {
-	n, err := tr.write(b, r, l, i)
+func (tr *trunk) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
+	n, err := tr.write(b, dst, src, idx)
 	if err != nil {
-		err = &net.OpError{Op: "write", Net: trunkNetwork, Source: l, Addr: r, Err: err}
+		err = &net.OpError{Op: "write", Net: trunkNetwork, Source: src, Addr: dst, Err: err}
 	}
 	return n, err
 }
 
-// write sends a packet with the given byte slice b from local address l to remote address r on interface i.
+// write sends a packet with the given byte slice b to the destination address dst
+// from the source address src on the interface with index idx.
 //
 // It blocks until a packet is sent or the trunk is closed or a deadline expires. Writes are serialized,
 // so that a single packet is in flight in an unbuffered trunk, and its acknowledgement can't be mixed up.
 // For buffered trunks, it copies b to avoid slice aliasing issues.
-func (tr *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
+func (tr *trunk) write(b []byte, dst, src net.Addr, idx int) (int, error) {
 	switch {
 	case isClosedChan(tr.localDone):
 		return 0, errTrunkClosed
@@ -272,11 +274,11 @@ func (tr *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 		return 0, errTrunkDeadlineExceeded
 	}
 
-	if l == nil { // A packet written without a source address originates from this end
-		l = tr.addr
+	if src == nil { // A packet written without a source address originates from this end
+		src = tr.addr
 	}
 	// Copy addresses, as the caller may modify them once write returns, and so may remote read
-	pkt := trunkPacket{buf: b, src: cloneAddr(l), dst: cloneAddr(r), idx: i}
+	pkt := trunkPacket{buf: b, src: cloneAddr(src), dst: cloneAddr(dst), idx: idx}
 	if cap(tr.wrTx) > 0 { // An async buffered trunk requires copy on write
 		pkt.buf = slices.Clone(b) // TODO(vnxme): use a pool?
 	}
