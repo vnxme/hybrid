@@ -58,6 +58,37 @@ type trunkPacket struct {
 	i   int
 }
 
+// cloneAddr returns a copy of a standard address, so that they don't share memory.
+// Any other address, including a nil pointer of a standard type, is returned as is.
+func cloneAddr(addr net.Addr) net.Addr {
+	switch a := addr.(type) {
+	case *net.UDPAddr:
+		if a != nil {
+			c := *a
+			c.IP = slices.Clone(a.IP)
+			return &c
+		}
+	case *net.TCPAddr:
+		if a != nil {
+			c := *a
+			c.IP = slices.Clone(a.IP)
+			return &c
+		}
+	case *net.IPAddr:
+		if a != nil {
+			c := *a
+			c.IP = slices.Clone(a.IP)
+			return &c
+		}
+	case *net.UnixAddr:
+		if a != nil {
+			c := *a
+			return &c
+		}
+	}
+	return addr
+}
+
 // trunk represents a packet-oriented communication channel between local and remote endpoints.
 type trunk struct {
 	addr net.Addr // Local address
@@ -214,7 +245,7 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 
 success:
 	if pkt.dst == nil { // A packet written without a destination address is destined to this end
-		pkt.dst = p.addr
+		pkt.dst = cloneAddr(p.addr)
 	}
 	nr := copy(b, pkt.b)
 	if cap(p.rdRx) == 0 { // An unbuffered trunk lets remote write return only once the packet is copied
@@ -271,7 +302,8 @@ func (p *trunk) write(b []byte, r, l net.Addr, i int) (int, error) {
 	if l == nil { // A packet written without a source address originates from this end
 		l = p.addr
 	}
-	pkt := trunkPacket{b: b, src: l, dst: r, i: i}
+	// Copy addresses, as the caller may modify them once write returns, and so may remote read
+	pkt := trunkPacket{b: b, src: cloneAddr(l), dst: cloneAddr(r), i: i}
 	if cap(p.wrTx) > 0 { // An async buffered trunk requires copy on write
 		pkt.b = slices.Clone(b) // TODO(vnxme): use a pool?
 	}

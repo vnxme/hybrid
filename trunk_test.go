@@ -582,7 +582,7 @@ func TestTrunkAddrs(t *testing.T) {
 		_ = c.SetReadDeadline(time.Now().Add(time.Second))
 		b := make([]byte, 16)
 		n, gotSrc, gotDst, gotIdx, err := c.ReadFromTo(b)
-		if err != nil || string(b[:n]) != payload || gotSrc != src || gotDst != dst || gotIdx != idx {
+		if err != nil || string(b[:n]) != payload || !equalNetAddr(gotSrc, src) || !equalNetAddr(gotDst, dst) || gotIdx != idx {
 			t.Errorf("ReadFromTo() = %q, %v, %v, %d, %v, want %q, %v, %v, %d, nil",
 				b[:n], gotSrc, gotDst, gotIdx, err, payload, src, dst, idx)
 		}
@@ -603,6 +603,24 @@ func TestTrunkAddrs(t *testing.T) {
 	// A reply by means of PacketConn reaches the flow it is addressed to
 	_, _ = c2.WriteTo([]byte("e"), flow2)
 	expect(c1, "e", addr2, flow2, 0)
+
+	// Neither a writer nor a reader modifying addresses affects the other side
+	from := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 3).To4(), Port: 1003}
+	_, _ = c1.WriteToFrom([]byte("f"), addr2, from, 0)
+	from.IP[3], from.Port = 99, 9999
+	_, _ = c1.WriteTo([]byte("g"), nil)
+	b := make([]byte, 16)
+	if _, src, _, _, _ := c2.ReadFromTo(b); src.String() != "192.0.2.3:1003" {
+		t.Errorf("ReadFromTo() src = %v, want 192.0.2.3:1003", src)
+	}
+	if _, src, dst, _, _ := c2.ReadFromTo(b); src == c1.LocalAddr() || dst == c2.LocalAddr() {
+		t.Errorf("ReadFromTo() = %p, %p, want copies of local addresses", src, dst)
+	} else {
+		src.(*net.UDPAddr).Port, dst.(*net.UDPAddr).Port = 1, 2
+		if c1.LocalAddr().String() != addr1.String() || c2.LocalAddr().String() != addr2.String() {
+			t.Errorf("LocalAddr() = %v, %v, want %v, %v", c1.LocalAddr(), c2.LocalAddr(), addr1, addr2)
+		}
+	}
 
 	// No addresses are returned on errors
 	_ = c2.SetReadDeadline(time.Now().Add(-time.Second))
@@ -725,5 +743,41 @@ func TestBufferedTrunkPanic(t *testing.T) {
 			}()
 			BufferedTrunk(queueSize, nil, nil)
 		}()
+	}
+}
+
+func TestCloneAddr(t *testing.T) {
+	ip := func() net.IP { return net.IPv4(192, 0, 2, 1).To4() }
+	for _, addr := range []net.Addr{
+		&net.UDPAddr{IP: ip(), Port: 1, Zone: "z"},
+		&net.TCPAddr{IP: ip(), Port: 2, Zone: "z"},
+		&net.IPAddr{IP: ip(), Zone: "z"},
+		&net.UnixAddr{Name: "/tmp/sock", Net: "unixgram"},
+	} {
+		c := cloneAddr(addr)
+		if c == addr || !equalNetAddr(c, addr) {
+			t.Errorf("cloneAddr(%v) = %v, want an equal copy", addr, c)
+		}
+		want := addr.String()
+		switch a := c.(type) {
+		case *net.UDPAddr:
+			a.IP[3] = 99
+		case *net.TCPAddr:
+			a.IP[3] = 99
+		case *net.IPAddr:
+			a.IP[3] = 99
+		case *net.UnixAddr:
+			a.Name = "/tmp/other"
+		}
+		if addr.String() != want {
+			t.Errorf("modifying a copy changed the original to %v, want %v", addr, want)
+		}
+	}
+
+	// Other addresses, including nil ones, are returned as is
+	for _, addr := range []net.Addr{nil, (*net.UDPAddr)(nil), oneTrunkAddr, pipeAddr{}} {
+		if c := cloneAddr(addr); c != addr {
+			t.Errorf("cloneAddr(%#v) = %#v, want it as is", addr, c)
+		}
 	}
 }
