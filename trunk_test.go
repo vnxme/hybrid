@@ -57,6 +57,81 @@ func trunkWrite(t *testing.T, c SelectivePacketConn, payload string, dst, src ne
 	}
 }
 
+func BenchmarkTrunk(b *testing.B) {
+	benchmarks := []struct {
+		name string
+		ctor trunkCtor
+	}{
+		{"Unbuffered", UnbufferedTrunk},
+		{"Buffered", func(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
+			return BufferedTrunk(trunkQueueSize, addr1, addr2)
+		}},
+	}
+
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			b.Run(benchmarkTrunkReadName, func(b *testing.B) { benchmarkTrunkRead(b, benchmark.ctor) })
+			b.Run(benchmarkTrunkWriteName, func(b *testing.B) { benchmarkTrunkWrite(b, benchmark.ctor) })
+		})
+	}
+}
+
+// benchmarkTrunkRead measures reading packets, while another goroutine keeps writing them.
+func benchmarkTrunkRead(b *testing.B, ctor trunkCtor) {
+	c1, c2 := ctor(nil, nil)
+	buf := make([]byte, 1<<10)
+
+	var wg sync.WaitGroup
+	defer func() {
+		_ = c2.Close() // Make c1.WriteTo fail
+		wg.Wait()
+	}()
+	wg.Go(func() {
+		for {
+			if _, err := c1.WriteTo(buf, nil); err != nil {
+				break
+			}
+		}
+		_ = c1.Close()
+	})
+
+	rd := make([]byte, len(buf))
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, _, err := c2.ReadFrom(rd); err != nil {
+			b.Fatalf("c2.ReadFrom() = %v, want nil", err)
+		}
+	}
+}
+
+// benchmarkTrunkWrite measures writing packets, while another goroutine keeps reading them.
+func benchmarkTrunkWrite(b *testing.B, ctor trunkCtor) {
+	c1, c2 := ctor(nil, nil)
+	buf := make([]byte, 1<<10)
+
+	var wg sync.WaitGroup
+	defer func() {
+		_ = c1.Close() // Make c2.ReadFrom fail
+		wg.Wait()
+	}()
+	wg.Go(func() {
+		rd := make([]byte, len(buf))
+		for {
+			if _, _, err := c2.ReadFrom(rd); err != nil {
+				break
+			}
+		}
+		_ = c2.Close()
+	})
+
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := c1.WriteTo(buf, nil); err != nil {
+			b.Fatalf("c1.WriteTo() = %v, want nil", err)
+		}
+	}
+}
+
 func TestTrunk(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -637,6 +712,9 @@ func testTrunkWriteReturn(t *testing.T, ctor trunkCtor, buffered bool) {
 }
 
 const (
+	benchmarkTrunkReadName  = "Read"
+	benchmarkTrunkWriteName = "Write"
+
 	testTrunkAddrsName       = "Addrs"
 	testTrunkCloseName       = "Close"
 	testTrunkConcurrentName  = "Concurrent"
