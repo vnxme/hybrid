@@ -27,24 +27,6 @@ const (
 	cMsgBufferSize = 0
 )
 
-// makeBuffersForPacketInfo returns an empty read OOB buffer and two pre-filled write OOB buffers
-// for parsing and marshaling platform/protocol-specific packet info control messages.
-func makeBuffersForPacketInfo(v4Only, v6Only bool) (rd []byte, wr4 []byte, wr6 []byte) {
-	rd = make([]byte, cMsgBufferSize)
-
-	if !v6Only {
-		wr4 = make([]byte, cMsgBufferSize)
-		_, _ = marshalPacketInfo4(wr4, netip.Addr{}, 0, true)
-	}
-
-	if !v4Only {
-		wr6 = make([]byte, cMsgBufferSize)
-		_, _ = marshalPacketInfo6(wr6, netip.Addr{}, 0, true)
-	}
-
-	return
-}
-
 // marshalPacketInfo4 writes a platform-specific IPv4 packet info control message into the given OOB buffer.
 // It returns the number of bytes written/required, and true if the buffer has been large enough.
 func marshalPacketInfo4(oob []byte, src netip.Addr, idx int, full bool) (int, bool) {

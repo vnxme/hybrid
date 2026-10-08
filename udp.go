@@ -19,20 +19,12 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"sync"
 	"syscall"
 )
 
 // udpConnWithDualStackPacketInfo is a UDP connection with dual-stack packet info support.
 type udpConnWithDualStackPacketInfo struct {
 	UDPConn
-
-	rdOOB  []byte // May contain OOB to parse while reading
-	wr4OOB []byte // Filled with OOB if v6Only equals false
-	wr6OOB []byte // Filled with OOB if v4Only equals false
-
-	rdMutex sync.Mutex // Guards rdOOB
-	wrMutex sync.Mutex // Guards wr4OOB and wr6OOB
 
 	net  string // Equals `udp`, `udp4` or `udp6`
 	port uint16 // Contains the local port number
@@ -108,18 +100,13 @@ func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
 		return nil, err
 	}
 
-	u := udpConnWithDualStackPacketInfo{
+	return &udpConnWithDualStackPacketInfo{
 		UDPConn: conn,
 		net:     opErr.Net,
 		port:    uint16(conn.LocalAddr().(*net.UDPAddr).Port), //nolint:gosec // G115
 		v4Only:  v4Only,
 		v6Only:  v6Only,
-	}
-
-	// Initialize three internal control message buffers and pre-fill two of them
-	u.rdOOB, u.wr4OOB, u.wr6OOB = makeBuffersForPacketInfo(v4Only, v6Only)
-
-	return &u, nil
+	}, nil
 }
 
 // ReadFromTo wraps around ReadFromToUDPAddrPort. Like [net.UDPConn.ReadFrom], it returns nil
@@ -136,24 +123,19 @@ func (u *udpConnWithDualStackPacketInfo) ReadFromToUDP(b []byte) (int, *net.UDPA
 }
 
 // ReadFromToUDPAddrPort calls [net.UDPConn.ReadMsgUDPAddrPort] and a platform-specific packet info parser
-// to obtain dst and idx from the internal OOB read buffer. It grows the buffer, if it isn't large enough.
+// to obtain dst and idx from the control messages read into a pooled buffer.
 func (u *udpConnWithDualStackPacketInfo) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort, netip.AddrPort, int, error) {
-	u.rdMutex.Lock()
-	defer u.rdMutex.Unlock()
+	oob, ref := getBuf(cMsgBufferSize)
+	defer putBuf(ref)
 
-	n, oobN, _, src, err := u.ReadMsgUDPAddrPort(b, u.rdOOB)
+	n, oobN, _, src, err := u.ReadMsgUDPAddrPort(b, oob)
 	if err != nil { // Like [net.UDPConn.ReadFrom], return no addresses, as src is made of an empty sockaddr
 		return n, netip.AddrPort{}, netip.AddrPort{}, 0, err
 	}
-	if oobN > 0 && oobN <= len(u.rdOOB) && src.IsValid() {
-		if dst, idx, ok := parsePacketInfo(u.rdOOB[:oobN]); ok {
-			return n, src, netip.AddrPortFrom(dst, u.port), idx, err
-		}
-	} else if oobN > len(u.rdOOB) {
-		u.rdOOB = make([]byte, oobN)
+	if dst, idx, ok := parsePacketInfo(oob[:min(oobN, len(oob))]); ok {
+		return n, src, netip.AddrPortFrom(dst, u.port), idx, nil
 	}
-
-	return n, src, netip.AddrPort{}, 0, err
+	return n, src, netip.AddrPort{}, 0, nil
 }
 
 // WriteToFrom wraps around WriteToFromUDP.
@@ -177,9 +159,8 @@ func (u *udpConnWithDualStackPacketInfo) WriteToFromUDP(b []byte, dst, src *net.
 }
 
 // WriteToFromUDPAddrPort does a few checks and calls a platform/protocol-specific marshaller
-// to fill the internal OOB write buffer before it proceeds to [net.UDPConn.WriteMsgUDPAddrPort].
-// It grows the buffer if it isn't large enough. If idx is zero and src is invalid,
-// it calls [net.UDPConn.WriteToUDPAddrPort].
+// to fill a pooled control message buffer before it proceeds to [net.UDPConn.WriteMsgUDPAddrPort].
+// If idx is zero and src is invalid, it calls [net.UDPConn.WriteToUDPAddrPort].
 func (u *udpConnWithDualStackPacketInfo) WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error) {
 	var is4 bool
 	switch {
@@ -212,25 +193,17 @@ proceed:
 		return u.WriteToUDPAddrPort(b, dst)
 	}
 
-	u.wrMutex.Lock()
-	defer u.wrMutex.Unlock()
+	oob, ref := getBuf(cMsgBufferSize)
+	defer putBuf(ref)
+	clear(oob) // A pooled buffer may contain anything, e.g. in padding bytes the marshaller skips
 
-	var ok, once bool
+	var oobN int
 	if is4 {
-	marshal4:
-		if n, ok = marshalPacketInfo4(u.wr4OOB, src.Addr().Unmap(), idx, once); !ok && !once {
-			u.wr4OOB, once = make([]byte, n), true
-			goto marshal4
-		}
-		n, _, err = u.WriteMsgUDPAddrPort(b, u.wr4OOB[:n], dst)
+		oobN, _ = marshalPacketInfo4(oob, src.Addr().Unmap(), idx, true)
 	} else {
-	marshal6:
-		if n, ok = marshalPacketInfo6(u.wr6OOB, src.Addr().Unmap(), idx, once); !ok && !once {
-			u.wr6OOB, once = make([]byte, n), true
-			goto marshal6
-		}
-		n, _, err = u.WriteMsgUDPAddrPort(b, u.wr6OOB[:n], dst)
+		oobN, _ = marshalPacketInfo6(oob, src.Addr().Unmap(), idx, true)
 	}
+	n, _, err = u.WriteMsgUDPAddrPort(b, oob[:oobN], dst)
 
 	// Since Go 1.26, WriteMsgUDPAddrPort returns 0 bytes written on Windows, though it sends
 	// the whole datagram, as WriteMsgInet4 and WriteMsgInet6 in internal/poll ignore the count.

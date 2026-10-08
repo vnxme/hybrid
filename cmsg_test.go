@@ -19,7 +19,6 @@ package hybrid
 import (
 	"net"
 	"net/netip"
-	"runtime"
 	"syscall"
 	"testing"
 )
@@ -81,10 +80,7 @@ func BenchmarkIsLocalIP6(b *testing.B) {
 }
 
 func TestMarshalParsePacketInfo(t *testing.T) {
-	rd, wr4, wr6 := makeBuffersForPacketInfo(false, false)
-	if len(rd) == 0 || len(wr4) == 0 || len(wr6) == 0 {
-		t.Error("not implemented on " + runtime.GOOS + "/" + runtime.GOARCH)
-	}
+	wr4, wr6 := make([]byte, cMsgBufferSize), make([]byte, cMsgBufferSize)
 
 	var addr netip.Addr
 	var idx int
@@ -108,13 +104,13 @@ func TestMarshalParsePacketInfo(t *testing.T) {
 		{netip.AddrFrom16([16]byte{15: 1}), 0, true},
 	} {
 		if test.v6 {
-			n, ok = marshalPacketInfo6(wr6, test.addr, test.idx, false)
+			n, ok = marshalPacketInfo6(wr6, test.addr, test.idx, true)
 			if !ok {
 				t.Errorf("marshalPacketInfo6(%v, %v, %v) failed", wr6, test.addr, test.idx)
 			}
 			oob = wr6[:n]
 		} else {
-			n, ok = marshalPacketInfo4(wr4, test.addr, test.idx, false)
+			n, ok = marshalPacketInfo4(wr4, test.addr, test.idx, true)
 			if !ok {
 				t.Errorf("marshalPacketInfo4(%v, %v, %v) failed", wr4, test.addr, test.idx)
 			}
