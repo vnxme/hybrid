@@ -304,10 +304,10 @@ success:
 	return len(b), nil
 }
 
-// SetDeadline sets the read and write deadlines to t.
-// Returns io.ErrClosedPipe if the trunk is closed.
+// SetDeadline sets the read and write deadlines to t. It returns io.ErrClosedPipe
+// only once the local end is closed, since packets queued may be read after remote closure.
 func (p *trunk) SetDeadline(t time.Time) error {
-	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
+	if isClosedChan(p.localDone) {
 		return errTrunkClosed
 	}
 	p.rdDeadline.Set(t)
@@ -315,18 +315,18 @@ func (p *trunk) SetDeadline(t time.Time) error {
 	return nil
 }
 
-// SetReadDeadline sets the read deadline to t.
-// Returns io.ErrClosedPipe if the trunk is closed.
+// SetReadDeadline sets the read deadline to t. It returns io.ErrClosedPipe
+// only once the local end is closed, since packets queued may be read after remote closure.
 func (p *trunk) SetReadDeadline(t time.Time) error {
-	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
+	if isClosedChan(p.localDone) {
 		return errTrunkClosed
 	}
 	p.rdDeadline.Set(t)
 	return nil
 }
 
-// SetWriteDeadline sets the write deadline to t.
-// Returns io.ErrClosedPipe if the trunk is closed.
+// SetWriteDeadline sets the write deadline to t. It returns io.ErrClosedPipe
+// once either end is closed, since nothing may be written after that.
 func (p *trunk) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
 		return errTrunkClosed

@@ -678,3 +678,39 @@ func TestTrunkConcurrent(t *testing.T) {
 		})
 	}
 }
+
+// TestTrunkDrain ensures packets queued before remote closure can be read under a read deadline.
+func TestTrunkDrain(t *testing.T) {
+	c1, c2 := BufferedTrunk(4, nil, nil)
+	for _, payload := range []string{"a", "b"} {
+		if _, err := c1.WriteTo([]byte(payload), nil); err != nil {
+			t.Fatalf("c1.WriteTo() = %v, want nil", err)
+		}
+	}
+	_ = c1.Close()
+
+	if err := c2.SetWriteDeadline(time.Time{}); !errors.Is(err, errTrunkClosed) {
+		t.Errorf("c2.SetWriteDeadline() = %v, want %v", err, errTrunkClosed)
+	}
+	if err := c2.SetDeadline(time.Time{}); err != nil {
+		t.Errorf("c2.SetDeadline() = %v, want nil", err)
+	}
+	if err := c2.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Errorf("c2.SetReadDeadline() = %v, want nil", err)
+	}
+
+	b := make([]byte, 16)
+	for _, want := range []string{"a", "b"} {
+		if n, _, err := c2.ReadFrom(b); err != nil || string(b[:n]) != want {
+			t.Errorf("c2.ReadFrom() = %q, %v, want %q, nil", b[:n], err, want)
+		}
+	}
+	if _, _, err := c2.ReadFrom(b); !errors.Is(err, errTrunkEOF) {
+		t.Errorf("c2.ReadFrom() = %v, want %v", err, errTrunkEOF)
+	}
+
+	_ = c2.Close()
+	if err := c2.SetReadDeadline(time.Time{}); !errors.Is(err, errTrunkClosed) {
+		t.Errorf("c2.SetReadDeadline() = %v, want %v", err, errTrunkClosed)
+	}
+}
