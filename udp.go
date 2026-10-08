@@ -254,5 +254,12 @@ var UDPListenWithPacketInfo = net.ListenConfig{Control: func(network, _ string, 
 	}
 	v4Only := strings.HasSuffix(network, "4")
 	v6Only := !v4Only && strings.HasSuffix(network, "6")
+	if v6Only { // Network is udp6 for a dual-stack socket too, so check whether it accepts IPv4
+		only, err := rawConnIsV6Only(c)
+		if err != nil {
+			return err
+		}
+		v6Only = only
+	}
 	return rawConnEnablePacketInfo(c, v4Only, v6Only)
 }}

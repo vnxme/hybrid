@@ -32,6 +32,62 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// TestUDPListenWithPacketInfo ensures packet info is enabled for every IP version a socket accepts,
+// including IPv4 on a dual-stack socket, for which Control is called with network udp6.
+func TestUDPListenWithPacketInfo(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	lo4, lo6 := netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")
+	tests := []struct {
+		network, address string
+		dsts             []netip.Addr
+	}{
+		{"udp4", "0.0.0.0:0", []netip.Addr{lo4}},
+		{"udp6", "[::]:0", []netip.Addr{lo6}},
+		{"udp", "0.0.0.0:0", []netip.Addr{lo4}},
+		{"udp", "[::]:0", []netip.Addr{lo4, lo6}},
+		{"udp", ":0", []netip.Addr{lo4, lo6}},
+	}
+	for _, test := range tests {
+		t.Run(test.network+","+test.address, func(t *testing.T) {
+			pc, err := UDPListenWithPacketInfo.ListenPacket(context.Background(), test.network, test.address)
+			if err != nil {
+				t.Skipf("ListenPacket() = %v", err) // E.g. no IPv6 support
+			}
+			defer func() { _ = pc.Close() }()
+			conn := pc.(*net.UDPConn)
+			port := uint16(conn.LocalAddr().(*net.UDPAddr).Port) //nolint:gosec // G115
+
+			for _, dst := range test.dsts {
+				if dst.Is6() && conn.LocalAddr().(*net.UDPAddr).IP.To4() != nil {
+					continue // An IPv4 socket, e.g. on a host without IPv6
+				}
+				client, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(netip.AddrPortFrom(dst, port)))
+				if err != nil {
+					t.Fatalf("DialUDP(%s) = %v", dst, err)
+				}
+				if _, err = client.Write([]byte{1}); err != nil {
+					t.Fatalf("client.Write() to %s = %v", dst, err)
+				}
+				_ = client.Close()
+
+				_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+				oob := make([]byte, cMsgBufferSize)
+				_, oobN, _, _, err := conn.ReadMsgUDPAddrPort(make([]byte, 1), oob)
+				if err != nil {
+					t.Fatalf("ReadMsgUDPAddrPort() from %s = %v", dst, err)
+				}
+				if got, _, ok := parsePacketInfo(oob[:oobN]); !ok || got.Unmap() != dst {
+					t.Errorf("parsePacketInfo() of a packet to %s = %v, %v, want %s, true", dst, got, ok, dst)
+				}
+			}
+		})
+	}
+}
+
 func TestNeedSelectiveUDPConn(t *testing.T) {
 	l41, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	l42, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 0})
