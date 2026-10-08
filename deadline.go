@@ -26,6 +26,7 @@ package hybrid
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -49,13 +50,13 @@ func (f funcHook) run() { f() }
 type deadline[H deadlineHook] struct {
 	hook   H
 	timer  *time.Timer
-	cancel chan struct{} // Must be non-nil
-	mu     sync.Mutex    // Guards timer and cancel
+	cancel atomic.Value // Holds a chan struct{} created on first use, so that Wait needn't lock mu
+	mu     sync.Mutex   // Guards timer and replacing cancel
 }
 
 // makeDeadline returns a deadline value to be embedded in a struct, avoiding a separate allocation.
 func makeDeadline[H deadlineHook](hook H) deadline[H] {
-	return deadline[H]{hook: hook, cancel: make(chan struct{})}
+	return deadline[H]{hook: hook}
 }
 
 // SimpleDeadline returns a pointer to the struct that satisfies the Deadline interface.
@@ -75,15 +76,25 @@ func SimpleDeadline() Deadline {
 //     for an earlier time is running, and none will be started.
 //
 // Consequently, the hook must not call Set on the same deadline, directly or indirectly,
-// as it always deadlocks, nor Wait, as it deadlocks if Set is called concurrently.
-// The hook should also return promptly, as it blocks concurrent calls of Set,
-// as well as calls of Wait made while Set is blocked.
+// as it always deadlocks. The hook should also return promptly, as it blocks concurrent
+// calls of Set. Wait never blocks, so the hook may call it.
 func HookDeadline(hook func()) Deadline {
 	if hook == nil {
 		return SimpleDeadline()
 	}
 	d := makeDeadline(funcHook(hook))
 	return &d
+}
+
+// load returns the current channel, creating it on first use. Unlike Set, it needn't lock mu:
+// only the first channel is stored without mu, and a channel is stored in an interface without
+// an allocation.
+func (d *deadline[H]) load() chan struct{} {
+	if cancel, ok := d.cancel.Load().(chan struct{}); ok {
+		return cancel
+	}
+	d.cancel.CompareAndSwap(nil, make(chan struct{}))
+	return d.cancel.Load().(chan struct{})
 }
 
 // Set sets the point in time when the deadline will time out.
@@ -94,16 +105,17 @@ func (d *deadline[H]) Set(t time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	cancel := d.load()
 	if d.timer != nil && !d.timer.Stop() {
-		<-d.cancel // Wait for the timer callback to finish and close cancel.
+		<-cancel // Wait for the timer callback to finish and close cancel.
 	}
 	d.timer = nil
 
 	// Time is zero, then there is no deadline.
-	closed := isClosedChan(d.cancel)
+	closed := isClosedChan(cancel)
 	if t.IsZero() {
 		if closed {
-			d.cancel = make(chan struct{})
+			d.cancel.Store(make(chan struct{}))
 		}
 		return
 	}
@@ -111,26 +123,25 @@ func (d *deadline[H]) Set(t time.Time) {
 	// Time in the future, set up a timer to cancel in the future.
 	if dur := time.Until(t); dur > 0 {
 		if closed {
-			d.cancel = make(chan struct{})
+			cancel = make(chan struct{})
+			d.cancel.Store(cancel)
 		}
 		d.timer = time.AfterFunc(dur, func() {
 			d.hook.run() // Run the hook before closing the channel.
-			close(d.cancel)
+			close(cancel)
 		})
 		return
 	}
 
 	// Time in the past, so close immediately.
 	if !closed {
-		close(d.cancel)
+		close(cancel)
 	}
 }
 
 // Wait returns a channel that is closed when the deadline is exceeded.
 func (d *deadline[H]) Wait() <-chan struct{} {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.cancel
+	return d.load()
 }
 
 // Interface guards

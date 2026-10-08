@@ -64,6 +64,22 @@ func TestDeadline(t *testing.T) {
 				expectOpen(t, test.ctor().Wait())
 			})
 
+			t.Run("FirstUse", func(t *testing.T) {
+				d := test.ctor()
+				var chans [8]<-chan struct{}
+				var wg sync.WaitGroup
+				for i := range chans {
+					wg.Go(func() { chans[i] = d.Wait() })
+				}
+				wg.Wait()
+				for i, ch := range chans {
+					if ch == nil || ch != chans[0] {
+						t.Fatalf("Wait() #%d = %v, want the same non-nil channel as #0 = %v", i, ch, chans[0])
+					}
+				}
+				expectOpen(t, chans[0])
+			})
+
 			t.Run("Zero", func(t *testing.T) {
 				d := test.ctor()
 				d.Set(time.Time{})
