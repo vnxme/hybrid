@@ -273,6 +273,69 @@ func TestSelectiveUDPConnTruncatedOOB(t *testing.T) {
 	t.Errorf("ReadFromToUDPAddrPort() hasn't returned dst %s after control message buffers grew", lo)
 }
 
+// localAddrConn is a UDPConn whose local address is replaced, e.g. with an address of another type.
+type localAddrConn struct {
+	*net.UDPConn
+	addr net.Addr
+}
+
+func (c localAddrConn) LocalAddr() net.Addr { return c.addr }
+
+// TestNewSelectiveUDPConnFamily ensures the IP versions a socket accepts are detected from its local address
+// and IPV6_V6ONLY, and that a connection without a local *net.UDPAddr is rejected.
+func TestNewSelectiveUDPConnFamily(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	tests := []struct {
+		network, address string
+		v4Only, v6Only   bool
+		net              string
+	}{
+		{"udp4", "127.0.0.1:0", true, false, "udp4"},
+		{"udp4", "0.0.0.0:0", true, false, "udp4"},
+		{"udp", "127.0.0.1:0", true, false, "udp4"},
+		{"udp6", "[::1]:0", false, true, "udp6"},
+		{"udp6", "[::]:0", false, true, "udp6"},
+		{"udp", "[::1]:0", false, true, "udp6"},
+		{"udp", "[::]:0", false, false, "udp"},
+	}
+	for _, test := range tests {
+		t.Run(test.network+","+test.address, func(t *testing.T) {
+			pc, err := net.ListenPacket(test.network, test.address)
+			if err != nil {
+				t.Skipf("ListenPacket() = %v", err) // E.g. no IPv6 support
+			}
+			defer func() { _ = pc.Close() }()
+			c, err := NewSelectiveUDPConn(pc.(*net.UDPConn))
+			if err != nil {
+				t.Fatalf("NewSelectiveUDPConn() = %v, want nil", err)
+			}
+			u := c.(*udpConnWithDualStackPacketInfo)
+			if u.v4Only != test.v4Only || u.v6Only != test.v6Only || u.net != test.net {
+				t.Errorf("NewSelectiveUDPConn() = v4Only %v, v6Only %v, net %s, want %v, %v, %s",
+					u.v4Only, u.v6Only, u.net, test.v4Only, test.v6Only, test.net)
+			}
+			if want := uint16(pc.LocalAddr().(*net.UDPAddr).Port); u.port != want { //nolint:gosec // G115
+				t.Errorf("NewSelectiveUDPConn() = port %d, want %d", u.port, want)
+			}
+		})
+	}
+
+	t.Run("NotUDPAddr", func(t *testing.T) {
+		pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = pc.Close() }()
+		if _, err = NewSelectiveUDPConn(localAddrConn{pc, oneTrunkAddr}); err == nil {
+			t.Errorf("NewSelectiveUDPConn() = nil, want an error")
+		}
+	})
+}
+
 func TestUDPAddrFromValidAddrPort(t *testing.T) {
 	type args struct {
 		ap netip.AddrPort

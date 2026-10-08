@@ -70,30 +70,27 @@ func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
 		return u, nil
 	}
 
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return nil, errors.New("UDPConn must have a local *net.UDPAddr")
+	}
+
 	raw, err := conn.SyscallConn()
 	if err != nil {
 		return nil, err
 	}
 
-	// Make an invalid write call to retrieve [conn.fd.net]
-	var opErr *net.OpError
-	_, err = conn.WriteTo(nil, nil)
-	if !errors.As(err, &opErr) {
-		return nil, err
-	}
-
-	// Detect whether the given connection is IPv4/IPv6-only or dual-stack
-	v4Only := strings.HasSuffix(opErr.Net, "4")
-	v6Only := !v4Only && strings.HasSuffix(opErr.Net, "6")
-
-	// If conn.fd.net is `udp`, the local address might still be specified,
-	// so it might be possible to limit the connection to IPv4 or IPv6 only.
-	if !v4Only && !v6Only {
-		if addr, ok := opErr.Source.(*net.UDPAddr); ok {
-			a := addr.AddrPort().Addr().Unmap()
-			if !a.IsUnspecified() {
-				v4Only, v6Only = a.Is4(), a.Is6()
-			}
+	// Detect whether the connection is IPv4/IPv6-only or dual-stack. Like any address obtained
+	// from a socket, the local address has 4 bytes for an IPv4 socket and 16 bytes for an IPv6 one.
+	var v4Only, v6Only bool
+	switch ip := addr.AddrPort().Addr(); {
+	case ip.Is4(): // An IPv4 socket
+		v4Only = true
+	case !ip.Unmap().IsUnspecified(): // An IPv6 socket bound to a specific address
+		v4Only, v6Only = ip.Is4In6(), !ip.Is4In6()
+	default: // An IPv6 socket bound to the unspecified address, dual-stack unless IPV6_V6ONLY is set
+		if v6Only, err = rawConnIsV6Only(raw); err != nil {
+			return nil, err
 		}
 	}
 
@@ -103,10 +100,18 @@ func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
 		return nil, err
 	}
 
+	network := "udp"
+	switch {
+	case v4Only:
+		network = "udp4"
+	case v6Only:
+		network = "udp6"
+	}
+
 	return &udpConnWithDualStackPacketInfo{
 		UDPConn: conn,
-		net:     opErr.Net,
-		port:    uint16(conn.LocalAddr().(*net.UDPAddr).Port), //nolint:gosec // G115
+		net:     network,
+		port:    addr.AddrPort().Port(),
 		v4Only:  v4Only,
 		v6Only:  v6Only,
 	}, nil
