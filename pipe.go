@@ -138,8 +138,8 @@ func newPipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
 	return p1, p2
 }
 
-func (*pipe) LocalAddr() net.Addr  { return pipeAddr{} }
-func (*pipe) RemoteAddr() net.Addr { return pipeAddr{} }
+func (*pipe) LocalAddr() net.Addr  { return onePipeAddr }
+func (*pipe) RemoteAddr() net.Addr { return onePipeAddr }
 
 func (p *pipe) Read(b []byte) (int, error) {
 	n, err := p.read(b)
@@ -311,13 +311,17 @@ func (p *pipe) Close() error {
 
 // opError wraps err in net.OpError the same way as a TCP connection does.
 func (*pipe) opError(op string, err error) error {
-	return &net.OpError{Op: op, Net: pipeNetwork, Source: pipeAddr{}, Addr: pipeAddr{}, Err: err}
+	return &net.OpError{Op: op, Net: pipeNetwork, Source: onePipeAddr, Addr: onePipeAddr, Err: err}
 }
 
 const pipeNetwork = "pipe"
 
-// errPipeClosed is reported by using a closed pipe end, the same way as by TCP.
-var errPipeClosed = net.ErrClosed
+// Shared variables
+var (
+	errPipeClosed = net.ErrClosed // Reported by using a closed pipe end, the same way as by TCP
+
+	onePipeAddr = pipeAddr{}
+)
 
 // Interface guards
 var (

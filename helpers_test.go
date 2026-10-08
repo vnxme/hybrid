@@ -56,7 +56,7 @@ func TestCloneAddr(t *testing.T) {
 	}
 
 	// Other addresses, including nil ones, are returned as is
-	for _, addr := range []net.Addr{nil, (*net.UDPAddr)(nil), oneTrunkAddr, pipeAddr{}} {
+	for _, addr := range []net.Addr{nil, (*net.UDPAddr)(nil), oneTrunkAddr, onePipeAddr} {
 		if c := cloneAddr(addr); c != addr {
 			t.Errorf("cloneAddr(%#v) = %#v, want it as is", addr, c)
 		}
