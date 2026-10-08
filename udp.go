@@ -46,7 +46,7 @@ type udpConnWithDualStackPacketInfo struct {
 // [NewSelectiveUDPConn]. It returns false if conn already implements SelectiveUDPConn,
 // or if it doesn't provide access to the underlying socket.
 func NeedSelectiveUDPConn(conn UDPConn) bool {
-	if conn == nil {
+	if isNilUDPConn(conn) {
 		return false
 	}
 
@@ -67,7 +67,7 @@ func NeedSelectiveUDPConn(conn UDPConn) bool {
 }
 
 func NewSelectiveUDPConn(conn UDPConn) (SelectiveUDPConn, error) {
-	if conn == nil {
+	if isNilUDPConn(conn) {
 		return nil, errors.New("UDPConn must not be nil")
 	}
 
@@ -228,6 +228,12 @@ proceed:
 	}
 
 	return n, err
+}
+
+// isNilUDPConn reports whether conn is nil, including a nil *net.UDPConn,
+// whose methods would panic instead of returning an error.
+func isNilUDPConn(conn UDPConn) bool {
+	return conn == nil || conn == (*net.UDPConn)(nil)
 }
 
 // UDPAddrFromValidAddrPort returns a pointer to net.UDPAddr if the given netip.AddrPort is valid, or nil.

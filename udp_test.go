@@ -138,6 +138,7 @@ func TestNewSelectiveUDPConn(t *testing.T) {
 		want    SelectivePacketConn
 		wantErr bool
 	}{
+		{"nil", args{nil}, nil, true},
 		// TODO: Add test cases.
 	}
 	for _, tt := range tests {
