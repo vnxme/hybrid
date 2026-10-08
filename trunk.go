@@ -30,7 +30,6 @@
 package hybrid
 
 import (
-	"errors"
 	"io"
 	"net"
 	"os"
@@ -118,8 +117,8 @@ type trunk struct {
 // Reads on one end aren't matched with writes on the other: a write returns once its
 // packet has been queued, unless the queue already holds queueSize packets, in which
 // case it blocks. Packets are copied internally, so the write buffer may be reused
-// once a write returns. When the remote end is closed, reads return io.EOF once
-// all the packets queued have been read.
+// once a write returns. When the remote end is closed, reads return net.ErrClosed
+// once all the packets queued have been read, and writes return net.ErrClosed.
 //
 // The ends have local addresses addr1 and addr2 respectively, or a generic
 // trunk address if nil. A local address is returned by LocalAddr, used as
@@ -144,7 +143,7 @@ func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (SelectivePacketConn, S
 // Reads on one end are matched with writes on the other, copying packets directly
 // between the two; there is no internal buffering. A write returns once its packet
 // has been copied by a read, so the write buffer may be reused after that. When the
-// remote end is closed, reads return io.EOF. Local addresses and packet truncation
+// remote end is closed, reads and writes return net.ErrClosed. Local addresses and packet truncation
 // are handled the same way as by [BufferedTrunk].
 func UnbufferedTrunk(addr1, addr2 net.Addr) (SelectivePacketConn, SelectivePacketConn) {
 	return newTrunk(0, addr1, addr2)
@@ -198,7 +197,7 @@ func (p *trunk) ReadFrom(b []byte) (int, net.Addr, error) {
 // address, the local address, the interface index, and an error.
 func (p *trunk) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, r, l, i, err := p.read(b)
-	if err != nil && !errors.Is(err, errTrunkEOF) && !errors.Is(err, errTrunkClosed) {
+	if err != nil {
 		err = &net.OpError{Op: "read", Net: trunkNetwork, Source: l, Addr: r, Err: err}
 	}
 	return n, r, l, i, err
@@ -223,7 +222,7 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 		case pkt = <-p.rdRx:
 			goto success
 		default:
-			return 0, nil, nil, 0, errTrunkEOF
+			return 0, nil, nil, 0, errTrunkClosed
 		}
 	}
 
@@ -237,7 +236,12 @@ func (p *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 		case <-p.localDone:
 			return 0, nil, nil, 0, errTrunkClosed
 		case <-p.remoteDone:
-			return 0, nil, nil, 0, errTrunkEOF
+			select { // A packet may have been queued just before remote closure
+			case pkt = <-p.rdRx:
+				goto success
+			default:
+				return 0, nil, nil, 0, errTrunkClosed
+			}
 		case <-p.rdDeadline.Wait():
 			return 0, nil, nil, 0, errTrunkDeadlineExceeded
 		}
@@ -267,7 +271,7 @@ func (p *trunk) WriteTo(b []byte, addr net.Addr) (int, error) {
 // It returns the number of bytes written and any error.
 func (p *trunk) WriteToFrom(b []byte, r, l net.Addr, i int) (int, error) {
 	n, err := p.write(b, r, l, i)
-	if err != nil && !errors.Is(err, errTrunkClosed) {
+	if err != nil {
 		err = &net.OpError{Op: "write", Net: trunkNetwork, Source: l, Addr: r, Err: err}
 	}
 	return n, err
@@ -331,55 +335,63 @@ success:
 	return len(b), nil
 }
 
-// SetDeadline sets the read and write deadlines to t. It returns io.ErrClosedPipe
+// SetDeadline sets the read and write deadlines to t. It returns net.ErrClosed
 // only once the local end is closed, since packets queued may be read after remote closure.
 func (p *trunk) SetDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) {
-		return errTrunkClosed
+		return p.opError("set", errTrunkClosed)
 	}
 	p.rdDeadline.Set(t)
 	p.wrDeadline.Set(t)
 	return nil
 }
 
-// SetReadDeadline sets the read deadline to t. It returns io.ErrClosedPipe
+// SetReadDeadline sets the read deadline to t. It returns net.ErrClosed
 // only once the local end is closed, since packets queued may be read after remote closure.
 func (p *trunk) SetReadDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) {
-		return errTrunkClosed
+		return p.opError("set", errTrunkClosed)
 	}
 	p.rdDeadline.Set(t)
 	return nil
 }
 
-// SetWriteDeadline sets the write deadline to t. It returns io.ErrClosedPipe
+// SetWriteDeadline sets the write deadline to t. It returns net.ErrClosed
 // once either end is closed, since nothing may be written after that.
 func (p *trunk) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(p.localDone) || isClosedChan(p.remoteDone) {
-		return errTrunkClosed
+		return p.opError("set", errTrunkClosed)
 	}
 	p.wrDeadline.Set(t)
 	return nil
 }
 
 // Close closes the trunk, signaling completion and preventing further I/O.
-// Returns io.ErrClosedPipe if the trunk is closed.
-func (p *trunk) Close() (err error) {
-	err = errTrunkClosed
+// It returns net.ErrClosed if the trunk end is already closed.
+func (p *trunk) Close() error {
+	closed := false
 	p.once.Do(func() {
 		close(p.localDone)
-		err = nil
+		closed = true
 	})
-	return
+	if !closed {
+		return p.opError("close", errTrunkClosed)
+	}
+	return nil
+}
+
+// opError wraps err in net.OpError for an operation unrelated to a packet,
+// the same way as a UDP connection does.
+func (p *trunk) opError(op string, err error) error {
+	return &net.OpError{Op: op, Net: trunkNetwork, Addr: p.addr, Err: err}
 }
 
 const trunkNetwork = "trunk"
 
 // Shared variables
 var (
-	errTrunkClosed           = io.ErrClosedPipe
+	errTrunkClosed           = net.ErrClosed
 	errTrunkDeadlineExceeded = os.ErrDeadlineExceeded
-	errTrunkEOF              = io.EOF
 	errTrunkShortBuffer      = io.ErrShortBuffer
 
 	oneTrunkAddr = trunkAddr{}

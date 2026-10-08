@@ -17,6 +17,7 @@ package hybrid
 import (
 	"bytes"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"sync"
@@ -99,7 +100,7 @@ func TestTrunkReadLLM(t *testing.T) {
 			wantL:   nil,
 			wantR:   nil,
 			wantI:   0,
-			wantErr: errTrunkEOF,
+			wantErr: errTrunkClosed,
 		},
 		{
 			name: "RemoteClosedPendingData",
@@ -723,8 +724,8 @@ func TestTrunkDrain(t *testing.T) {
 			t.Errorf("c2.ReadFrom() = %q, %v, want %q, nil", b[:n], err, want)
 		}
 	}
-	if _, _, err := c2.ReadFrom(b); !errors.Is(err, errTrunkEOF) {
-		t.Errorf("c2.ReadFrom() = %v, want %v", err, errTrunkEOF)
+	if _, _, err := c2.ReadFrom(b); !errors.Is(err, errTrunkClosed) {
+		t.Errorf("c2.ReadFrom() = %v, want %v", err, errTrunkClosed)
 	}
 
 	_ = c2.Close()
@@ -780,4 +781,47 @@ func TestCloneAddr(t *testing.T) {
 			t.Errorf("cloneAddr(%#v) = %#v, want it as is", addr, c)
 		}
 	}
+}
+
+// TestTrunkErrors ensures a trunk reports errors the same way as a UDP connection does:
+// wrapped in net.OpError, with net.ErrClosed after closure of either end instead of io.EOF.
+func TestTrunkErrors(t *testing.T) {
+	// expect fails unless err is a net.OpError for op wrapping target
+	expect := func(name string, err error, op string, target error) {
+		t.Helper()
+		var opErr *net.OpError
+		if !errors.As(err, &opErr) || opErr.Op != op || !errors.Is(err, target) || errors.Is(err, io.EOF) {
+			t.Errorf("%s = %v, want net.OpError for %q wrapping %v", name, err, op, target)
+		}
+	}
+	b := make([]byte, 16)
+
+	c1, c2 := BufferedTrunk(1, nil, nil)
+	_, _ = c1.WriteTo([]byte("long payload"), nil)
+	_, _, err := c2.ReadFrom(b[:4])
+	expect("c2.ReadFrom() with a short buffer", err, "read", io.ErrShortBuffer)
+
+	_ = c2.SetReadDeadline(time.Now().Add(-time.Second))
+	_, _, err = c2.ReadFrom(b)
+	expect("c2.ReadFrom() after the deadline", err, "read", os.ErrDeadlineExceeded)
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Errorf("c2.ReadFrom() = %v, want a net.Error timing out", err)
+	}
+	_ = c2.SetReadDeadline(time.Time{})
+
+	_ = c1.Close()
+	_, _, err = c2.ReadFrom(b)
+	expect("c2.ReadFrom() after remote closure", err, "read", net.ErrClosed)
+	_, err = c2.WriteTo(b, nil)
+	expect("c2.WriteTo() after remote closure", err, "write", net.ErrClosed)
+
+	_, _, err = c1.ReadFrom(b)
+	expect("c1.ReadFrom() after local closure", err, "read", net.ErrClosed)
+	_, err = c1.WriteTo(b, nil)
+	expect("c1.WriteTo() after local closure", err, "write", net.ErrClosed)
+	expect("c1.SetDeadline() after local closure", c1.SetDeadline(time.Time{}), "set", net.ErrClosed)
+	expect("c1.SetReadDeadline() after local closure", c1.SetReadDeadline(time.Time{}), "set", net.ErrClosed)
+	expect("c1.SetWriteDeadline() after local closure", c1.SetWriteDeadline(time.Time{}), "set", net.ErrClosed)
+	expect("c1.Close() after local closure", c1.Close(), "close", net.ErrClosed)
+	_ = c2.Close()
 }
