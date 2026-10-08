@@ -33,11 +33,16 @@ import (
 	"time"
 )
 
+// pipeAddr implements the net.Addr interface for the pipe network type.
 type pipeAddr struct{}
 
+// Network returns the network name for the pipe address.
 func (pipeAddr) Network() string { return pipeNetwork }
-func (pipeAddr) String() string  { return pipeNetwork }
 
+// String returns the network name for the pipe address.
+func (pipeAddr) String() string { return pipeNetwork }
+
+// pipe represents a stream-oriented communication channel between local and remote endpoints.
 type pipe struct {
 	rdDeadline deadline[noHook]
 	wrDeadline deadline[noHook]
@@ -134,9 +139,13 @@ func newPipe(queueSize int, semiSync bool) (StreamConn, StreamConn) {
 	return p1, p2
 }
 
-func (*pipe) LocalAddr() net.Addr  { return onePipeAddr }
+// LocalAddr returns the local address of the pipe end. The address is the same for all pipes.
+func (*pipe) LocalAddr() net.Addr { return onePipeAddr }
+
+// RemoteAddr returns the remote address of the pipe end. The address is the same for all pipes.
 func (*pipe) RemoteAddr() net.Addr { return onePipeAddr }
 
+// Read reads up to len(b) bytes from the pipe, returning the number of bytes read and an error.
 func (p *pipe) Read(b []byte) (int, error) {
 	n, err := p.read(b)
 	if err != nil && err != io.EOF { // Like TCP, io.EOF isn't wrapped, as callers compare it with ==
@@ -145,6 +154,11 @@ func (p *pipe) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// read reads up to len(b) bytes from the pipe and returns the number of bytes copied and any error.
+//
+// It serializes reads, since bytes retained by a semi-sync or async pipe are shared by them, and
+// blocks until any bytes are received or the pipe is closed or a deadline expires. It returns
+// bytes retained from a previous write first, and retains any bytes of a write left unread.
 func (p *pipe) read(b []byte) (n int, err error) {
 	// Fail fast without waiting for rdMu. Remote closure isn't checked here, because
 	// io.EOF depends on rdBuf guarded by rdMu. A concurrent Read holding rdMu observes
@@ -214,6 +228,7 @@ func (p *pipe) read(b []byte) (n int, err error) {
 	}
 }
 
+// Write writes len(b) bytes to the pipe, returning the number of bytes written and an error.
 func (p *pipe) Write(b []byte) (int, error) {
 	n, err := p.write(b)
 	if err != nil {
@@ -222,6 +237,11 @@ func (p *pipe) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// write sends the given byte slice b to the remote end and returns the number of bytes written and any error.
+//
+// It serializes writes, so that the entirety of b is written together, and blocks until all the bytes
+// have been read by a sync pipe, received by a semi-sync one, or queued by an async one, or until
+// the pipe is closed or a deadline expires. For async pipes, it copies b to avoid slice aliasing issues.
 func (p *pipe) write(b []byte) (n int, err error) {
 	switch {
 	case isClosedChan(p.localDone):
