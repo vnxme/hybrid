@@ -188,6 +188,42 @@ func TestSelectiveUDPConnNilAddrs(t *testing.T) {
 	}
 }
 
+// TestSelectiveUDPConnWriteCount ensures a write with packet info reports all the bytes
+// of a datagram as written, which WriteMsgUDPAddrPort doesn't on Windows since Go 1.26.
+func TestSelectiveUDPConnWriteCount(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	lo := netip.MustParseAddr("127.0.0.1")
+	pc, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(lo, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pc.Close() }()
+	c, err := NewSelectiveUDPConn(pc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(lo, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	payload := []byte("abc")
+	dst := client.LocalAddr().(*net.UDPAddr).AddrPort()
+	if n, err := c.WriteToFromUDPAddrPort(payload, dst, netip.AddrPortFrom(lo, 0), 0); n != len(payload) || err != nil {
+		t.Errorf("WriteToFromUDPAddrPort() = %d, %v, want %d, nil", n, err, len(payload))
+	}
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	b := make([]byte, 8)
+	if n, err := client.Read(b); string(b[:n]) != string(payload) || err != nil {
+		t.Errorf("client.Read() = %q, %v, want %q, nil", b[:n], err, payload)
+	}
+}
+
 func TestUDPAddrFromValidAddrPort(t *testing.T) {
 	type args struct {
 		ap netip.AddrPort

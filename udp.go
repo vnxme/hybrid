@@ -232,6 +232,11 @@ proceed:
 		n, _, err = u.WriteMsgUDPAddrPort(b, u.wr6OOB[:n], dst)
 	}
 
+	// Since Go 1.26, WriteMsgUDPAddrPort returns 0 bytes written on Windows, though it sends
+	// the whole datagram, as WriteMsgInet4 and WriteMsgInet6 in internal/poll ignore the count.
+	if err == nil && n == 0 {
+		n = len(b) // A datagram is sent either whole or not at all
+	}
 	return n, err
 }
 
