@@ -412,27 +412,34 @@ func testTrunkEmptyPacket(t *testing.T, ctor trunkCtor) {
 }
 
 // testTrunkErrors ensures a trunk reports errors the same way as a UDP connection does:
-// wrapped in net.OpError, with net.ErrClosed after closure of either end instead of io.EOF.
+// wrapped in net.OpError with the local and remote addresses, if any, and with net.ErrClosed
+// after closure of either end instead of io.EOF.
 func testTrunkErrors(t *testing.T, ctor trunkCtor) {
-	// expect fails unless err is a net.OpError for op wrapping target
-	expect := func(name string, err error, op string, target error) {
+	addr1 := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 53}
+	addr2 := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 53}
+	flow := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1001}
+
+	// expect fails unless err is a net.OpError for op with the given addresses wrapping target
+	expect := func(name string, err error, op string, source, addr net.Addr, target error) {
 		t.Helper()
 		var opErr *net.OpError
 		if !errors.As(err, &opErr) || opErr.Op != op || !errors.Is(err, target) || errors.Is(err, io.EOF) {
 			t.Errorf("%s = %v, want net.OpError for %q wrapping %v", name, err, op, target)
+		} else if !equalAddr(opErr.Source, source) || !equalAddr(opErr.Addr, addr) {
+			t.Errorf("%s = net.OpError from %v to %v, want from %v to %v", name, opErr.Source, opErr.Addr, source, addr)
 		}
 	}
 	b := make([]byte, 16)
 
-	c1, c2 := ctor(nil, nil)
+	c1, c2 := ctor(addr1, addr2)
 	wait := trunkWrite(t, c1, "long payload", nil, nil, 0)
 	_, _, err := c2.ReadFrom(b[:4])
-	expect("c2.ReadFrom() with a short buffer", err, "read", io.ErrShortBuffer)
+	expect("c2.ReadFrom() with a short buffer", err, "read", addr2, addr1, io.ErrShortBuffer)
 	wait()
 
 	_ = c2.SetReadDeadline(time.Now().Add(-time.Second))
 	_, _, err = c2.ReadFrom(b)
-	expect("c2.ReadFrom() after the deadline", err, "read", os.ErrDeadlineExceeded)
+	expect("c2.ReadFrom() after the deadline", err, "read", addr2, nil, os.ErrDeadlineExceeded)
 	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
 		t.Errorf("c2.ReadFrom() = %v, want a net.Error timing out", err)
 	}
@@ -440,18 +447,20 @@ func testTrunkErrors(t *testing.T, ctor trunkCtor) {
 
 	_ = c1.Close()
 	_, _, err = c2.ReadFrom(b)
-	expect("c2.ReadFrom() after remote closure", err, "read", net.ErrClosed)
+	expect("c2.ReadFrom() after remote closure", err, "read", addr2, nil, net.ErrClosed)
 	_, err = c2.WriteTo(b, nil)
-	expect("c2.WriteTo() after remote closure", err, "write", net.ErrClosed)
+	expect("c2.WriteTo() after remote closure", err, "write", addr2, nil, net.ErrClosed)
+	_, err = c2.WriteToFrom(b, addr1, flow, 0)
+	expect("c2.WriteToFrom() after remote closure", err, "write", flow, addr1, net.ErrClosed)
 
 	_, _, err = c1.ReadFrom(b)
-	expect("c1.ReadFrom() after local closure", err, "read", net.ErrClosed)
-	_, err = c1.WriteTo(b, nil)
-	expect("c1.WriteTo() after local closure", err, "write", net.ErrClosed)
-	expect("c1.SetDeadline() after local closure", c1.SetDeadline(time.Time{}), "set", net.ErrClosed)
-	expect("c1.SetReadDeadline() after local closure", c1.SetReadDeadline(time.Time{}), "set", net.ErrClosed)
-	expect("c1.SetWriteDeadline() after local closure", c1.SetWriteDeadline(time.Time{}), "set", net.ErrClosed)
-	expect("c1.Close() after local closure", c1.Close(), "close", net.ErrClosed)
+	expect("c1.ReadFrom() after local closure", err, "read", addr1, nil, net.ErrClosed)
+	_, err = c1.WriteTo(b, flow)
+	expect("c1.WriteTo() after local closure", err, "write", addr1, flow, net.ErrClosed)
+	expect("c1.SetDeadline() after local closure", c1.SetDeadline(time.Time{}), "set", nil, addr1, net.ErrClosed)
+	expect("c1.SetReadDeadline() after local closure", c1.SetReadDeadline(time.Time{}), "set", nil, addr1, net.ErrClosed)
+	expect("c1.SetWriteDeadline() after local closure", c1.SetWriteDeadline(time.Time{}), "set", nil, addr1, net.ErrClosed)
+	expect("c1.Close() after local closure", c1.Close(), "close", addr1, nil, net.ErrClosed)
 	_ = c2.Close()
 }
 

@@ -167,7 +167,7 @@ func (tr *trunk) ReadFrom(b []byte) (int, net.Addr, error) {
 func (tr *trunk) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, src, dst, idx, err := tr.read(b)
 	if err != nil {
-		err = &net.OpError{Op: "read", Net: trunkNetwork, Source: dst, Addr: src, Err: err}
+		err = tr.opError("read", dst, src, err)
 	}
 	return n, src, dst, idx, err
 }
@@ -242,7 +242,7 @@ func (tr *trunk) WriteTo(b []byte, dst net.Addr) (int, error) {
 func (tr *trunk) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	n, err := tr.write(b, dst, src, idx)
 	if err != nil {
-		err = &net.OpError{Op: "write", Net: trunkNetwork, Source: src, Addr: dst, Err: err}
+		err = tr.opError("write", src, dst, err)
 	}
 	return n, err
 }
@@ -310,7 +310,7 @@ success:
 // only once the local end is closed, since packets queued may be read after remote closure.
 func (tr *trunk) SetDeadline(t time.Time) error {
 	if isClosedChan(tr.localDone) {
-		return tr.opError("set", errTrunkClosed)
+		return tr.opError("set", nil, nil, errTrunkClosed)
 	}
 	tr.rdDeadline.Set(t)
 	tr.wrDeadline.Set(t)
@@ -321,7 +321,7 @@ func (tr *trunk) SetDeadline(t time.Time) error {
 // only once the local end is closed, since packets queued may be read after remote closure.
 func (tr *trunk) SetReadDeadline(t time.Time) error {
 	if isClosedChan(tr.localDone) {
-		return tr.opError("set", errTrunkClosed)
+		return tr.opError("set", nil, nil, errTrunkClosed)
 	}
 	tr.rdDeadline.Set(t)
 	return nil
@@ -331,7 +331,7 @@ func (tr *trunk) SetReadDeadline(t time.Time) error {
 // once either end is closed, since nothing may be written after that.
 func (tr *trunk) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(tr.localDone) || isClosedChan(tr.remoteDone) {
-		return tr.opError("set", errTrunkClosed)
+		return tr.opError("set", nil, nil, errTrunkClosed)
 	}
 	tr.wrDeadline.Set(t)
 	return nil
@@ -346,15 +346,22 @@ func (tr *trunk) Close() error {
 		closed = true
 	})
 	if !closed {
-		return tr.opError("close", errTrunkClosed)
+		return tr.opError("close", nil, nil, errTrunkClosed)
 	}
 	return nil
 }
 
-// opError wraps err in net.OpError for an operation unrelated to a packet,
-// the same way as a UDP connection does.
-func (tr *trunk) opError(op string, err error) error {
-	return &net.OpError{Op: op, Net: trunkNetwork, Addr: tr.addr, Err: err}
+// opError wraps err in net.OpError the same way as a UDP connection does: Source is the local
+// address, or the address of this end if nil, and Addr is the remote address, if any. Setting
+// a deadline reports the address of this end as Addr only.
+func (tr *trunk) opError(op string, local, remote net.Addr, err error) error {
+	if op == "set" {
+		return &net.OpError{Op: op, Net: trunkNetwork, Addr: tr.addr, Err: err}
+	}
+	if local == nil {
+		local = tr.addr
+	}
+	return &net.OpError{Op: op, Net: trunkNetwork, Source: local, Addr: remote, Err: err}
 }
 
 const trunkNetwork = "trunk"
