@@ -615,22 +615,28 @@ func TestPacketInfoUDPConnInterfaces(t *testing.T) {
 								dst, idx, netip.AddrPortFrom(to, u.port))
 						}
 
+						// reply writes from the given source address, or from the one the system chooses if it's invalid
+						reply := func(from netip.Addr, replyIdx int, want netip.Addr) {
+							t.Helper()
+							if _, err := c.WriteToFromUDPAddrPort([]byte("def"), src, netip.AddrPortFrom(from, 0), replyIdx); err != nil {
+								t.Errorf("WriteToFromUDPAddrPort(src %s, idx %d) = %v, want nil", from, replyIdx, err)
+								return
+							}
+							_ = client.SetReadDeadline(time.Now().Add(time.Second))
+							_, got, err := client.ReadFromUDPAddrPort(b)
+							if err != nil || got.Addr().Unmap().WithZone("") != want.WithZone("") || got.Port() != u.port {
+								t.Errorf("client.ReadFromUDPAddrPort() after a reply from %s with idx %d = %s, %v, want %s, nil",
+									from, replyIdx, got, err, netip.AddrPortFrom(want, u.port))
+							}
+						}
+
+						reply(netip.Addr{}, idx, to) // The system chooses the address the packet came to
 						for _, from := range ifcAddrs {
 							if from.Is4() != to.Is4() || from.IsLinkLocalUnicast() != to.IsLinkLocalUnicast() {
 								continue
 							}
-							for _, replyIdx := range []int{idx, 0} {
-								if _, err := c.WriteToFromUDPAddrPort([]byte("def"), src, netip.AddrPortFrom(from, 0), replyIdx); err != nil {
-									t.Errorf("WriteToFromUDPAddrPort(src %s, idx %d) = %v, want nil", from, replyIdx, err)
-									continue
-								}
-								_ = client.SetReadDeadline(time.Now().Add(time.Second))
-								_, got, err := client.ReadFromUDPAddrPort(b)
-								if err != nil || got.Addr().Unmap().WithZone("") != from.WithZone("") || got.Port() != u.port {
-									t.Errorf("client.ReadFromUDPAddrPort() after a reply from %s with idx %d = %s, %v, want %s, nil",
-										from, replyIdx, got, err, netip.AddrPortFrom(from, u.port))
-								}
-							}
+							reply(from, idx, from)
+							reply(from, 0, from)
 						}
 					})
 				}

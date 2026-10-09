@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -185,8 +186,9 @@ func (u *packetInfoUDPConn) WriteToFromUDP(b []byte, dst, src *net.UDPAddr, idx 
 }
 
 // WriteToFromUDPAddrPort calls a platform-specific packet info marshaller to fill a pooled control
-// message buffer before it proceeds to [net.UDPConn.WriteMsgUDPAddrPort], or, if idx is zero and src
-// is invalid, it calls [net.UDPConn.WriteToUDPAddrPort]. It fails with [syscall.EINVAL] if idx is negative,
+// message buffer before it proceeds to [net.UDPConn.WriteMsgUDPAddrPort], or, if src is invalid and idx
+// is zero, it calls [net.UDPConn.WriteToUDPAddrPort]. On Windows, it ignores idx if src is invalid, as the system
+// doesn't choose a source address for packet info. It fails with [syscall.EINVAL] if idx is negative,
 // dst isn't of an IP version the socket accepts, or src is valid but not of the same IP version as dst.
 // Mapped IPv4 addresses count as IPv4 ones.
 func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error) {
@@ -198,7 +200,9 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 		return 0, &net.OpError{Op: "write", Net: u.net, Source: addrFromValidAddrPort(src), Addr: addrFromValidAddrPort(dst), Err: syscall.EINVAL}
 	}
 
-	if idx == 0 && !src.IsValid() {
+	// Windows sends a datagram from an unspecified source address in packet info as is, i.e. from 0.0.0.0
+	// or ::, rather than choosing one, so let it choose both the address and the interface instead
+	if !src.IsValid() && (idx == 0 || runtime.GOOS == "windows") {
 		return u.WriteToUDPAddrPort(b, dst)
 	}
 
