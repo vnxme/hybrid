@@ -400,41 +400,31 @@ func (i *inlet) deleteConnection(conn *inletConn) {
 	}()
 }
 
+// deleteLoop deletes the flows whose connections have been closed and reported so far.
 func (i *inlet) deleteLoop() {
-	var bdg *inletBinding
-	var c *inletConn
-	var ok bool
-	var pkt *inletPacketSmall
-
-deleteLoop:
 	for {
 		select {
-		case c = <-i.deChan:
-			// Ignore any delete requests for non-closed connections.
-			if !isClosedChan(c.localDone) {
-				continue
-			}
-
-			// Find a binding and verify it points to the same connection,
-			// otherwise ignore this delete request as well.
-			bdg, ok = i.rt[c.key]
-			if ok && bdg.c == c {
-				// Ensure no packets remain in the connection's read channel.
-			drainLoop:
-				for {
-					select {
-					case pkt = <-c.rdRx:
-						putBuf(pkt.ref)
-					default:
-						break drainLoop
-					}
-				}
-
-				// Delete this connection from the routing table.
-				delete(i.rt, c.key)
+		case c := <-i.deChan:
+			// Ignore a request for a connection that isn't closed, or no longer has a flow, e.g. as it's been
+			// deleted already, and whose flow may have a new connection.
+			if bdg, ok := i.rt[c.key]; ok && bdg.c == c && isClosedChan(c.localDone) {
+				i.deleteFlow(c)
 			}
 		default:
-			break deleteLoop
+			return
+		}
+	}
+}
+
+// deleteFlow drains the read channel of a closed connection, and deletes its flow from the routing table.
+func (i *inlet) deleteFlow(c *inletConn) {
+	for {
+		select {
+		case pkt := <-c.rdRx:
+			putBuf(pkt.ref)
+		default:
+			delete(i.rt, c.key)
+			return
 		}
 	}
 }
@@ -448,10 +438,6 @@ func (i *inlet) readLoop() {
 	var p inletPacketInfo
 	buf := make([]byte, i.cfg.readBufferSize) // Read into, then copied into a buffer of the packet's size
 	for !isClosedChan(i.done) {
-		// If there are any closed connections, drain their read channels
-		// and delete these connections from the routing table.
-		i.deleteLoop()
-
 		// Read from the underlying FromToPacketConn and check for errors.
 		// Note: any error is ignored, if at least one byte has been read.
 		n, err := i.read(buf, &p)
@@ -476,6 +462,10 @@ func (i *inlet) readLoop() {
 			}
 			return
 		}
+
+		// Drain the read channels of the connections closed so far, e.g. while reading,
+		// and delete them from the routing table, so that their flows end before routing.
+		i.deleteLoop()
 
 		if i.udp != nil && !p.key.dst.IsValid() { // Packet info is missing, e.g. as it has been truncated
 			i.drops.noDestination.Add(1)
@@ -509,8 +499,16 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 	bdg, ok := i.rt[p.key]
 	if !ok || isClosedChan(bdg.c.localDone) { // A closed flow has ended, so its packet starts a new one
 		if !ok && len(i.rt) >= i.cfg.activeConnLimit {
-			i.drops.tableFull.Add(1)
-			return
+			// Delete the flows of closed connections whose closing hasn't been reported yet, then check again
+			for _, b := range i.rt {
+				if isClosedChan(b.c.localDone) {
+					i.deleteFlow(b.c)
+				}
+			}
+			if len(i.rt) >= i.cfg.activeConnLimit {
+				i.drops.tableFull.Add(1)
+				return
+			}
 		}
 
 		c := i.newConnection(p)
