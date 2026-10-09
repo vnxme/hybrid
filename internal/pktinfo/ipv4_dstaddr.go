@@ -52,30 +52,26 @@ var (
 	cMsgIPv4InterfacePayload = cMsgHeaderSpace + cMsgAlignOf(cMsgIPv4InterfaceSize)
 )
 
-// Marshal4 writes an IPv4 source address control message into the given OOB buffer.
-// It returns the number of bytes written/required, and true if the buffer has been large enough.
-func Marshal4(oob []byte, src netip.Addr, _ int) (int, bool) {
-	if len(oob) < cMsgIPv4DestAddrPayload {
-		return cMsgIPv4DestAddrPayload, false
-	}
+// marshal4 writes an IPv4 source address control message into the given OOB buffer,
+// and returns the number of bytes written. It panics if the buffer is too short.
+func marshal4(oob []byte, src netip.Addr, _ int) int {
+	clear(oob[:cMsgIPv4DestAddrPayload]) // E.g. padding
 
 	hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
 	hdr.SetLen(cMsgIPv4DestAddrLen)
 	hdr.Level, hdr.Type = cMsgIPv4DestAddrLevel, cMsgIPv4DestAddrType
 
-	addr := (*[cMsgIPv4DestAddrSize]byte)(oob[cMsgHeaderSpace:])
 	if src.Is4() {
-		*addr = src.As4()
-	} else {
-		*addr = [cMsgIPv4DestAddrSize]byte{}
+		*(*[cMsgIPv4DestAddrSize]byte)(oob[cMsgHeaderSpace:]) = src.As4()
 	}
 
-	return cMsgIPv4DestAddrPayload, true
+	return cMsgIPv4DestAddrPayload
 }
 
 // Parse searches packet info control messages in the given OOB buffer.
 // It returns a destination address, a local interface index, and true if a message has been found.
 // It skips a message too short for packet info, e.g. as truncation has shortened it.
+// An IPv4 destination address comes unmapped, even in IPv6 packet info on a dual-stack socket.
 func Parse(oob []byte) (dst netip.Addr, idx int, ok bool) {
 	for hdr, data := range cMsgs(oob) {
 		switch {

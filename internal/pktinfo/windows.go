@@ -49,6 +49,10 @@ const (
 	cMsgIPv6PacketInfoSize = int(unsafe.Sizeof(cMsgIPv6PacketInfo{}))
 
 	Truncated = windows.MSG_CTRUNC // Set in the flags of a read whose control messages are truncated
+
+	// ChoosesSource is false, as Windows sends a packet whose packet info carries an unspecified
+	// source address from this address as is, i.e. from 0.0.0.0 or ::.
+	ChoosesSource = false
 )
 
 var (

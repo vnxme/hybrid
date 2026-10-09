@@ -60,7 +60,7 @@ func BenchmarkIsLocalIP6(b *testing.B) {
 }
 
 // TestMarshalParse6 ensures IPv6 packet info, which has the same layout for sending and receiving,
-// is parsed as it has been marshalled. IPv4 packet info isn't parsed, as it has different meanings
+// is parsed as it has been marshalled, except that a mapped IPv4 address is parsed unmapped. IPv4 packet info isn't parsed, as it has different meanings
 // or even types for sending and receiving, e.g. on Linux, in_pktinfo carries the source address
 // in ipi_spec_dst for sending, but the destination one in ipi_addr for receiving, while BSD sends
 // IP_SENDSRCADDR with no interface index. Real IPv4 control messages are covered by
@@ -78,14 +78,15 @@ func TestMarshalParse6(t *testing.T) {
 		{netip.IPv6Loopback(), 0, netip.IPv6Loopback()},
 		{netip.IPv6Loopback(), 1, netip.IPv6Loopback()},
 		{netip.MustParseAddr("2001:db8::1"), math.MaxInt32, netip.MustParseAddr("2001:db8::1")},
+		{netip.MustParseAddr("::ffff:10.1.2.3"), 1, netip.MustParseAddr("10.1.2.3")}, // Unmapped
 	} {
 		oob := make([]byte, BufferSize)
 		for i := range oob {
 			oob[i] = 0xff // Any byte left unwritten is noticed
 		}
-		n, _ := Marshal6(oob, test.src, test.idx)
+		n := Marshal(oob, false, test.src, test.idx)
 		if dst, idx, ok := Parse(oob[:n]); dst != test.want || idx != test.idx || !ok {
-			t.Errorf("Parse() of Marshal6(%s, %d) = %s, %d, %v, want %s, %d, true",
+			t.Errorf("Parse() of Marshal(%s, %d) = %s, %d, %v, want %s, %d, true",
 				test.src, test.idx, dst, idx, ok, test.want, test.idx)
 		}
 	}

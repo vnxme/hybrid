@@ -35,7 +35,5 @@ const (
 // setPacketInfo4 fills IPv4 packet info for sending from src through the interface idx.
 func setPacketInfo4(info *cMsgIPv4PacketInfo, src [4]byte, idx int) {
 	info.Spec_dst = src
-	// The kernel ignores it for sending, but leave no stale bytes from a pooled buffer
-	info.Addr = [4]byte{}
 	info.Ifindex = int32(idx) //nolint:gosec // G115
 }

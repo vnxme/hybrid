@@ -30,6 +30,10 @@ const (
 	cMsgIPv6PacketInfoType  = unix.IPV6_PKTINFO
 
 	Truncated = unix.MSG_CTRUNC // Set in the flags of a read whose control messages are truncated
+
+	// ChoosesSource reports whether the system chooses the source address of a packet whose packet info
+	// carries an unspecified one, as it does for a packet without packet info.
+	ChoosesSource = true
 )
 
 var (

@@ -28,8 +28,20 @@ package pktinfo
 
 import (
 	"iter"
+	"net/netip"
 	"unsafe"
 )
+
+// Marshal writes a packet info control message for sending from src through the interface idx into oob,
+// for IPv4 if v4 is set, or for IPv6 otherwise, and returns the number of bytes written. It clears
+// the bytes it skips, e.g. padding, so that a pooled buffer passes no stale bytes on. Like
+// binary.BigEndian.PutUint32, it panics if oob is too short, which BufferSize bytes never are.
+func Marshal(oob []byte, v4 bool, src netip.Addr, idx int) int {
+	if v4 {
+		return marshal4(oob, src, idx)
+	}
+	return marshal6(oob, src, idx)
+}
 
 // cMsgAlignOf returns the number of bytes a structure of size n takes
 // including padding bytes to match the platform-specific data alignment.

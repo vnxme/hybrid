@@ -25,20 +25,16 @@ import (
 )
 
 const (
-	BufferSize = 0
-	Truncated  = 0
+	BufferSize    = 0
+	ChoosesSource = true
+	Truncated     = 0
 )
 
 var errPacketInfoUnsupported = fmt.Errorf("hybrid: packet info on %s/%s: %w", runtime.GOOS, runtime.GOARCH, errors.ErrUnsupported)
 
-// Marshal4 writes nothing, as this platform has no packet info, and reports success.
-func Marshal4(oob []byte, src netip.Addr, idx int) (int, bool) {
-	return 0, true
-}
-
-// Marshal6 writes nothing, as this platform has no packet info, and reports success.
-func Marshal6(oob []byte, src netip.Addr, idx int) (int, bool) {
-	return 0, true
+// Marshal writes nothing, as this platform has no packet info.
+func Marshal(oob []byte, v4 bool, src netip.Addr, idx int) int {
+	return 0
 }
 
 // Parse finds nothing, as this platform has no packet info.

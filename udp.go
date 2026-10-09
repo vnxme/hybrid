@@ -19,7 +19,6 @@ import (
 	"math"
 	"net"
 	"net/netip"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -162,7 +161,7 @@ func (u *packetInfoUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort
 	}
 	src = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
 	if dst, idx, ok := pktinfo.Parse(oob[:min(oobN, len(oob))]); ok {
-		return n, src, netip.AddrPortFrom(dst.Unmap(), u.port), idx, nil
+		return n, src, netip.AddrPortFrom(dst, u.port), idx, nil
 	}
 	return n, src, netip.AddrPort{}, 0, nil
 }
@@ -204,22 +203,15 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 		return 0, &net.OpError{Op: "write", Net: u.net, Source: addrFromValidAddrPort(src), Addr: addrFromValidAddrPort(dst), Err: syscall.EINVAL}
 	}
 
-	// Windows sends a datagram from an unspecified source address in packet info as is, i.e. from 0.0.0.0
-	// or ::, rather than choosing one, so let it choose both the address and the interface instead
-	if !src.IsValid() && (idx == 0 || runtime.GOOS == "windows") {
+	// Without src, let the system choose it, and the interface too, unless idx is set and the system
+	// chooses a source address for packet info without one, which Windows doesn't
+	if !src.IsValid() && (idx == 0 || !pktinfo.ChoosesSource) {
 		return u.WriteToUDPAddrPort(b, dst)
 	}
 
 	oob, ref := getBuf(pktinfo.BufferSize)
 	defer putBuf(ref)
-	clear(oob) // A pooled buffer may contain anything, e.g. in padding bytes the marshaller skips
-
-	var oobN int
-	if is4 {
-		oobN, _ = pktinfo.Marshal4(oob, src.Addr().Unmap(), idx)
-	} else {
-		oobN, _ = pktinfo.Marshal6(oob, src.Addr().Unmap(), idx)
-	}
+	oobN := pktinfo.Marshal(oob, is4, src.Addr().Unmap(), idx)
 	n, _, err = u.WriteMsgUDPAddrPort(b, oob[:oobN], dst)
 
 	// Since Go 1.26, WriteMsgUDPAddrPort returns 0 bytes written on Windows, though it sends

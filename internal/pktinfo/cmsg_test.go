@@ -17,6 +17,7 @@
 package pktinfo
 
 import (
+	"bytes"
 	"net/netip"
 	"reflect"
 	"testing"
@@ -44,21 +45,30 @@ func BenchmarkControlMessageAlignOf(b *testing.B) {
 	})
 }
 
-// TestMarshalSize ensures the marshallers report the size they need.
+// TestMarshalSize ensures Marshal fits in BufferSize bytes and clears the bytes it skips, e.g. padding,
+// and that it panics before writing anything into a buffer too short for the message.
 func TestMarshalSize(t *testing.T) {
-	for _, marshal := range []struct {
-		name string
-		f    func(oob []byte, src netip.Addr, idx int) (int, bool)
-	}{
-		{"Marshal4", Marshal4},
-		{"Marshal6", Marshal6},
-	} {
-		n, ok := marshal.f(make([]byte, BufferSize), netip.Addr{}, 0)
-		if n <= 0 || n > BufferSize || !ok {
-			t.Errorf("%s() into %d bytes = %d, %v, want up to %d, true", marshal.name, BufferSize, n, ok, BufferSize)
+	for _, v4 := range []bool{true, false} {
+		oob := bytes.Repeat([]byte{0xff}, BufferSize) // Any byte left as is is noticed
+		n := Marshal(oob, v4, netip.Addr{}, 0)
+		if n <= 0 || n > BufferSize {
+			t.Fatalf("Marshal(v4 %v) into %d bytes = %d, want up to %d", v4, BufferSize, n, BufferSize)
 		}
-		if got, ok := marshal.f(make([]byte, n-1), netip.Addr{}, 0); got != n || ok {
-			t.Errorf("%s() into %d bytes = %d, %v, want %d, false", marshal.name, n-1, got, ok, n)
+		if i := bytes.IndexByte(oob[:n], 0xff); i >= 0 {
+			t.Errorf("Marshal(v4 %v) = % x, want byte %d cleared", v4, oob[:n], i)
+		}
+
+		short := bytes.Repeat([]byte{0xff}, n-1)
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Marshal(v4 %v) into %d bytes didn't panic", v4, n-1)
+				}
+			}()
+			Marshal(short, v4, netip.Addr{}, 0)
+		}()
+		if !bytes.Equal(short, bytes.Repeat([]byte{0xff}, n-1)) {
+			t.Errorf("Marshal(v4 %v) into %d bytes wrote % x before panicking", v4, n-1, short)
 		}
 	}
 }
@@ -73,7 +83,7 @@ func TestParseBounds(t *testing.T) {
 	// with its length field set to n
 	message := func(size, n int) []byte {
 		oob := make([]byte, max(size, cMsgIPv6PacketInfoPayload))
-		Marshal6(oob, ip, 7)
+		Marshal(oob, false, ip, 7)
 		reflect.ValueOf(&(*cMsgHeader)(unsafe.Pointer(&oob[0])).Len).Elem().SetUint(uint64(n))
 		return oob[:size]
 	}
