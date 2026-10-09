@@ -146,6 +146,7 @@ func testPacketInletWithPairedConns(t *testing.T, ctor packetConnPairCtor, accep
 
 	timeout := 50 * time.Millisecond
 	chr, chw, done := make(chan int), make(chan int), make(chan struct{})
+	var stats InletStats // Of the inlet, once closed
 
 	connHandler := func(mc MixedConn, ln PacketListener, wg *sync.WaitGroup) {
 		defer wg.Done()
@@ -195,7 +196,10 @@ func testPacketInletWithPairedConns(t *testing.T, ctor packetConnPairCtor, accep
 			WithAcceptQueueSize(acceptQueueSize),
 			WithReadQueueSize(readQueueSize),
 			WithReadBufferSize(readBufferSize))
-		defer func() { _ = ln.Close() }()
+		defer func() {
+			_ = ln.Close()
+			stats = ln.(interface{ Stats() InletStats }).Stats()
+		}()
 
 		for {
 			newMixedConn, err := ln.Accept()
@@ -272,8 +276,11 @@ loop:
 	}
 
 	wg.Wait()
-	if acr != acw || anr != anw {
-		message := fmt.Sprintf("r/w statistics: count %d/%d, bytes %d/%d", acr, acw, anr, anw)
+
+	// The inlet drops a packet rather than wait for a slow reader, and counts it
+	dropped := int(stats.ConnQueueFull + stats.AcceptQueueFull + stats.TableFull + stats.NoDestination)
+	if acr+dropped != acw || anr+dropped*writeBufferSize != anw {
+		message := fmt.Sprintf("r/w statistics: count %d+%d/%d, bytes %d+%d/%d", acr, dropped, acw, anr, dropped*writeBufferSize, anw)
 		if pc2.LocalAddr().Network() == "udp" {
 			// UDP doesn't guarantee that all packets sent will be received,
 			// so we can't consider this test as failing if anything is lost.
@@ -281,7 +288,7 @@ loop:
 		}
 
 		// However, pipes do guarantee that all packets are delivered,
-		// so any loss represents a failure of this test.
+		// so any loss the inlet doesn't count represents a failure of this test.
 		t.Error(message)
 	}
 }

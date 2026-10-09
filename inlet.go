@@ -19,10 +19,10 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/netip"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -89,7 +89,6 @@ import (
 
 type inletConfig struct {
 	idleTimeout  time.Duration
-	readTimeout  time.Duration
 	writeTimeout time.Duration
 
 	acceptQueueSize int
@@ -105,7 +104,6 @@ type inletConfig struct {
 
 var defaultInletConfig = inletConfig{
 	idleTimeout:      poIdleTimeoutDef,
-	readTimeout:      piReadTimeoutDef,
 	writeTimeout:     piWriteTimeoutDef,
 	acceptQueueSize:  piAcceptQueueSizeDef,
 	deleteQueueSize:  piDeleteQueueSizeDef,
@@ -126,8 +124,8 @@ func (f inletOptionFunc) apply(cfg *inletConfig) { f(cfg) }
 
 var noOpInletOption = inletOptionFunc(func(p *inletConfig) {})
 
-// WithAcceptQueueSize sets the maximum number of virtual connections (outlets)
-// waiting to be accepted.
+// WithAcceptQueueSize sets the maximum number of inlet connections waiting to be accepted.
+// The first packet of a new flow is dropped if the accept queue is full.
 func WithAcceptQueueSize(value int) InletOption {
 	if value < piAcceptQueueSizeMin {
 		return noOpInletOption
@@ -144,8 +142,8 @@ func WithReadBufferSize(value int) InletOption {
 	return inletOptionFunc(func(cfg *inletConfig) { cfg.readBufferSize = value })
 }
 
-// WithReadQueueSize sets the maximum number of packets waiting to be read
-// from each virtual connection (outlet).
+// WithReadQueueSize sets the maximum number of packets waiting to be read from each inlet connection.
+// A packet is dropped if the queue of its inlet connection is full.
 func WithReadQueueSize(value int) InletOption {
 	if value < poReadQueueSizeMin {
 		return noOpInletOption
@@ -186,35 +184,54 @@ type inletBinding struct {
 }
 
 type inletPacketSmall struct {
-	c *inletConn // Origin / target
-	b []byte     // Reusable buffer
-	n int        // Bytes consumed
+	c   *inletConn // Origin / target
+	ref *[]byte    // Reference for putBuf, if b comes from getBuf
+	b   []byte     // Reusable buffer
+	n   int        // Bytes consumed
 }
 
-type inletPacketLarge struct {
-	r net.Addr // Remote address
-	l net.Addr // Local address
-	b []byte   // Reusable buffer
-	n int      // Bytes consumed
-	i int      // Interface index
+// flowKey identifies a flow: by its source and destination addresses for a UDP connection
+// that reports destination addresses, or by its source address alone otherwise, as src
+// for a *net.UDPAddr, or as the string of any other address in addr.
+type flowKey struct {
+	src, dst netip.AddrPort
+	addr     string
+}
+
+// inletPacketInfo describes a packet read from the underlying connection.
+type inletPacketInfo struct {
+	src, dst net.Addr // Only if read from a connection other than a FromToUDPConn
+	key      flowKey
+	idx      int
+}
+
+// InletStats counts the packets an inlet has dropped, by reason.
+type InletStats struct {
+	ConnQueueFull   uint64 // The queue of the inlet connection of the packet was full
+	AcceptQueueFull uint64 // The accept queue was full when the packet started a new flow
+	TableFull       uint64 // The flow table was full when the packet started a new flow
+	NoDestination   uint64 // The packet had no destination address, while the inlet uses them
 }
 
 // inlet implements PacketListener for any underlying PacketConn.
 type inlet struct {
-	pc FromToPacketConn // Underlying PacketConn
+	pc  FromToPacketConn // Underlying PacketConn
+	udp FromToUDPConn    // The same as pc if it's a FromToUDPConn, which reports destination addresses
 
 	acChan chan *inletConn        // Accept channel
 	deChan chan *inletConn        // Delete channel
-	rdChan chan *inletPacketLarge // Read channel
 	wrChan chan *inletPacketSmall // Write channel
 	done   chan struct{}          // Done channel
 
-	rt map[string]*inletBinding // Routing table
+	rt map[flowKey]*inletBinding // Routing table
 
-	slicePool sync.Pool
+	slicePool sync.Pool // Buffers for writing
+
+	drops struct {
+		connQueueFull, acceptQueueFull, tableFull, noDestination atomic.Uint64
+	}
 
 	wg   sync.WaitGroup
-	mu   sync.RWMutex
 	once sync.Once
 
 	cfg inletConfig
@@ -233,7 +250,7 @@ func Inlet(pc PacketConn, opts ...InletOption) PacketListener {
 		deChan: make(chan *inletConn, cfg.deleteQueueSize),
 		wrChan: make(chan *inletPacketSmall, cfg.writeQueueSize),
 		done:   make(chan struct{}),
-		rt:     make(map[string]*inletBinding),
+		rt:     make(map[flowKey]*inletBinding),
 		slicePool: sync.Pool{
 			New: func() any {
 				return make([]byte, cfg.readBufferSize)
@@ -241,6 +258,7 @@ func Inlet(pc PacketConn, opts ...InletOption) PacketListener {
 		},
 		cfg: cfg,
 	}
+	i.udp, _ = i.pc.(FromToUDPConn)
 
 	i.wg.Add(2)
 	go i.readLoop()
@@ -264,6 +282,16 @@ func (i *inlet) Accept() (MixedConn, error) {
 
 // Addr returns the local network address, if known.
 func (i *inlet) Addr() net.Addr { return i.pc.LocalAddr() }
+
+// Stats returns the numbers of packets dropped so far, by reason.
+func (i *inlet) Stats() InletStats {
+	return InletStats{
+		ConnQueueFull:   i.drops.connQueueFull.Load(),
+		AcceptQueueFull: i.drops.acceptQueueFull.Load(),
+		TableFull:       i.drops.tableFull.Load(),
+		NoDestination:   i.drops.noDestination.Load(),
+	}
+}
 
 // Close closes the underlying PacketConn, the outlets and terminates the internal goroutines.
 // Any operations blocked by Accept will be unblocked and return errors.
@@ -303,6 +331,9 @@ func (i *inlet) closeWith(closeUnderlying bool) (err error) {
 			if err = i.pc.Close(); err != nil {
 				// TODO(vnxme): log an unexpected closing error
 			}
+		} else {
+			// Interrupt the reading and writing of the loops, keeping the underlying PacketConn open
+			_ = i.pc.SetDeadline(time.Unix(1, 0))
 		}
 
 		// Wait until the internal goroutines return.
@@ -318,17 +349,9 @@ func (i *inlet) logError(err error) {
 	// TODO(vnxme): Log an unexpected reading/writing error
 }
 
-// addrString returns the string of the given address, or an empty string if there is none,
-// e.g. as the underlying connection doesn't report destination addresses.
-func addrString(a net.Addr) string {
-	if a == nil {
-		return ""
-	}
-	return a.String()
-}
-
-func (i *inlet) newBinding(src, dst net.Addr, idx int, key string) *inletBinding {
-	bdg := &inletBinding{c: i.newConnection(src, dst, idx, key)}
+// newBinding returns a binding of the given inlet connection, and starts its idle timeout.
+func (i *inlet) newBinding(c *inletConn) *inletBinding {
+	bdg := &inletBinding{c: c}
 	if i.cfg.idleTimeout > 0 {
 		bdg.d = HookDeadline(func() {
 			_ = bdg.c.Close()
@@ -338,8 +361,14 @@ func (i *inlet) newBinding(src, dst net.Addr, idx int, key string) *inletBinding
 	return bdg
 }
 
-func (i *inlet) newConnection(src, dst net.Addr, idx int, key string) *inletConn {
-	return &inletConn{
+// newConnection returns a new inlet connection for the flow of the given packet.
+func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
+	src, dst := p.src, p.dst
+	if i.udp != nil {
+		src, dst = addrPortToAddr(p.key.src), addrPortToAddr(p.key.dst)
+	}
+
+	ic := &inletConn{
 		rdRx: make(chan *inletPacketSmall, i.cfg.readQueueSize),
 		wrTx: i.wrChan,
 		wrRx: make(chan int),
@@ -353,11 +382,11 @@ func (i *inlet) newConnection(src, dst net.Addr, idx int, key string) *inletConn
 		localAddr:  dst,
 		remoteAddr: src,
 
-		localIfIdx: idx,
-
 		parent: i,
-		key:    key,
+		key:    p.key,
 	}
+	ic.localIfIdx.Store(int64(p.idx))
+	return ic
 }
 
 func (i *inlet) deleteConnection(conn *inletConn) {
@@ -370,180 +399,6 @@ func (i *inlet) deleteConnection(conn *inletConn) {
 		i.wg.Done()
 	}()
 }
-
-func (i *inlet) cleanLoop() {
-	defer i.wg.Done()
-
-	ticker := time.NewTicker(piCleanInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-i.done:
-			return
-		case <-ticker.C:
-			i.mu.Lock()
-			for k, v := range i.rt {
-				if isClosedChan(v.c.localDone) {
-					delete(i.rt, k)
-				}
-			}
-			i.mu.Unlock()
-		}
-	}
-}
-
-//
-//func (i *inlet) readLoop2() {
-//	defer i.wg.Done()
-//
-//	var buf []byte
-//	var err error
-//	var dst, src net.Addr
-//	var idx, n int
-//	var nrr net.Error
-//	var pkt NetworkPacket
-//
-//loop:
-//	for {
-//		if isClosedChan(i.done) {
-//			return
-//		}
-//
-//		// Obtain a reusable slice from the pool.
-//		buf = i.slicePool.Get().([]byte)
-//
-//	readWithDeadline:
-//		err = i.pc.SetReadDeadline(time.Now().Add(piReadTimeoutDef))
-//		if err != nil {
-//			// Log an error, unless the underlying FromToPacketConn is closed.
-//			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
-//				i.logError(err)
-//			}
-//
-//			// If the underlying FromToPacketConn has unexpectedly closed while
-//			// the inlet's done channel remains open, spawn a closing goroutine.
-//			// Close() waits until readLoop() returns, so it can't be done in sync.
-//			if !isClosedChan(i.done) {
-//				go func() {
-//					_ = i.Close()
-//				}()
-//			}
-//
-//			break
-//		}
-//
-//		// Read from the underlying FromToPacketConn and check for errors.
-//		// Note: any error is ignored, if at least one byte has been read.
-//		n, src, dst, idx, err = i.pc.ReadFromTo(buf)
-//		if n == 0 {
-//			if err != nil {
-//				// If it's a timeout, release the empty packet to the pool and return, or continue the loop.
-//				if errors.As(err, &nrr) && nrr.Timeout() {
-//					if isClosedChan(i.done) {
-//						break
-//					}
-//
-//					goto readWithDeadline
-//				}
-//
-//				// Log an error, unless the underlying FromToPacketConn is closed.
-//				if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
-//					i.logError(err)
-//				}
-//
-//				// If the underlying FromToPacketConn has unexpectedly closed while
-//				// the inlet's done channel remains open, spawn a closing goroutine.
-//				// Close() waits until readLoop() returns, so it can't be done in sync.
-//				if !isClosedChan(i.done) {
-//					go func() {
-//						_ = i.Close()
-//					}()
-//				}
-//
-//				break
-//			}
-//
-//			pkt = &dataPacketWithSocketInfo{DataPacket: emptyPacket, remoteAddr: src, localAddr: dst, localIfIdx: idx}
-//		} else {
-//			// Give a warning, if all available bytes have been filled.
-//			if n == len(buf) {
-//				// TODO(vnxme): Warn that some bytes might have been truncated
-//				// 				and recommend increasing the read buffer size
-//			}
-//
-//			pkt = &dataPacketWithSocketInfo{DataPacket: &uniformDataPacket{b: buf, n: n}, remoteAddr: src, localAddr: dst, localIfIdx: idx}
-//		}
-//
-//		select {
-//		case i.rdChan <- pkt:
-//		case <-i.done:
-//			break loop
-//		}
-//	}
-//
-//	// Release the buffer to the pool and return.
-//	i.slicePool.Put(buf)
-//}
-//
-//func (i *inlet) routeLoop() {
-//	defer i.wg.Done()
-//
-//	var key string
-//	var nbd, ok bool
-//	var pbd *inletBinding
-//	var sb strings.Builder
-//
-//	for {
-//		select {
-//		case pkt := <-i.rdChan:
-//			// Use remote and local addresses and local interface indices as keys to track active connections.
-//			sb.Grow(piKeyBufferSize)
-//			sb.WriteString(pkt.RemoteAddr().String())
-//			sb.WriteString("|")
-//			sb.WriteString(pkt.LocalAddr().String())
-//			sb.WriteString("|")
-//			sb.WriteString(strconv.Itoa(pkt.LocalIfIdx()))
-//			key = sb.String()
-//			sb.Reset()
-//
-//			// Look up a binding in the routing table.
-//			i.mu.RLock()
-//			pbd, ok = i.rt[key]
-//			i.mu.RUnlock()
-//
-//			// Determine if a new binding has to be created.
-//			nbd = !ok || isClosedChan(pbd.c.localDone)
-//
-//		createNewBinding:
-//			if nbd { // TODO(vnxme): limit creating new bindings
-//				// Create a new binding.
-//				pbd = i.newBinding(pkt.RemoteAddr(), pkt.LocalAddr(), pkt.LocalIfIdx())
-//
-//				// Add the binding to the routing table.
-//				i.mu.Lock()
-//				i.rt[key] = pbd
-//				i.mu.Unlock()
-//
-//				// Send the new connection to the accept channel or drop it.
-//				select {
-//				case i.acChan <- pbd.c:
-//				case <-pbd.c.localDone:
-//					// If this connection is closed, jump back and create a new binding
-//					// in order to ensure no packets are prematurely dropped.
-//					nbd = true
-//					goto createNewBinding
-//				case <-i.done:
-//					break
-//				}
-//			}
-//		case outlet := <-i.deChan:
-//
-//		case <-i.done:
-//			return
-//		}
-//	}
-//}
 
 func (i *inlet) deleteLoop() {
 	var bdg *inletBinding
@@ -569,7 +424,7 @@ deleteLoop:
 				for {
 					select {
 					case pkt = <-c.rdRx:
-						i.slicePool.Put(pkt.b)
+						putBuf(pkt.ref)
 					default:
 						break drainLoop
 					}
@@ -584,163 +439,104 @@ deleteLoop:
 	}
 }
 
+// readLoop reads packets from the underlying connection and routes them to their inlet connections,
+// until the inlet closes or the underlying connection fails.
 func (i *inlet) readLoop() {
 	defer i.wg.Done()
 
-	var bdg *inletBinding
-	var buf []byte
-	var err error
-	var idx, n int
-	var key string
 	var nrr net.Error
-	var ok, needNewBinding bool
-	var pkt *inletPacketSmall
-	var sb strings.Builder
-	var src, dst net.Addr
-
-loop:
-	for {
-		// Obtain a reusable buffer from the pool.
-		buf = i.slicePool.Get().([]byte)
-
-	repeatReading:
-		if isClosedChan(i.done) {
-			break loop
-		}
-
+	var p inletPacketInfo
+	buf := make([]byte, i.cfg.readBufferSize) // Read into, then copied into a buffer of the packet's size
+	for !isClosedChan(i.done) {
 		// If there are any closed connections, drain their read channels
 		// and delete these connections from the routing table.
 		i.deleteLoop()
 
-		if i.cfg.readTimeout > 0 {
-			err = i.pc.SetReadDeadline(time.Now().Add(i.cfg.readTimeout))
-			if err != nil {
-				// Log an error, unless the underlying FromToPacketConn is closed.
-				if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
-					i.logError(err)
-				}
-
-				// If the underlying FromToPacketConn has unexpectedly closed while
-				// the inlet's done channel remains open, spawn a closing goroutine.
-				// Close() waits until readLoop() returns, so it can't be done in sync.
-				if !isClosedChan(i.done) {
-					go func() {
-						_ = i.Close()
-					}()
-				}
-
-				break loop
-			}
-		}
-
 		// Read from the underlying FromToPacketConn and check for errors.
 		// Note: any error is ignored, if at least one byte has been read.
-		n, src, dst, idx, err = i.pc.ReadFromTo(buf)
-		if n == 0 {
-			if err != nil {
-				// If it's a timeout, release the empty packet to the pool and return, or continue the loop.
-				if errors.As(err, &nrr) && nrr.Timeout() {
-					goto repeatReading
-				}
-
-				// Log an error, unless the underlying FromToPacketConn is closed.
-				if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
-					i.logError(err)
-				}
-
-				// If the underlying FromToPacketConn has unexpectedly closed while
-				// the inlet's done channel remains open, spawn a closing goroutine.
-				// Close() waits until readLoop() returns, so it can't be done in sync.
-				if !isClosedChan(i.done) {
-					go func() {
-						_ = i.Close()
-					}()
-				}
-
-				break loop
+		n, err := i.read(buf, &p)
+		if n == 0 && err != nil {
+			// A timeout interrupts reading when the inlet closes, so check it at the top of the loop
+			if errors.As(err, &nrr) && nrr.Timeout() {
+				continue
 			}
-		} else {
-			// Give a warning, if all available bytes have been filled.
-			if n == len(buf) {
-				// TODO(vnxme): Warn that some bytes might have been truncated
-				// 				and recommend increasing the read buffer size
+
+			// Log an error, unless the underlying FromToPacketConn is closed.
+			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
+				i.logError(err)
 			}
+
+			// If the underlying FromToPacketConn has unexpectedly closed while
+			// the inlet's done channel remains open, spawn a closing goroutine.
+			// Close() waits until readLoop() returns, so it can't be done in sync.
+			if !isClosedChan(i.done) {
+				go func() {
+					_ = i.Close()
+				}()
+			}
+			return
 		}
 
-		// Use remote and local addresses and local interface indices as keys to track active connections.
-		sb.Grow(piKeyBufferSize)
-		sb.WriteString(addrString(src))
-		sb.WriteString("|")
-		sb.WriteString(addrString(dst))
-		sb.WriteString("|")
-		sb.WriteString(strconv.Itoa(idx))
-		key = sb.String()
-		sb.Reset()
-
-		// Look up a connection in the routing table and determine
-		// if a new connection binding has to be created.
-		bdg, ok = i.rt[key]
-		if ok {
-			needNewBinding = isClosedChan(bdg.c.localDone)
-		} else {
-			if len(i.rt) >= i.cfg.activeConnLimit {
-				// TODO(vnxme): Warn that a new connection could have been processed
-				// 				and recommend increasing the active connection limit
-				goto repeatReading
-			}
-			needNewBinding = true
+		if i.udp != nil && !p.key.dst.IsValid() { // Packet info is missing, e.g. as it has been truncated
+			i.drops.noDestination.Add(1)
+			continue
 		}
+		i.route(buf[:n], &p)
+	}
+}
 
-		// Replace a uniformDataPacket with an emptyDataPacket if possible.
-		if n == 0 {
-			pkt = &inletPacketSmall{}
-		} else {
-			pkt = &inletPacketSmall{b: buf, n: n}
-		}
-
-	repeatBinding:
-		if needNewBinding {
-			// Create a new connection binding.
-			bdg = i.newBinding(src, dst, idx, key)
-
-			// Add the new connection binding to the routing table.
-			i.rt[key] = bdg
-
-			// Send the new connection to the accept channel or drop it.
-			select {
-			case i.acChan <- bdg.c:
-			case <-bdg.c.localDone:
-				// If this connection is closed, jump back and create a new binding
-				// in order to ensure no packets are prematurely dropped.
-				needNewBinding = true
-				goto repeatBinding
-			case <-i.done:
-				break loop
-			}
-		}
-
-		// Fill a pointer to the outlet.
-		pkt.c = bdg.c
-
-		// Send the packet to the connection's read channel or drop it.
-		select {
-		case bdg.c.rdRx <- pkt:
-			// Reuse the empty buffer when it's possible.
-			if n == 0 {
-				goto repeatReading
-			}
-		case <-bdg.c.localDone:
-			// If this connection is closed, jump back and create a new binding
-			// in order to ensure no packets are prematurely dropped.
-			needNewBinding = true
-			goto repeatBinding
-		case <-i.done:
-			break loop
-		}
+// read reads a packet into b and fills in p, the key of its flow, its addresses and its interface index.
+// It returns the number of bytes read and an error, which matters only if no bytes have been read.
+func (i *inlet) read(b []byte, p *inletPacketInfo) (n int, err error) {
+	*p = inletPacketInfo{}
+	if i.udp != nil {
+		n, p.key.src, p.key.dst, p.idx, err = i.udp.ReadFromToUDPAddrPort(b)
+		return n, err
 	}
 
-	// Release the buffer to the pool.
-	i.slicePool.Put(buf)
+	n, p.src, p.dst, p.idx, err = i.pc.ReadFromTo(b)
+	if a, ok := p.src.(*net.UDPAddr); ok {
+		p.key.src = a.AddrPort()
+	} else if p.src != nil {
+		p.key.addr = p.src.String()
+	}
+	return n, err
+}
+
+// route passes a packet to the inlet connection of its flow, which the first packet of a flow creates
+// and queues for Accept. It drops the packet rather than wait if a queue is full or the table is.
+func (i *inlet) route(data []byte, p *inletPacketInfo) {
+	bdg, ok := i.rt[p.key]
+	if !ok || isClosedChan(bdg.c.localDone) { // A closed flow has ended, so its packet starts a new one
+		if !ok && len(i.rt) >= i.cfg.activeConnLimit {
+			i.drops.tableFull.Add(1)
+			return
+		}
+
+		c := i.newConnection(p)
+		select {
+		case i.acChan <- c:
+		default: // Don't create a flow, so that a retry of the packet is a new flow
+			i.drops.acceptQueueFull.Add(1)
+			return
+		}
+
+		bdg = i.newBinding(c)
+		i.rt[p.key] = bdg
+	}
+	bdg.c.localIfIdx.Store(int64(p.idx)) // The latest one is used for replies
+
+	pkt := &inletPacketSmall{c: bdg.c, n: len(data)}
+	if len(data) > 0 {
+		pkt.b, pkt.ref = getBuf(len(data))
+		copy(pkt.b, data)
+	}
+	select {
+	case bdg.c.rdRx <- pkt:
+	default:
+		putBuf(pkt.ref)
+		i.drops.connQueueFull.Add(1)
+	}
 }
 
 func (i *inlet) writeLoop() {
@@ -786,7 +582,7 @@ loop:
 
 			// Write to the underlying FromToPacketConn and check for errors.
 			// Note: any error is ignored, if at least one byte has been written.
-			n, err = i.pc.WriteToFrom(pkt.b[:pkt.n], pkt.c.remoteAddr, pkt.c.localAddr, pkt.c.localIfIdx)
+			n, err = i.pc.WriteToFrom(pkt.b[:pkt.n], pkt.c.remoteAddr, pkt.c.localAddr, pkt.c.LocalIfIdx())
 			if n == 0 && err != nil {
 				// If it's a timeout, drop the packet and return, or continue the loop.
 				if errors.As(err, &nrr) && nrr.Timeout() {
@@ -840,7 +636,7 @@ loop:
 type inletConn struct {
 	parent *inlet
 
-	localIfIdx int
+	localIfIdx atomic.Int64 // The latest one, used for replies
 
 	localAddr  net.Addr
 	remoteAddr net.Addr
@@ -865,7 +661,7 @@ type inletConn struct {
 	rdMu sync.Mutex // Serialize Read operations
 	wrMu sync.Mutex // Serialize Write operations
 
-	key string
+	key flowKey
 }
 
 func (ic *inletConn) Read(b []byte) (int, error) {
@@ -910,16 +706,16 @@ func (ic *inletConn) readFromTo(b []byte) (int, net.Addr, net.Addr, int, error) 
 	select {
 	case pkt := <-ic.rdRx:
 		nr := copy(b, pkt.b[:pkt.n])
-		ic.parent.slicePool.Put(pkt.b)
-		return nr, ic.remoteAddr, ic.localAddr, ic.localIfIdx, nil
+		putBuf(pkt.ref)
+		return nr, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), nil
 	case <-ic.localDone:
 		return 0, nil, nil, 0, io.ErrClosedPipe
 	case <-ic.remoteDone:
 		if len(ic.rdRx) > 0 {
 			pkt := <-ic.rdRx
 			nr := copy(b, pkt.b[:pkt.n])
-			ic.parent.slicePool.Put(pkt.b)
-			return nr, ic.remoteAddr, ic.localAddr, ic.localIfIdx, nil
+			putBuf(pkt.ref)
+			return nr, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), nil
 		}
 		return 0, nil, nil, 0, io.EOF
 	case <-ic.rdDeadline.Wait():
@@ -1007,7 +803,7 @@ func (ic *inletConn) Close() (err error) {
 	return
 }
 
-func (ic *inletConn) LocalIfIdx() int { return ic.localIfIdx }
+func (ic *inletConn) LocalIfIdx() int { return int(ic.localIfIdx.Load()) }
 
 func (ic *inletConn) LocalAddr() net.Addr {
 	if ic.localAddr == nil {
@@ -1049,13 +845,10 @@ const (
 	poIdleTimeoutMin = 0 * time.Second
 
 	poReadQueueSizeDef = 32
-	poReadQueueSizeMin = 0 // A read channel of size 0 is unbuffered
-
-	hcWriteQueueDefSize = 32
-	hcWriteQueueMinSize = 0 // A read channel of size 0 is unbuffered
+	poReadQueueSizeMin = 1 // As the read loop drops a packet rather than wait for a reader
 
 	piAcceptQueueSizeDef = 8
-	piAcceptQueueSizeMin = 0 // An accept channel of size 0 is unbuffered
+	piAcceptQueueSizeMin = 1 // As the read loop drops a new flow rather than wait for Accept
 
 	piDeleteQueueSizeDef = 8
 	piDeleteQueueSizeMin = 0
@@ -1064,12 +857,7 @@ const (
 	piReadBufferSizeMax = math.MaxInt32             // The largest int on 32-bit platforms, while an IPv6 jumbogram may take 4 GiB
 	piReadBufferSizeMin = 512                       // A read buffer of less than 512 bytes seems impractical
 
-	piReadTimeoutDef  = 500 * time.Millisecond
 	piWriteTimeoutDef = 500 * time.Millisecond
-
-	piKeyBufferSize = len("[fe80:0000:0000:0000:0000:0000:0001%enp8s0f0np0.100]:65535")*2 + len("4294967295") + 2
-
-	piCleanInterval = 120 * time.Second
 
 	piTryPacketInfoUDPDef = true
 

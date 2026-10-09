@@ -23,7 +23,7 @@ type dataPacketWithOutletPtr struct {
 
 func (p *dataPacketWithOutletPtr) Data() DataPacket { return p.DataPacket }
 
-func (p *dataPacketWithOutletPtr) LocalIfIdx() int { return p.outlet.localIfIdx }
+func (p *dataPacketWithOutletPtr) LocalIfIdx() int { return p.outlet.LocalIfIdx() }
 
 func (p *dataPacketWithOutletPtr) LocalAddr() net.Addr { return p.outlet.localAddr }
 
