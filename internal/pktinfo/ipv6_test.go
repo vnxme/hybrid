@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"strconv"
 	"testing"
 )
 
@@ -88,6 +89,58 @@ func TestMarshalParse6(t *testing.T) {
 		if dst, idx, ok := Parse(oob[:n]); dst != test.want || idx != test.idx || !ok {
 			t.Errorf("Parse() of Marshal(%s, %d) = %s, %d, %v, want %s, %d, true",
 				test.src, test.idx, dst, idx, ok, test.want, test.idx)
+		}
+	}
+}
+
+// TestIsLocalIP6 ensures link-local unicast, interface-local multicast and link-local multicast addresses,
+// whatever multicast flags they have, are local, unlike the others.
+func TestIsLocalIP6(t *testing.T) {
+	for _, test := range []struct {
+		addr string
+		want bool
+	}{
+		{"fe80::1", true},
+		{"febf::1", true}, // The end of fe80::/10
+		{"fec0::1", false},
+		{"ff01::1", true},
+		{"ff02::1", true},
+		{"ff12::1", true}, // Transient
+		{"ff32::1", true}, // Prefix-based
+		{"ff05::1", false},
+		{"::1", false},
+		{"2001:db8::1", false},
+		{"::ffff:169.254.0.1", false},
+	} {
+		if got := isLocalIP6(netip.MustParseAddr(test.addr)); got != test.want {
+			t.Errorf("isLocalIP6(%s) = %v, want %v", test.addr, got, test.want)
+		}
+	}
+}
+
+// TestMarshalParse6Zone ensures the zone of a local source address takes precedence over idx, whether
+// it's a name or an index, and that a local destination address is parsed with the name of its interface.
+func TestMarshalParse6Zone(t *testing.T) {
+	ifs, err := net.Interfaces()
+	if err != nil || len(ifs) == 0 {
+		t.Skipf("net.Interfaces() = %d, %v", len(ifs), err)
+	}
+	ifc := ifs[0] // So that it's the first of any names sharing its index
+
+	for _, test := range []struct {
+		src, want    string
+		idx, wantIdx int
+	}{
+		{"fe80::1%" + ifc.Name, "fe80::1%" + ifc.Name, 99, ifc.Index},
+		{"fe80::1%" + strconv.Itoa(ifc.Index), "fe80::1%" + ifc.Name, 99, ifc.Index},
+		{"ff02::1%" + ifc.Name, "ff02::1%" + ifc.Name, 99, ifc.Index},
+		{"2001:db8::1%" + ifc.Name, "2001:db8::1", 99, 99}, // Not local, so the zone is ignored
+	} {
+		oob := make([]byte, BufferSize)
+		n := Marshal(oob, false, netip.MustParseAddr(test.src), test.idx)
+		if dst, idx, ok := Parse(oob[:n]); dst.String() != test.want || idx != test.wantIdx || !ok {
+			t.Errorf("Parse() of Marshal(%s, %d) = %s, %d, %v, want %s, %d, true",
+				test.src, test.idx, dst, idx, ok, test.want, test.wantIdx)
 		}
 	}
 }

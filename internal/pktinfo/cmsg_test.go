@@ -18,9 +18,15 @@ package pktinfo
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"net"
 	"net/netip"
 	"reflect"
+	"slices"
+	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -108,6 +114,151 @@ func TestParseBounds(t *testing.T) {
 			dst, idx, ok := Parse(test.oob)
 			if ok != test.ok || ok && (dst != ip || idx != 7) {
 				t.Errorf("Parse() = %s, %d, %v, want ok %v", dst, idx, ok, test.ok)
+			}
+		})
+	}
+}
+
+// appendCMsg appends a control message with the given level, type and data to b, padded for alignment.
+func appendCMsg(b []byte, level, typ int32, data []byte) []byte {
+	off := len(b)
+	b = append(b, make([]byte, cMsgAlignOf(cMsgHeaderSpace+len(data)))...)
+	hdr := (*cMsgHeader)(unsafe.Pointer(&b[off]))
+	hdr.SetLen(cMsgHeaderSpace + len(data))
+	hdr.Level, hdr.Type = level, typ
+	copy(b[off+cMsgHeaderSpace:], data)
+	return b
+}
+
+// bytesOf returns the memory of v as a byte slice.
+func bytesOf[T any](v *T) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), unsafe.Sizeof(*v))
+}
+
+// TestMarshal4 ensures an IPv4 source address is written into the message, whichever field it takes.
+func TestMarshal4(t *testing.T) {
+	src := netip.MustParseAddr("10.1.2.3")
+	oob := make([]byte, BufferSize)
+	n := Marshal(oob, true, src, 0)
+	if want := src.As4(); !bytes.Contains(oob[cMsgHeaderSpace:n], want[:]) {
+		t.Errorf("Marshal(%s) = % x, want % x in the data", src, oob[:n], want)
+	}
+}
+
+// failingRawConn is a syscall.RawConn whose Control fails for the given calls, counted from 0,
+// and does nothing for the others, as if a socket option has been set.
+type failingRawConn struct {
+	syscall.RawConn
+	calls int
+	fail  []int
+}
+
+func (c *failingRawConn) Control(func(fd uintptr)) error {
+	defer func() { c.calls++ }()
+	if slices.Contains(c.fail, c.calls) {
+		return errors.New("failed")
+	}
+	return nil
+}
+
+// TestEnableErrors ensures IPv4 packet info fails if any of its options fails, i.e. the calls
+// in enableCalls4, and that a dual-stack socket fails only if IPv6 packet info fails too.
+func TestEnableErrors(t *testing.T) {
+	type test struct {
+		name           string
+		v4Only, v6Only bool
+		fail           []int
+		wantErr        bool
+	}
+	call6 := len(enableCalls4) // IPv6 packet info is enabled after IPv4 packet info
+	tests := []test{
+		{"DualStack", false, false, nil, false},
+		{"DualStackNoIPv4", false, false, enableCalls4, false},
+		{"DualStackNoIPv6", false, false, []int{call6}, false},
+		{"IPv4Only", true, false, nil, false},
+		{"IPv6Only", false, true, nil, false},
+		{"IPv6OnlyNoIPv6", false, true, []int{0}, true}, // No IPv4 calls on an IPv6-only socket
+	}
+	for _, call := range enableCalls4 { // Each IPv4 option failing alone fails IPv4 packet info
+		tests = append(tests,
+			test{fmt.Sprintf("IPv4OnlyNoOption%d", call), true, false, []int{call}, true},
+			test{fmt.Sprintf("DualStackNoIPv6NoOption%d", call), false, false, []int{call, call6}, true},
+		)
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := Enable(&failingRawConn{fail: test.fail}, test.v4Only, test.v6Only); (err != nil) != test.wantErr {
+				t.Errorf("Enable() = %v, want an error %v", err, test.wantErr)
+			}
+		})
+	}
+
+	t.Run("IsV6Only", func(t *testing.T) {
+		if _, err := IsV6Only(&failingRawConn{fail: []int{0}}); err == nil {
+			t.Errorf("IsV6Only() = _, nil, want an error")
+		}
+	})
+}
+
+// TestEnable ensures a packet sent to a socket with packet info enabled is parsed
+// with its destination address and a local interface index.
+func TestEnable(t *testing.T) {
+	lo4, lo6 := netip.MustParseAddr("127.0.0.1"), netip.IPv6Loopback()
+	tests := []struct {
+		network, address string
+		v4Only, v6Only   bool
+		dsts             []netip.Addr
+	}{
+		{"udp4", "127.0.0.1:0", true, false, []netip.Addr{lo4}},
+		{"udp6", "[::1]:0", false, true, []netip.Addr{lo6}},
+		{"udp", "[::]:0", false, false, []netip.Addr{lo4, lo6}},
+	}
+	for _, test := range tests {
+		t.Run(test.network+","+test.address, func(t *testing.T) {
+			pc, err := net.ListenPacket(test.network, test.address)
+			if err != nil {
+				t.Skipf("ListenPacket() = %v", err) // E.g. no IPv6 support
+			}
+			defer func() { _ = pc.Close() }()
+			conn := pc.(*net.UDPConn)
+			raw, err := conn.SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			v6Only := test.v6Only
+			if !test.v4Only && !v6Only { // E.g. no IPv4-mapped addresses on some systems
+				if v6Only, err = IsV6Only(raw); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = Enable(raw, test.v4Only, v6Only); err != nil {
+				t.Fatalf("Enable() = %v, want nil", err)
+			}
+
+			port := conn.LocalAddr().(*net.UDPAddr).AddrPort().Port()
+			for _, dst := range test.dsts {
+				if dst.Is4() && v6Only {
+					continue
+				}
+				client, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(netip.AddrPortFrom(dst, port)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = client.Write([]byte{1})
+				_ = client.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+				oob := make([]byte, BufferSize)
+				_, oobN, _, _, err := conn.ReadMsgUDPAddrPort(make([]byte, 1), oob)
+				if err != nil {
+					t.Fatalf("ReadMsgUDPAddrPort() = %v", err)
+				}
+				if got, idx, ok := Parse(oob[:oobN]); got != dst || idx <= 0 || !ok {
+					t.Errorf("Parse() of a packet to %s = %s, %d, %v, want %s, a positive index, true", dst, got, idx, ok, dst)
+				}
 			}
 		})
 	}
