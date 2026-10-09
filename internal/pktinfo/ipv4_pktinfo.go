@@ -82,7 +82,7 @@ func Parse(oob []byte) (dst netip.Addr, idx int, ok bool) {
 func Enable(c syscall.RawConn, v4Only, v6Only bool) error {
 	var err4 error
 	if !v6Only {
-		err4 = rawConnSetSockOptBool(c, cMsgIPv4PacketInfoLevel, cMsgIPv4PacketInfoOpt, true)
+		err4 = rawConnEnableSockOpt(c, cMsgIPv4PacketInfoLevel, cMsgIPv4PacketInfoOpt)
 		if err4 != nil && v4Only {
 			return err4
 		}
@@ -90,7 +90,7 @@ func Enable(c syscall.RawConn, v4Only, v6Only bool) error {
 
 	var err6 error
 	if !v4Only {
-		err6 = rawConnSetSockOptBool(c, cMsgIPv6PacketInfoLevel, cMsgIPv6PacketInfoOpt, true)
+		err6 = rawConnEnableSockOpt(c, cMsgIPv6PacketInfoLevel, cMsgIPv6PacketInfoOpt)
 		if err6 != nil && v6Only {
 			return err6
 		}

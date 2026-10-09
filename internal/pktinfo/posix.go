@@ -62,12 +62,12 @@ func rawConnGetSockOptBool(c syscall.RawConn, level int, opt int) (bool, error) 
 	return sVal == 1, sErr
 }
 
-// rawConnSetSockOptBool makes a platform-specific socket configuration call
-// that sets an integer option value from the given boolean value.
-func rawConnSetSockOptBool(c syscall.RawConn, level int, opt int, value bool) error {
+// rawConnEnableSockOpt makes a platform-specific socket configuration call
+// that enables an option, i.e. sets its integer value to 1.
+func rawConnEnableSockOpt(c syscall.RawConn, level int, opt int) error {
 	var sErr error
 	err := c.Control(func(fd uintptr) {
-		sErr = unix.SetsockoptInt(int(fd), level, opt, boolInt(value)) //nolint:gosec // G115
+		sErr = unix.SetsockoptInt(int(fd), level, opt, 1) //nolint:gosec // G115
 	})
 	if err != nil {
 		return err

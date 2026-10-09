@@ -13,12 +13,9 @@
 // limitations under the License.
 
 // A significant part of the code in this file was copied from
-// https://github.com/golang/net/tree/v0.53.0 and
 // https://github.com/golang/sys/tree/v0.43.0 in April 2026.
-// Sources: https://github.com/golang/net/blob/v0.53.0/ipv4/helper.go,
-// https://github.com/golang/sys/blob/v0.43.0/unix/sockcmsg_unix_other.go.
-// Licenses: https://github.com/golang/net/blob/v0.53.0/LICENSE,
-// https://github.com/golang/sys/blob/v0.43.0/LICENSE
+// Source: https://github.com/golang/sys/blob/v0.43.0/unix/sockcmsg_unix_other.go.
+// License: https://github.com/golang/sys/blob/v0.43.0/LICENSE
 // The original copyright is preserved below.
 
 // Copyright 2017-2019 The Go Authors. All rights reserved.
@@ -28,14 +25,6 @@
 //go:build aix || darwin || dragonfly || freebsd || illumos || linux || netbsd || openbsd || solaris || windows || zos
 
 package pktinfo
-
-// boolInt returns 1 for true and 0 for false.
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
 
 // cMsgAlignOf returns the number of bytes a structure of size n takes
 // including padding bytes to match the platform-specific data alignment.
