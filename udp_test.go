@@ -17,6 +17,7 @@ package hybrid
 import (
 	"context"
 	"errors"
+	"math"
 	"net"
 	"net/netip"
 	"reflect"
@@ -217,12 +218,16 @@ func TestPacketInfoUDPConnNilAddrs(t *testing.T) {
 }
 
 // TestPacketInfoUDPConnWriteValidation ensures a write is rejected unless dst is of an IP version
-// the socket accepts and src, if any, is of the same IP version, whether or not they are mapped.
+// the socket accepts and src, if any, is of the same IP version, whether or not they are mapped,
+// and unless idx is in the range every platform has room for.
 func TestPacketInfoUDPConnWriteValidation(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
 	}
+
+	tooBig := math.MaxInt32
+	tooBig++ // Negative on 32-bit platforms, which is invalid too
 
 	sink4, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -281,8 +286,8 @@ func TestPacketInfoUDPConnWriteValidation(t *testing.T) {
 					if !srcIP.IsValid() {
 						src = netip.AddrPort{}
 					}
-					for _, idx := range []int{-1, 0} {
-						valid := idx >= 0 && slices.Contains(socket.dsts, dstKind) && slices.Contains(srcs[dstKind], srcKind)
+					for _, idx := range []int{-1, 0, tooBig} {
+						valid := idx >= 0 && idx <= math.MaxInt32 && slices.Contains(socket.dsts, dstKind) && slices.Contains(srcs[dstKind], srcKind)
 						_, err := c.WriteToFromUDPAddrPort([]byte{1}, dst, src, idx)
 						if invalid := errors.Is(err, syscall.EINVAL); valid && err != nil || !valid && !invalid {
 							t.Errorf("WriteToFromUDPAddrPort(dst %s, src %s, idx %d) = %v, want valid %v", dstKind, srcKind, idx, err, valid)

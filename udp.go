@@ -16,6 +16,7 @@ package hybrid
 
 import (
 	"errors"
+	"math"
 	"net"
 	"net/netip"
 	"runtime"
@@ -190,15 +191,16 @@ func (u *packetInfoUDPConn) WriteToFromUDP(b []byte, dst, src *net.UDPAddr, idx 
 // WriteToFromUDPAddrPort calls a platform-specific packet info marshaller to fill a pooled control
 // message buffer before it proceeds to [net.UDPConn.WriteMsgUDPAddrPort], or, if src is invalid and idx
 // is zero, it calls [net.UDPConn.WriteToUDPAddrPort]. On Windows, it ignores idx if src is invalid, as the system
-// doesn't choose a source address for packet info. It fails with [syscall.EINVAL] if idx is negative,
-// dst isn't of an IP version the socket accepts, or src is valid but not of the same IP version as dst.
-// Mapped IPv4 addresses count as IPv4 ones.
+// doesn't choose a source address for packet info. It fails with [syscall.EINVAL] if idx is negative
+// or above [math.MaxInt32], the largest index every platform has room for, if dst isn't of an IP version
+// the socket accepts, or if src is valid but not of the same IP version as dst. Mapped IPv4 addresses
+// count as IPv4 ones.
 func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error) {
 	// Require dst of an IP version the socket accepts, and src, if any, of the same IP version
 	bits, srcBits := dst.Addr().Unmap().BitLen(), src.Addr().Unmap().BitLen()
 	is4 := bits == 32
 	accepted := is4 && !u.v6Only || bits == 128 && !u.v4Only
-	if idx < 0 || !accepted || srcBits != 0 && srcBits != bits {
+	if idx < 0 || idx > math.MaxInt32 || !accepted || srcBits != 0 && srcBits != bits {
 		return 0, &net.OpError{Op: "write", Net: u.net, Source: addrFromValidAddrPort(src), Addr: addrFromValidAddrPort(dst), Err: syscall.EINVAL}
 	}
 
