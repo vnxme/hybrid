@@ -59,7 +59,7 @@ func rawConnGetSockOptBool(c syscall.RawConn, level int, opt int) (bool, error) 
 		return false, err
 	}
 
-	return sVal == 1, sErr
+	return sVal != 0, sErr
 }
 
 // rawConnEnableSockOpt makes a platform-specific socket configuration call
