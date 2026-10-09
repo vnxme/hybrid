@@ -121,33 +121,32 @@ func marshalPacketInfo6(oob []byte, src netip.Addr, idx int, full bool) (int, bo
 }
 
 // parsePacketInfo searches a platform-specific packet info control message in the given OOB buffer.
-// It returns a destination address, a local interface index, and true it the message has been found.
+// It returns a destination address, a local interface index, and true if the message has been found.
+// Like [unix.ParseSocketControlMessage], it stops at a message longer than the rest of the buffer,
+// and it skips a message too short for packet info, e.g. as truncation has shortened it.
 func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
-	var hdr *cMsgHeader
-	var space int
-	for len(oob) > cMsgHeaderSpace {
-		hdr = (*cMsgHeader)(unsafe.Pointer(&oob[0]))
-		space = cMsgAlignOf(int(hdr.Len))
-		if space <= cMsgHeaderSpace || len(oob) < space {
+	for len(oob) >= cMsgHeaderSpace {
+		hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
+		n := int(hdr.Len)
+		if n < cMsgHeaderSpace || n > len(oob) {
 			break
 		}
+		data := oob[cMsgHeaderSpace:n]
 
-		if hdr.Level == cMsgIPv4PacketInfoLevel && hdr.Type == cMsgIPv4PacketInfoType {
-			info := (*cMsgIPv4PacketInfo)(unsafe.Pointer(&oob[cMsgHeaderSpace]))
-			dst, idx, ok = netip.AddrFrom4(info.Addr), int(info.Ifindex), true
-			break
-		}
-
-		if hdr.Level == cMsgIPv6PacketInfoLevel && hdr.Type == cMsgIPv6PacketInfoType {
-			info := (*cMsgIPv6PacketInfo)(unsafe.Pointer(&oob[cMsgHeaderSpace]))
-			dst, idx, ok = netip.AddrFrom16(info.Addr), int(info.Ifindex), true
+		switch {
+		case hdr.Level == cMsgIPv4PacketInfoLevel && hdr.Type == cMsgIPv4PacketInfoType && len(data) >= cMsgIPv4PacketInfoSize:
+			info := (*cMsgIPv4PacketInfo)(unsafe.Pointer(&data[0]))
+			return netip.AddrFrom4(info.Addr), int(info.Ifindex), true
+		case hdr.Level == cMsgIPv6PacketInfoLevel && hdr.Type == cMsgIPv6PacketInfoType && len(data) >= cMsgIPv6PacketInfoSize:
+			info := (*cMsgIPv6PacketInfo)(unsafe.Pointer(&data[0]))
+			dst = netip.AddrFrom16(info.Addr)
 			if info.Ifindex > 0 && isLocalIP6(dst) {
 				dst = dst.WithZone(zoneCache.name(int(info.Ifindex)))
 			}
-			break
+			return dst, int(info.Ifindex), true
 		}
 
-		oob = oob[space:]
+		oob = oob[min(cMsgAlignOf(n), len(oob)):] // The last message may come without padding
 	}
 
 	return

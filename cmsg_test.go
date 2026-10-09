@@ -20,8 +20,10 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"reflect"
 	"syscall"
 	"testing"
+	"unsafe"
 )
 
 func BenchmarkControlMessageAlignOf(b *testing.B) {
@@ -125,6 +127,46 @@ func TestMarshalParsePacketInfo(t *testing.T) {
 			t.Errorf("parsePacketInfo() of marshalPacketInfo6(%s, %d) = %s, %d, %v, want %s, %d, true",
 				test.src, test.idx, dst, idx, ok, test.want, test.idx)
 		}
+	}
+}
+
+// TestParsePacketInfoBounds ensures packet info is parsed only from within a message and the buffer,
+// including the last message without padding, and that a message too short for packet info is skipped.
+func TestParsePacketInfoBounds(t *testing.T) {
+	ip := netip.MustParseAddr("2001:db8::1")
+	msgLen := cMsgHeaderSpace + cMsgIPv6PacketInfoSize // Unpadded
+
+	// message returns an IPv6 packet info message for ip and index 7 in a buffer of the given size,
+	// with its length field set to n
+	message := func(size, n int) []byte {
+		oob := make([]byte, max(size, cMsgIPv6PacketInfoPayload))
+		marshalPacketInfo6(oob, ip, 7, true)
+		reflect.ValueOf(&(*cMsgHeader)(unsafe.Pointer(&oob[0])).Len).Elem().SetUint(uint64(n))
+		return oob[:size]
+	}
+
+	tests := []struct {
+		name string
+		oob  []byte
+		ok   bool
+	}{
+		{"Empty", nil, false},
+		{"HeaderOnly", message(cMsgHeaderSpace, cMsgHeaderSpace), false},
+		{"Whole", message(cMsgIPv6PacketInfoPayload, msgLen), true},
+		{"Unpadded", message(msgLen, msgLen), true},
+		{"Truncated", message(cMsgAlignOf(cMsgHeaderSpace+4), cMsgHeaderSpace+4), false},
+		{"LongerThanBuffer", message(msgLen-1, msgLen), false},
+		{"ZeroLength", message(cMsgIPv6PacketInfoPayload, 0), false},
+		{"AfterTooShort", append(message(cMsgAlignOf(cMsgHeaderSpace+1), cMsgHeaderSpace+1),
+			message(cMsgIPv6PacketInfoPayload, msgLen)...), true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dst, idx, ok := parsePacketInfo(test.oob)
+			if ok != test.ok || ok && (dst != ip || idx != 7) {
+				t.Errorf("parsePacketInfo() = %s, %d, %v, want ok %v", dst, idx, ok, test.ok)
+			}
+		})
 	}
 }
 

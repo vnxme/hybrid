@@ -17,6 +17,7 @@
 package hybrid
 
 import (
+	"encoding/binary"
 	"net"
 	"net/netip"
 	"syscall"
@@ -47,8 +48,10 @@ const (
 	// cMsgIPv4PacketInfoOpt =
 	cMsgIPv6PacketInfoOpt = unix.IPV6_RECVPKTINFO
 
-	cMsgIPv4DestAddrSize  = net.IPv4len
-	cMsgIPv4InterfaceSize = unix.SizeofSockaddrDatalink
+	cMsgIPv4DestAddrSize         = net.IPv4len
+	cMsgIPv4InterfaceSize        = unix.SizeofSockaddrDatalink
+	cMsgIPv4InterfaceIndexOffset = int(unsafe.Offsetof(cMsgIPv4Interface{}.Index)) // Offset of the index in a link-level address
+	cMsgIPv4InterfaceIndexEnd    = cMsgIPv4InterfaceIndexOffset + int(unsafe.Sizeof(cMsgIPv4Interface{}.Index))
 	// cMsgIPv4PacketInfoSize =
 	cMsgIPv6PacketInfoSize = unix.SizeofInet6Pktinfo
 
@@ -136,38 +139,35 @@ func marshalPacketInfo6(oob []byte, src netip.Addr, idx int, full bool) (int, bo
 	return cMsgIPv6PacketInfoPayload, true
 }
 
-// parsePacketInfo searches a platform-specific packet info control message in the given OOB buffer.
-// It returns a destination address, a local interface index, and true it the message has been found.
+// parsePacketInfo searches platform-specific packet info control messages in the given OOB buffer.
+// It returns a destination address, a local interface index, and true if a message has been found.
+// Like [unix.ParseSocketControlMessage], it stops at a message longer than the rest of the buffer,
+// and it skips a message too short for packet info, e.g. as truncation has shortened it.
 func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
-	var hdr *cMsgHeader
-	var space int
-	for len(oob) > cMsgHeaderSpace {
-		hdr = (*cMsgHeader)(unsafe.Pointer(&oob[0]))
-		space = cMsgAlignOf(int(hdr.Len))
-		if space <= cMsgHeaderSpace || len(oob) < space {
+	for len(oob) >= cMsgHeaderSpace {
+		hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
+		n := int(hdr.Len)
+		if n < cMsgHeaderSpace || n > len(oob) {
 			break
 		}
+		data := oob[cMsgHeaderSpace:n]
 
-		if hdr.Level == cMsgIPv4DestAddrLevel && hdr.Type == cMsgIPv4DestAddrType {
-			addr := (*cMsgIPv4DestAddr)(unsafe.Pointer(&oob[cMsgHeaderSpace]))
-			dst, ok = netip.AddrFrom4(*addr), true
-		}
-
-		if hdr.Level == cMsgIPv4InterfaceLevel && hdr.Type == cMsgIPv4InterfaceType {
-			link := (*cMsgIPv4Interface)(unsafe.Pointer(&oob[cMsgHeaderSpace]))
-			idx, ok = int(link.Index), true
-		}
-
-		if hdr.Level == cMsgIPv6PacketInfoLevel && hdr.Type == cMsgIPv6PacketInfoType {
-			info := (*cMsgIPv6PacketInfo)(unsafe.Pointer(&oob[cMsgHeaderSpace]))
-			dst, idx, ok = netip.AddrFrom16(info.Addr), int(info.Ifindex), true
+		switch {
+		case hdr.Level == cMsgIPv4DestAddrLevel && hdr.Type == cMsgIPv4DestAddrType && len(data) >= cMsgIPv4DestAddrSize:
+			dst, ok = netip.AddrFrom4([cMsgIPv4DestAddrSize]byte(data)), true
+		case hdr.Level == cMsgIPv4InterfaceLevel && hdr.Type == cMsgIPv4InterfaceType && len(data) >= cMsgIPv4InterfaceIndexEnd:
+			// The link-level address may be shorter than cMsgIPv4Interface, so read the index only
+			idx, ok = int(binary.NativeEndian.Uint16(data[cMsgIPv4InterfaceIndexOffset:])), true
+		case hdr.Level == cMsgIPv6PacketInfoLevel && hdr.Type == cMsgIPv6PacketInfoType && len(data) >= cMsgIPv6PacketInfoSize:
+			info := (*cMsgIPv6PacketInfo)(unsafe.Pointer(&data[0]))
+			dst = netip.AddrFrom16(info.Addr)
 			if info.Ifindex > 0 && isLocalIP6(dst) {
 				dst = dst.WithZone(zoneCache.name(int(info.Ifindex)))
 			}
-			break
+			return dst, int(info.Ifindex), true
 		}
 
-		oob = oob[space:]
+		oob = oob[min(cMsgAlignOf(n), len(oob)):] // The last message may come without padding
 	}
 
 	return
