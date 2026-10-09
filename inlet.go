@@ -318,6 +318,15 @@ func (i *inlet) logError(err error) {
 	// TODO(vnxme): Log an unexpected reading/writing error
 }
 
+// addrString returns the string of the given address, or an empty string if there is none,
+// e.g. as the underlying connection doesn't report destination addresses.
+func addrString(a net.Addr) string {
+	if a == nil {
+		return ""
+	}
+	return a.String()
+}
+
 func (i *inlet) newBinding(src, dst net.Addr, idx int, key string) *inletBinding {
 	bdg := &inletBinding{c: i.newConnection(src, dst, idx, key)}
 	if i.cfg.idleTimeout > 0 {
@@ -660,9 +669,9 @@ loop:
 
 		// Use remote and local addresses and local interface indices as keys to track active connections.
 		sb.Grow(piKeyBufferSize)
-		sb.WriteString(src.String())
+		sb.WriteString(addrString(src))
 		sb.WriteString("|")
-		sb.WriteString(dst.String())
+		sb.WriteString(addrString(dst))
 		sb.WriteString("|")
 		sb.WriteString(strconv.Itoa(idx))
 		key = sb.String()
@@ -1052,7 +1061,7 @@ const (
 	piDeleteQueueSizeMin = 0
 
 	piReadBufferSizeDef = math.MaxUint16 - (20 + 8) // Maximum size of an IPv4 UDP datagram is 64 KiB net of headers
-	piReadBufferSizeMax = math.MaxUint32            // Theoretical maximum size of an IPv6 jumbogram is 4 GiB
+	piReadBufferSizeMax = math.MaxInt32             // The largest int on 32-bit platforms, while an IPv6 jumbogram may take 4 GiB
 	piReadBufferSizeMin = 512                       // A read buffer of less than 512 bytes seems impractical
 
 	piReadTimeoutDef  = 500 * time.Millisecond
