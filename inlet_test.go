@@ -93,18 +93,19 @@ func TestPacketInletWithPairedConns(t *testing.T) {
 			c1, c2 := net.Pipe()
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
+		// The smallest packet over our pipes takes a byte, as they send nothing for an empty write, like TCP
 		{name: "HybridUnbufferedSyncPipe", ctor: func() (PacketConn, PacketConn) {
 			c1, c2 := UnbufferedPipe(false)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
-		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
+		}, minWBS: 1, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		{name: "HybridUnbufferedSemiPipe", ctor: func() (PacketConn, PacketConn) {
 			c1, c2 := UnbufferedPipe(true)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
-		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
+		}, minWBS: 1, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		{name: "HybridBufferedAsyncPipe", ctor: func() (PacketConn, PacketConn) {
 			c1, c2 := BufferedPipe(10)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
-		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
+		}, minWBS: 1, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		{name: "LocalUDP4Socket", ctor: func() (PacketConn, PacketConn) {
 			return newLocalPacketListeners("udp4")
 		}, minWBS: udp4PayloadSizeMin, minSafeWBS: udp4PayloadSizeMinSafe, maxSafeWBS: udp4PayloadSizeMaxSafe, maxWBS: udp4PayloadSizeMax},
@@ -115,7 +116,6 @@ func TestPacketInletWithPairedConns(t *testing.T) {
 
 	testFunc := func(t *testing.T, ctor packetConnPairCtor, writeBufferSize int) {
 		testPacketInletWithPairedConns(t, ctor, piAcceptQueueSizeDef, poReadQueueSizeDef, packetSizeMax, writeBufferSize, packetCount)
-		// testPacketInletWithPairedConns2(t, ctor, piAcceptQueueDefSize, poReadQueueDefSize, packetSizeMax, writeBufferSize, packetCount)
 	}
 
 	for _, item := range pairs {
@@ -163,7 +163,8 @@ func testPacketInletWithPairedConns(t *testing.T, ctor packetConnPairCtor, accep
 		for {
 			err = mc.SetReadDeadline(time.Now().Add(2 * timeout))
 			if err != nil {
-				t.Fatalf("%v: pc.SetReadDeadline() = %v, want nil", me, err)
+				t.Errorf("%v: pc.SetReadDeadline() = %v, want nil", me, err)
+				break
 			}
 
 			n, addr, err = mc.ReadFrom(b)
@@ -227,12 +228,14 @@ func testPacketInletWithPairedConns(t *testing.T, ctor packetConnPairCtor, accep
 		for i := 0; i < packetCount; i++ {
 			err = pc.SetWriteDeadline(time.Now().Add(2 * timeout))
 			if err != nil {
-				t.Fatalf("%v: pc.SetWriteDeadline() = %v, want nil", me, err)
+				t.Errorf("%v: pc.SetWriteDeadline() = %v, want nil", me, err)
+				break // On to closing done, so that the test doesn't hang
 			}
 
 			n, err = pc.WriteTo(b, rAddr)
 			if n == 0 && err != nil {
-				t.Fatalf("%v: pc.WriteTo() = %v, want nil", me, err)
+				t.Errorf("%v: pc.WriteTo() = %v, want nil", me, err)
+				break
 			}
 
 			chw <- n
@@ -280,93 +283,6 @@ loop:
 		// However, pipes do guarantee that all packets are delivered,
 		// so any loss represents a failure of this test.
 		t.Error(message)
-	}
-}
-
-func testPacketInletWithPairedConns2(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
-	t.Helper()
-	pc1, pc2 := ctor()
-
-	timeout := 50 * time.Millisecond
-	done := make(chan struct{})
-
-	serverHandler := func(pc PacketConn, wg *sync.WaitGroup) {
-		defer wg.Done()
-
-		lAddr := pc.LocalAddr()
-		me := fmt.Sprintf("inlet %v", lAddr)
-		logfIf(t, testPacketInletDebug, "%v: started", me)
-
-		ln := Inlet(pc,
-			WithAcceptQueueSize(acceptQueueSize),
-			WithReadQueueSize(readQueueSize),
-			WithReadBufferSize(readBufferSize))
-		defer func() { _ = ln.Close() }()
-
-		for {
-			mc, err := ln.Accept()
-			if err != nil {
-				if !errors.Is(err, net.ErrClosed) {
-					logfIf(t, testPacketInletDebug, "%v: ln.Accept() = %v", me, err)
-				}
-				break
-			}
-
-			wg.Add(1)
-			go func(t *testing.T, mc MixedConn) {
-				defer func() { _ = mc.Close() }()
-
-				testPacketConnRoundTrip(t, pc1, mc, writeBufferSize, timeout)
-			}(t, mc)
-		}
-
-		logfIf(t, testPacketInletDebug, "%v: stopped", me)
-	}
-
-	clientHandler := func(pc PacketConn, to net.Addr, wg *sync.WaitGroup) {
-		defer wg.Done()
-
-		lAddr, rAddr := pc.LocalAddr(), to
-		me := fmt.Sprintf("client %v -> %v", lAddr, rAddr)
-		logfIf(t, testPacketInletDebug, "%v: started", me)
-
-		b := make([]byte, writeBufferSize)
-		_, _ = io.ReadFull(rand.Reader, b)
-
-		var err error
-		var n int
-		err = pc.SetWriteDeadline(time.Now().Add(2 * timeout))
-		if err != nil {
-			t.Fatalf("%v: pc.SetWriteDeadline() = %v, want nil", me, err)
-		}
-
-		n, err = pc.WriteTo(b, rAddr)
-		if n == 0 && err != nil {
-			t.Fatalf("%v: pc.WriteTo() = %v, want nil", me, err)
-		}
-
-		logfIf(t, testPacketInletDebug, "%v: wrote %d bytes", me, n)
-
-		time.AfterFunc(timeout, func() {
-			close(done)
-		})
-
-		logfIf(t, testPacketInletDebug, "%v: stopped", me)
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go serverHandler(pc2, &wg)
-	go clientHandler(pc1, pc2.LocalAddr(), &wg)
-
-	<-done
-
-	if err := pc1.Close(); err != nil {
-		t.Fatalf("pc1.Close() = %v, want nil", err)
-	}
-
-	if err := pc2.Close(); err != nil {
-		t.Fatalf("pc2.Close() = %v, want nil", err)
 	}
 }
 
