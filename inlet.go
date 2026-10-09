@@ -91,14 +91,17 @@ type inletConfig struct {
 	idleTimeout  time.Duration
 	writeTimeout time.Duration
 
-	acceptQueueSize int
-	deleteQueueSize int
-	readBufferSize  int
-	readQueueSize   int
-	writeQueueSize  int
+	acceptQueueSize  int
+	defaultQueueSize int
+	deleteQueueSize  int
+	readBufferSize   int
+	readQueueSize    int
+	writeQueueSize   int
 
 	activeConnLimit int
 
+	defaultConn      bool
+	defaultOnly      bool
 	tryPacketInfoUDP bool
 }
 
@@ -106,6 +109,7 @@ var defaultInletConfig = inletConfig{
 	idleTimeout:      poIdleTimeoutDef,
 	writeTimeout:     piWriteTimeoutDef,
 	acceptQueueSize:  piAcceptQueueSizeDef,
+	defaultQueueSize: piDefaultQueueSizeDef,
 	deleteQueueSize:  piDeleteQueueSizeDef,
 	readBufferSize:   piReadBufferSizeDef,
 	readQueueSize:    poReadQueueSizeDef,
@@ -131,6 +135,27 @@ func WithAcceptQueueSize(value int) InletOption {
 		return noOpInletOption
 	}
 	return inletOptionFunc(func(cfg *inletConfig) { cfg.acceptQueueSize = value })
+}
+
+// WithDefaultConn sets whether the inlet has a default connection, which serves the flows
+// released by their handlers. Without one, the packets of a released flow are dropped.
+func WithDefaultConn(value bool) InletOption {
+	return inletOptionFunc(func(cfg *inletConfig) { cfg.defaultConn = value })
+}
+
+// WithDefaultOnly sets whether every new flow goes to the default connection straight away rather than
+// to Accept, e.g. for an inlet nobody accepts connections from. It implies WithDefaultConn(true).
+func WithDefaultOnly(value bool) InletOption {
+	return inletOptionFunc(func(cfg *inletConfig) { cfg.defaultOnly = value })
+}
+
+// WithDefaultQueueSize sets the maximum number of packets waiting to be read from the default connection.
+// A packet is dropped if the queue of the default connection is full.
+func WithDefaultQueueSize(value int) InletOption {
+	if value < piDefaultQueueSizeMin {
+		return noOpInletOption
+	}
+	return inletOptionFunc(func(cfg *inletConfig) { cfg.defaultQueueSize = value })
 }
 
 // WithReadBufferSize sets the maximum number of bytes read as a single packet
@@ -184,7 +209,9 @@ type inletBinding struct {
 }
 
 type inletPacketSmall struct {
-	c   *inletConn // Origin / target
+	c   *inletConn // The flow read from or written for, if any
+	to  net.Addr   // The address written to, if there is no flow
+	rx  chan int   // Gets the number of bytes written, if the write waits for it
 	ref *[]byte    // Reference for putBuf, if b comes from getBuf
 	b   []byte     // Reusable buffer
 	n   int        // Bytes consumed
@@ -198,6 +225,17 @@ type flowKey struct {
 	addr     string
 }
 
+// remote returns the key of the remote address of a flow, i.e. of its source address.
+func (k flowKey) remote() flowKey { return flowKey{src: k.src, addr: k.addr} }
+
+// remoteKey returns the key of a remote address given to a write, the way flowKey.remote does.
+func remoteKey(a net.Addr) flowKey {
+	if u, ok := a.(*net.UDPAddr); ok {
+		return flowKey{src: u.AddrPort()}
+	}
+	return flowKey{addr: a.String()}
+}
+
 // inletPacketInfo describes a packet read from the underlying connection.
 type inletPacketInfo struct {
 	src, dst net.Addr // Only if read from a connection other than a FromToUDPConn
@@ -207,16 +245,30 @@ type inletPacketInfo struct {
 
 // InletStats counts the packets an inlet has dropped, by reason.
 type InletStats struct {
-	ConnQueueFull   uint64 // The queue of the inlet connection of the packet was full
-	AcceptQueueFull uint64 // The accept queue was full when the packet started a new flow
-	TableFull       uint64 // The flow table was full when the packet started a new flow
-	NoDestination   uint64 // The packet had no destination address, while the inlet uses them
+	ConnQueueFull    uint64 // The queue of the inlet connection of the packet was full
+	AcceptQueueFull  uint64 // The accept queue was full when the packet started a new flow
+	TableFull        uint64 // The flow table was full when the packet started a new flow
+	NoDestination    uint64 // The packet had no destination address, while the inlet uses them
+	DefaultQueueFull uint64 // The queue of the default connection was full
+	NoDefault        uint64 // The packet of a released flow had no open default connection to go to
+}
+
+// InletListener is a PacketListener of an inlet, with its default connection and statistics.
+type InletListener interface {
+	PacketListener
+
+	// Default returns the default connection of the inlet, or nil if it has none.
+	Default() PacketConn
+
+	// Stats returns the numbers of packets dropped so far, by reason.
+	Stats() InletStats
 }
 
 // inlet implements PacketListener for any underlying PacketConn.
 type inlet struct {
 	pc  FromToPacketConn // Underlying PacketConn
 	udp FromToUDPConn    // The same as pc if it's a FromToUDPConn, which reports destination addresses
+	def *inletDefault    // Default connection, if any
 
 	acChan chan *inletConn        // Accept channel
 	deChan chan *inletConn        // Delete channel
@@ -227,8 +279,13 @@ type inlet struct {
 
 	slicePool sync.Pool // Buffers for writing
 
+	remotes struct { // The latest flow of each remote address, for the writes of the default connection
+		m map[flowKey]*inletConn
+		sync.RWMutex
+	}
+
 	drops struct {
-		connQueueFull, acceptQueueFull, tableFull, noDestination atomic.Uint64
+		connQueueFull, acceptQueueFull, tableFull, noDestination, defaultQueueFull, noDefault atomic.Uint64
 	}
 
 	wg   sync.WaitGroup
@@ -237,11 +294,14 @@ type inlet struct {
 	cfg inletConfig
 }
 
-// Inlet returns a PacketListener implementation and starts its internal loops.
-func Inlet(pc PacketConn, opts ...InletOption) PacketListener {
+// Inlet returns an InletListener for the given PacketConn and starts its internal loops.
+func Inlet(pc PacketConn, opts ...InletOption) InletListener {
 	cfg := defaultInletConfig
 	for _, opt := range opts {
 		opt.apply(&cfg)
+	}
+	if cfg.defaultOnly {
+		cfg.defaultConn = true
 	}
 
 	i := &inlet{
@@ -259,6 +319,10 @@ func Inlet(pc PacketConn, opts ...InletOption) PacketListener {
 		cfg: cfg,
 	}
 	i.udp, _ = i.pc.(FromToUDPConn)
+	i.remotes.m = make(map[flowKey]*inletConn)
+	if cfg.defaultConn {
+		i.def = i.newDefault()
+	}
 
 	i.wg.Add(2)
 	go i.readLoop()
@@ -283,13 +347,23 @@ func (i *inlet) Accept() (MixedConn, error) {
 // Addr returns the local network address, if known.
 func (i *inlet) Addr() net.Addr { return i.pc.LocalAddr() }
 
+// Default returns the default connection of the inlet, or nil if it has none.
+func (i *inlet) Default() PacketConn {
+	if i.def == nil {
+		return nil // Not a nil *inletDefault, which wouldn't compare equal to nil
+	}
+	return i.def
+}
+
 // Stats returns the numbers of packets dropped so far, by reason.
 func (i *inlet) Stats() InletStats {
 	return InletStats{
-		ConnQueueFull:   i.drops.connQueueFull.Load(),
-		AcceptQueueFull: i.drops.acceptQueueFull.Load(),
-		TableFull:       i.drops.tableFull.Load(),
-		NoDestination:   i.drops.noDestination.Load(),
+		ConnQueueFull:    i.drops.connQueueFull.Load(),
+		AcceptQueueFull:  i.drops.acceptQueueFull.Load(),
+		TableFull:        i.drops.tableFull.Load(),
+		NoDestination:    i.drops.noDestination.Load(),
+		DefaultQueueFull: i.drops.defaultQueueFull.Load(),
+		NoDefault:        i.drops.noDefault.Load(),
 	}
 }
 
@@ -354,7 +428,8 @@ func (i *inlet) newBinding(c *inletConn) *inletBinding {
 	bdg := &inletBinding{c: c}
 	if i.cfg.idleTimeout > 0 {
 		bdg.d = HookDeadline(func() {
-			_ = bdg.c.Close()
+			_ = c.Close()
+			i.deleteConnection(c) // As closing a released connection leaves its flow be
 		})
 		bdg.d.Set(time.Now().Add(i.cfg.idleTimeout))
 	}
@@ -370,7 +445,6 @@ func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
 
 	ic := &inletConn{
 		rdRx: make(chan *inletPacketSmall, i.cfg.readQueueSize),
-		wrTx: i.wrChan,
 		wrRx: make(chan int),
 
 		localDone:  make(chan struct{}),
@@ -416,7 +490,8 @@ func (i *inlet) deleteLoop() {
 	}
 }
 
-// deleteFlow drains the read channel of a closed connection, and deletes its flow from the routing table.
+// deleteFlow drains the read channel of a closed connection, and deletes its flow from the routing table
+// and from the index of remote addresses.
 func (i *inlet) deleteFlow(c *inletConn) {
 	for {
 		select {
@@ -424,6 +499,11 @@ func (i *inlet) deleteFlow(c *inletConn) {
 			putBuf(pkt.ref)
 		default:
 			delete(i.rt, c.key)
+			i.remotes.Lock()
+			if r := c.key.remote(); i.remotes.m[r] == c {
+				delete(i.remotes.m, r)
+			}
+			i.remotes.Unlock()
 			return
 		}
 	}
@@ -493,15 +573,17 @@ func (i *inlet) read(b []byte, p *inletPacketInfo) (n int, err error) {
 	return n, err
 }
 
-// route passes a packet to the inlet connection of its flow, which the first packet of a flow creates
-// and queues for Accept. It drops the packet rather than wait if a queue is full or the table is.
+// route passes a packet to the inlet connection of its flow, or to the default connection if the flow
+// has been released. The first packet of a flow creates its inlet connection, and queues it for Accept,
+// or releases it straight away with WithDefaultOnly. It drops the packet rather than wait if a queue
+// is full or the table is.
 func (i *inlet) route(data []byte, p *inletPacketInfo) {
 	bdg, ok := i.rt[p.key]
-	if !ok || isClosedChan(bdg.c.localDone) { // A closed flow has ended, so its packet starts a new one
+	if !ok || bdg.c.ended() {
 		if !ok && len(i.rt) >= i.cfg.activeConnLimit {
 			// Delete the flows of closed connections whose closing hasn't been reported yet, then check again
 			for _, b := range i.rt {
-				if isClosedChan(b.c.localDone) {
+				if b.c.ended() {
 					i.deleteFlow(b.c)
 				}
 			}
@@ -512,28 +594,167 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 		}
 
 		c := i.newConnection(p)
-		select {
-		case i.acChan <- c:
-		default: // Don't create a flow, so that a retry of the packet is a new flow
-			i.drops.acceptQueueFull.Add(1)
-			return
+		if i.cfg.defaultOnly {
+			c.released.Store(true)
+			c.closeLocal()
+		} else {
+			select {
+			case i.acChan <- c:
+			default: // Don't create a flow, so that a retry of the packet is a new flow
+				i.drops.acceptQueueFull.Add(1)
+				return
+			}
 		}
 
 		bdg = i.newBinding(c)
 		i.rt[p.key] = bdg
+		i.remotes.Lock()
+		i.remotes.m[p.key.remote()] = c
+		i.remotes.Unlock()
 	}
-	bdg.c.localIfIdx.Store(int64(p.idx)) // The latest one is used for replies
+	c := bdg.c
+	c.localIfIdx.Store(int64(p.idx)) // The latest one is used for replies
 
-	pkt := &inletPacketSmall{c: bdg.c, n: len(data)}
+	pkt := &inletPacketSmall{c: c, n: len(data)}
 	if len(data) > 0 {
 		pkt.b, pkt.ref = getBuf(len(data))
 		copy(pkt.b, data)
 	}
+
+	c.mu.Lock() // Keeps the packets of a flow in order while it's being released
+	if c.released.Load() {
+		i.toDefault(pkt)
+	} else {
+		select {
+		case c.rdRx <- pkt:
+		default:
+			putBuf(pkt.ref)
+			i.drops.connQueueFull.Add(1)
+		}
+	}
+	c.mu.Unlock()
+}
+
+// toDefault passes a packet of a released flow to the default connection, or drops it if there is none.
+func (i *inlet) toDefault(pkt *inletPacketSmall) {
+	if i.def == nil || isClosedChan(i.def.localDone) {
+		putBuf(pkt.ref)
+		i.drops.noDefault.Add(1)
+		return
+	}
 	select {
-	case bdg.c.rdRx <- pkt:
+	case i.def.rdRx <- pkt:
 	default:
 		putBuf(pkt.ref)
-		i.drops.connQueueFull.Add(1)
+		i.drops.defaultQueueFull.Add(1)
+	}
+}
+
+// lookupRemote returns the inlet connection of the latest flow of the given remote address, if any.
+func (i *inlet) lookupRemote(addr net.Addr) *inletConn {
+	i.remotes.RLock()
+	defer i.remotes.RUnlock()
+	return i.remotes.m[remoteKey(addr)]
+}
+
+// receive copies the next packet of q into b, waiting until one comes, until done is closed, or until
+// the deadline d passes, and returns the inlet connection of its flow. Once remoteDone is closed, it still
+// returns the packets queued, then io.EOF.
+func receive(b []byte, q chan *inletPacketSmall, done, remoteDone <-chan struct{}, mu *sync.Mutex, d *deadline[noHook]) (int, *inletConn, error) {
+	switch {
+	case isClosedChan(done):
+		return 0, nil, io.ErrClosedPipe
+	case isClosedChan(remoteDone) && len(q) == 0:
+		return 0, nil, io.EOF
+	case isClosedChan(d.Wait()):
+		return 0, nil, os.ErrDeadlineExceeded
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	switch {
+	case isClosedChan(done):
+		return 0, nil, io.ErrClosedPipe
+	case isClosedChan(remoteDone) && len(q) == 0:
+		return 0, nil, io.EOF
+	case isClosedChan(d.Wait()):
+		return 0, nil, os.ErrDeadlineExceeded
+	}
+
+	var pkt *inletPacketSmall
+	select {
+	case pkt = <-q:
+	case <-done:
+		return 0, nil, io.ErrClosedPipe
+	case <-remoteDone:
+		select {
+		case pkt = <-q:
+		default:
+			return 0, nil, io.EOF
+		}
+	case <-d.Wait():
+		return 0, nil, os.ErrDeadlineExceeded
+	}
+	n := copy(b, pkt.b[:pkt.n])
+	putBuf(pkt.ref)
+	return n, pkt.c, nil
+}
+
+// send hands b to the write loop, to be written for the flow of c, or to the address to if c is nil.
+// If the write queue is buffered, it copies b and returns once the packet is queued, otherwise it waits
+// until the packet is written, and gets the number of bytes written on rx. It fails if done is closed,
+// the inlet closes or the deadline d passes first.
+func (i *inlet) send(b []byte, c *inletConn, to net.Addr, done <-chan struct{}, mu *sync.Mutex, d *deadline[noHook], rx chan int) (int, error) {
+	switch {
+	case isClosedChan(done):
+		return 0, io.ErrClosedPipe
+	case isClosedChan(i.done):
+		return 0, io.ErrClosedPipe
+	case isClosedChan(d.Wait()):
+		return 0, os.ErrDeadlineExceeded
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	deadlineChan := d.Wait()
+
+	pkt := &inletPacketSmall{c: c, to: to}
+	if cap(i.wrChan) == 0 {
+		pkt.b, pkt.n, pkt.rx = b, len(b), rx
+		select {
+		case i.wrChan <- pkt:
+			select {
+			case n := <-rx:
+				return n, nil
+			case <-done:
+				return 0, io.ErrClosedPipe
+			case <-i.done:
+				return 0, io.ErrClosedPipe
+			case <-deadlineChan:
+				return 0, os.ErrDeadlineExceeded
+			}
+		case <-done:
+			return 0, io.ErrClosedPipe
+		case <-i.done:
+			return 0, io.ErrClosedPipe
+		case <-deadlineChan:
+			return 0, os.ErrDeadlineExceeded
+		}
+	}
+
+	if len(b) > 0 {
+		pkt.b = i.slicePool.Get().([]byte)
+		pkt.n = copy(pkt.b, b)
+	}
+	select {
+	case i.wrChan <- pkt:
+		return pkt.n, nil
+	case <-done:
+		return 0, io.ErrClosedPipe
+	case <-i.done:
+		return 0, io.ErrClosedPipe
+	case <-deadlineChan:
+		return 0, os.ErrDeadlineExceeded
 	}
 }
 
@@ -551,11 +772,6 @@ loop:
 		case <-i.done:
 			break loop
 		case pkt = <-i.wrChan:
-			// Drop the packet if its origin is unknown.
-			if pkt.c == nil {
-				continue
-			}
-
 		repeatWriting:
 			if i.cfg.writeTimeout > 0 {
 				err = i.pc.SetWriteDeadline(time.Now().Add(i.cfg.writeTimeout))
@@ -578,9 +794,13 @@ loop:
 				}
 			}
 
-			// Write to the underlying FromToPacketConn and check for errors.
-			// Note: any error is ignored, if at least one byte has been written.
-			n, err = i.pc.WriteToFrom(pkt.b[:pkt.n], pkt.c.remoteAddr, pkt.c.localAddr, pkt.c.LocalIfIdx())
+			// Write to the underlying FromToPacketConn and check for errors, with the addresses of the flow,
+			// if any. Note: any error is ignored, if at least one byte has been written.
+			remote, local, idx := pkt.to, net.Addr(nil), 0
+			if pkt.c != nil {
+				remote, local, idx = pkt.c.remoteAddr, pkt.c.localAddr, pkt.c.LocalIfIdx()
+			}
+			n, err = i.pc.WriteToFrom(pkt.b[:pkt.n], remote, local, idx)
 			if n == 0 && err != nil {
 				// If it's a timeout, drop the packet and return, or continue the loop.
 				if errors.As(err, &nrr) && nrr.Timeout() {
@@ -608,10 +828,10 @@ loop:
 				break loop
 			}
 
-			// Report the number of bytes written, if the write channel is unbuffered.
-			if cap(i.wrChan) == 0 {
+			// Report the number of bytes written to a write waiting for it.
+			if pkt.rx != nil {
 				select {
-				case pkt.c.wrRx <- n:
+				case pkt.rx <- n:
 				default:
 				}
 			}
@@ -639,15 +859,8 @@ type inletConn struct {
 	localAddr  net.Addr
 	remoteAddr net.Addr
 
-	// Used by local Read to interact with remote Write.
-	// For a sync/semi-sync pipe, receive on rdRx is always followed by send on rdTx
-	rdRx chan *inletPacketSmall
-	// rdTx chan<- int
-
-	// Used by local Write to interact with remote Read.
-	// For a sync/semi-sync pipe, send on wrTx is always followed by receive on wrRx
-	wrTx chan *inletPacketSmall
-	wrRx chan int
+	rdRx chan *inletPacketSmall // Packets of the flow, unless it's been released
+	wrRx chan int               // Numbers of bytes written, for writes waiting for them
 
 	localDone  chan struct{}
 	remoteDone <-chan struct{}
@@ -655,7 +868,10 @@ type inletConn struct {
 	rdDeadline deadline[noHook]
 	wrDeadline deadline[noHook]
 
+	released atomic.Bool // Set before closing localDone, if the flow goes on to the default connection
+
 	once sync.Once  // Protects closing localDone
+	mu   sync.Mutex // Keeps the packets of the flow in order while it's being released
 	rdMu sync.Mutex // Serialize Read operations
 	wrMu sync.Mutex // Serialize Write operations
 
@@ -681,44 +897,11 @@ func (ic *inletConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) 
 }
 
 func (ic *inletConn) readFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	switch {
-	case isClosedChan(ic.localDone):
-		return 0, nil, nil, 0, io.ErrClosedPipe
-	case isClosedChan(ic.remoteDone) && len(ic.rdRx) == 0:
-		return 0, nil, nil, 0, io.EOF
-	case isClosedChan(ic.rdDeadline.Wait()):
-		return 0, nil, nil, 0, os.ErrDeadlineExceeded
+	n, _, err := receive(b, ic.rdRx, ic.localDone, ic.remoteDone, &ic.rdMu, &ic.rdDeadline)
+	if err != nil {
+		return 0, nil, nil, 0, err
 	}
-
-	ic.rdMu.Lock()
-	defer ic.rdMu.Unlock()
-	switch {
-	case isClosedChan(ic.localDone):
-		return 0, nil, nil, 0, io.ErrClosedPipe
-	case isClosedChan(ic.remoteDone) && len(ic.rdRx) == 0:
-		return 0, nil, nil, 0, io.EOF
-	case isClosedChan(ic.rdDeadline.Wait()):
-		return 0, nil, nil, 0, os.ErrDeadlineExceeded
-	}
-
-	select {
-	case pkt := <-ic.rdRx:
-		nr := copy(b, pkt.b[:pkt.n])
-		putBuf(pkt.ref)
-		return nr, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), nil
-	case <-ic.localDone:
-		return 0, nil, nil, 0, io.ErrClosedPipe
-	case <-ic.remoteDone:
-		if len(ic.rdRx) > 0 {
-			pkt := <-ic.rdRx
-			nr := copy(b, pkt.b[:pkt.n])
-			putBuf(pkt.ref)
-			return nr, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), nil
-		}
-		return 0, nil, nil, 0, io.EOF
-	case <-ic.rdDeadline.Wait():
-		return 0, nil, nil, 0, os.ErrDeadlineExceeded
-	}
+	return n, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), nil
 }
 
 func (ic *inletConn) Write(b []byte) (int, error) { return ic.WriteTo(b, ic.remoteAddr) }
@@ -728,78 +911,55 @@ func (ic *inletConn) WriteTo(b []byte, _ net.Addr) (int, error) {
 }
 
 func (ic *inletConn) WriteToFrom(b []byte, _, _ net.Addr, _ int) (int, error) {
-	n, err := ic.writeToFrom(b, nil, nil, 0)
+	n, err := ic.parent.send(b, ic, nil, ic.localDone, &ic.wrMu, &ic.wrDeadline, ic.wrRx)
 	if err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		err = &net.OpError{Op: "write", Net: ic.parent.pc.LocalAddr().Network(), Err: err, Source: ic.LocalAddr(), Addr: ic.remoteAddr}
 	}
 	return n, err
 }
 
-func (ic *inletConn) writeToFrom(b []byte, _, _ net.Addr, _ int) (int, error) {
-	switch {
-	case isClosedChan(ic.localDone):
-		return 0, io.ErrClosedPipe
-	case isClosedChan(ic.remoteDone):
-		return 0, io.ErrClosedPipe
-	case isClosedChan(ic.wrDeadline.Wait()):
-		return 0, os.ErrDeadlineExceeded
+// Close closes the connection and ends its flow, so that the next packet of the flow starts a new one.
+func (ic *inletConn) Close() error {
+	if !ic.closeLocal() {
+		return net.ErrClosed
+	}
+	ic.parent.deleteConnection(ic)
+	return nil
+}
+
+// Release hands the flow of the connection over to the default connection of the inlet: the packets
+// queued and all the later packets of the flow go there, or are dropped if the inlet has no default
+// connection. The connection is closed, but its flow goes on until it's idle.
+func (ic *inletConn) Release() error {
+	ic.mu.Lock()
+	defer ic.mu.Unlock()
+	if isClosedChan(ic.localDone) {
+		return net.ErrClosed
 	}
 
-	ic.wrMu.Lock()
-	defer ic.wrMu.Unlock()
-	deadlineChan := ic.wrDeadline.Wait()
-
-	pkt := &inletPacketSmall{c: ic}
-	if cap(ic.wrTx) == 0 {
-		if len(b) > 0 {
-			pkt.b, pkt.n = b, len(b)
-		}
+	ic.released.Store(true)
+	for {
 		select {
-		case ic.wrTx <- pkt:
-			select {
-			case n := <-ic.wrRx:
-				return n, nil
-			case <-ic.localDone:
-				return 0, io.ErrClosedPipe
-			case <-ic.remoteDone:
-				return 0, io.ErrClosedPipe
-			case <-deadlineChan:
-				return 0, os.ErrDeadlineExceeded
-			}
-		case <-ic.localDone:
-			return 0, io.ErrClosedPipe
-		case <-ic.remoteDone:
-			return 0, io.ErrClosedPipe
-		case <-deadlineChan:
-			return 0, os.ErrDeadlineExceeded
-		}
-	} else {
-		if len(b) > 0 {
-			pkt.b = ic.parent.slicePool.Get().([]byte)
-			pkt.n = copy(pkt.b, b)
-		}
-		select {
-		case ic.wrTx <- pkt:
-			return pkt.n, nil
-		case <-ic.localDone:
-			return 0, io.ErrClosedPipe
-		case <-ic.remoteDone:
-			return 0, io.ErrClosedPipe
-		case <-deadlineChan:
-			return 0, os.ErrDeadlineExceeded
+		case pkt := <-ic.rdRx:
+			ic.parent.toDefault(pkt)
+		default:
+			ic.closeLocal()
+			return nil
 		}
 	}
 }
 
-func (ic *inletConn) Close() (err error) {
-	err = net.ErrClosed
+// closeLocal closes localDone, and reports whether it's done so, rather than found it closed.
+func (ic *inletConn) closeLocal() (closed bool) {
 	ic.once.Do(func() {
 		close(ic.localDone)
-		ic.parent.deleteConnection(ic)
-		err = nil
+		closed = true
 	})
-	return
+	return closed
 }
+
+// ended reports whether the flow of the connection has ended, i.e. it's been closed without being released.
+func (ic *inletConn) ended() bool { return isClosedChan(ic.localDone) && !ic.released.Load() }
 
 func (ic *inletConn) LocalIfIdx() int { return int(ic.localIfIdx.Load()) }
 
@@ -837,6 +997,101 @@ func (ic *inletConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+// inletDefault is the default connection of an inlet: a plain PacketConn serving the flows released by
+// their handlers, or every flow with WithDefaultOnly. It deliberately gives no access to the socket.
+type inletDefault struct {
+	parent *inlet
+
+	rdRx chan *inletPacketSmall // Packets of released flows
+	wrRx chan int               // Numbers of bytes written, for writes waiting for them
+
+	localDone chan struct{}
+
+	rdDeadline deadline[noHook]
+	wrDeadline deadline[noHook]
+
+	once sync.Once  // Protects closing localDone
+	rdMu sync.Mutex // Serialize Read operations
+	wrMu sync.Mutex // Serialize Write operations
+}
+
+func (i *inlet) newDefault() *inletDefault {
+	return &inletDefault{
+		parent:     i,
+		rdRx:       make(chan *inletPacketSmall, i.cfg.defaultQueueSize),
+		wrRx:       make(chan int),
+		localDone:  make(chan struct{}),
+		rdDeadline: makeDeadline(noHook{}),
+		wrDeadline: makeDeadline(noHook{}),
+	}
+}
+
+// ReadFrom reads a packet of a released flow, and returns the remote address of the flow.
+func (d *inletDefault) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, c, err := receive(b, d.rdRx, d.localDone, d.parent.done, &d.rdMu, &d.rdDeadline)
+	if err != nil {
+		return 0, nil, d.opError("read", nil, err)
+	}
+	return n, c.remoteAddr, nil
+}
+
+// WriteTo writes a packet to addr, from the local address and through the interface of the latest flow
+// of addr, or from those the system chooses if the inlet hasn't seen addr.
+func (d *inletDefault) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if addr == nil {
+		return 0, d.opError("write", nil, errMissingAddress)
+	}
+	n, err := d.parent.send(b, d.parent.lookupRemote(addr), addr, d.localDone, &d.wrMu, &d.wrDeadline, d.wrRx)
+	return n, d.opError("write", addr, err)
+}
+
+// Close closes the default connection, so that the packets of released flows are dropped from now on.
+func (d *inletDefault) Close() error {
+	err := net.ErrClosed
+	d.once.Do(func() {
+		close(d.localDone)
+		err = nil
+	})
+	return err
+}
+
+func (d *inletDefault) LocalAddr() net.Addr { return d.parent.pc.LocalAddr() }
+
+func (d *inletDefault) SetDeadline(t time.Time) error {
+	if isClosedChan(d.localDone) || isClosedChan(d.parent.done) {
+		return io.ErrClosedPipe
+	}
+	d.rdDeadline.Set(t)
+	d.wrDeadline.Set(t)
+	return nil
+}
+
+func (d *inletDefault) SetReadDeadline(t time.Time) error {
+	if isClosedChan(d.localDone) || isClosedChan(d.parent.done) {
+		return io.ErrClosedPipe
+	}
+	d.rdDeadline.Set(t)
+	return nil
+}
+
+func (d *inletDefault) SetWriteDeadline(t time.Time) error {
+	if isClosedChan(d.localDone) || isClosedChan(d.parent.done) {
+		return io.ErrClosedPipe
+	}
+	d.wrDeadline.Set(t)
+	return nil
+}
+
+// opError wraps an error of an operation on the default connection, except for the end of reading.
+func (d *inletDefault) opError(op string, addr net.Addr, err error) error {
+	if err == nil || err == io.EOF || errors.Is(err, io.ErrClosedPipe) {
+		return err
+	}
+	return &net.OpError{Op: op, Net: d.LocalAddr().Network(), Source: d.LocalAddr(), Addr: addr, Err: err}
+}
+
+var errMissingAddress = errors.New("hybrid: missing address")
+
 // Defaults
 const (
 	poIdleTimeoutDef = 30 * time.Second
@@ -847,6 +1102,9 @@ const (
 
 	piAcceptQueueSizeDef = 8
 	piAcceptQueueSizeMin = 1 // As the read loop drops a new flow rather than wait for Accept
+
+	piDefaultQueueSizeDef = 1024 // As the default connection may serve many flows
+	piDefaultQueueSizeMin = 1    // As the read loop drops a packet rather than wait for a reader
 
 	piDeleteQueueSizeDef = 8
 	piDeleteQueueSizeMin = 0
@@ -869,5 +1127,6 @@ const (
 // Interface guards
 var (
 	_ PacketConnWrapper = (*inlet)(nil)
-	_ PacketListener    = (*inlet)(nil)
+	_ InletListener     = (*inlet)(nil)
+	_ PacketConn        = (*inletDefault)(nil)
 )

@@ -524,3 +524,179 @@ func TestInletDrops(t *testing.T) {
 		}
 	})
 }
+
+// inletTrunk returns a trunk end to write to an inlet over the other end from, and the inlet.
+func inletTrunk(t *testing.T, opts ...InletOption) (FromToPacketConn, InletListener) {
+	t.Helper()
+	client, server := BufferedTrunk(16, nil, nil)
+	t.Cleanup(func() { _ = client.Close() })
+	ln := Inlet(server, opts...)
+	t.Cleanup(func() { _ = ln.Close() })
+	return client, ln
+}
+
+// writeFrom writes data over a trunk end from the given source address, or fails.
+func writeFrom(t *testing.T, client FromToPacketConn, src net.Addr, data string) {
+	t.Helper()
+	if _, err := client.WriteToFrom([]byte(data), nil, src, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// readDefault returns the packets read from a default connection, with their remote addresses,
+// until none comes for a while.
+func readDefault(t *testing.T, d PacketConn) []string {
+	t.Helper()
+	var pkts []string
+	b := make([]byte, 64)
+	for {
+		_ = d.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		n, addr, err := d.ReadFrom(b)
+		if err != nil {
+			return pkts
+		}
+		pkts = append(pkts, addr.String()+":"+string(b[:n]))
+	}
+}
+
+// TestInletRelease ensures releasing an inlet connection hands the packets queued and the later packets
+// of its flow over to the default connection, in order, while the other flows go on as they were.
+func TestInletRelease(t *testing.T) {
+	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+	client, ln := inletTrunk(t, WithDefaultConn(true))
+	writeFrom(t, client, a, "a1")
+	writeFrom(t, client, a, "a2")
+	conn := acceptInletConn(t, ln)
+	if err := conn.(interface{ Release() error }).Release(); err != nil {
+		t.Fatalf("Release() = %v, want nil", err)
+	}
+	writeFrom(t, client, a, "a3")
+	writeFrom(t, client, b, "b1")
+
+	if got, want := strings.Join(readDefault(t, ln.Default()), " "), a.String()+":a1 "+a.String()+":a2 "+a.String()+":a3"; got != want {
+		t.Errorf("packets of the default connection = %q, want %q", got, want)
+	}
+	if other := acceptInletConn(t, ln); other.RemoteAddr().String() != b.String() {
+		t.Errorf("RemoteAddr() = %s, want %s", other.RemoteAddr(), b)
+	}
+	if _, err := conn.Read(make([]byte, 8)); err == nil {
+		t.Errorf("Read() after Release() = nil, want an error")
+	}
+	if err := conn.(interface{ Release() error }).Release(); err == nil {
+		t.Errorf("Release() again = nil, want an error")
+	}
+	if err := conn.Close(); err == nil {
+		t.Errorf("Close() after Release() = nil, want an error")
+	}
+	waitInletStats(t, ln, InletStats{})
+}
+
+// TestInletReleaseWithoutDefault ensures releasing an inlet connection without a default connection drops
+// the packets of its flow, without starting a new flow.
+func TestInletReleaseWithoutDefault(t *testing.T) {
+	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+	client, ln := inletTrunk(t)
+	if ln.Default() != nil {
+		t.Fatalf("Default() = %v, want nil", ln.Default())
+	}
+	writeFrom(t, client, a, "a1")
+	if err := acceptInletConn(t, ln).(interface{ Release() error }).Release(); err != nil {
+		t.Fatalf("Release() = %v, want nil", err)
+	}
+	writeFrom(t, client, a, "a2")
+	writeFrom(t, client, b, "b1")
+	waitInletStats(t, ln, InletStats{NoDefault: 2})
+	if conn := acceptInletConn(t, ln); conn.RemoteAddr().String() != b.String() { // Not a new flow of a
+		t.Errorf("RemoteAddr() = %s, want %s", conn.RemoteAddr(), b)
+	}
+}
+
+// TestInletDefaultOnly ensures every flow goes to the default connection straight away with WithDefaultOnly,
+// that a full queue of the default connection drops packets, and that a closed one does too.
+func TestInletDefaultOnly(t *testing.T) {
+	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+
+	t.Run("Flows", func(t *testing.T) {
+		client, ln := inletTrunk(t, WithDefaultOnly(true))
+		accepted := make(chan error, 1)
+		go func() {
+			_, err := ln.Accept()
+			accepted <- err
+		}()
+		writeFrom(t, client, a, "a1")
+		writeFrom(t, client, b, "b1")
+		writeFrom(t, client, a, "a2")
+		if got, want := strings.Join(readDefault(t, ln.Default()), " "), a.String()+":a1 "+b.String()+":b1 "+a.String()+":a2"; got != want {
+			t.Errorf("packets of the default connection = %q, want %q", got, want)
+		}
+		_ = ln.Close()
+		if err := <-accepted; err == nil {
+			t.Errorf("Accept() = nil, want an error once the inlet is closed, as no flow is accepted")
+		}
+	})
+
+	t.Run("QueueFull", func(t *testing.T) {
+		client, ln := inletTrunk(t, WithDefaultOnly(true), WithDefaultQueueSize(1))
+		writeFrom(t, client, a, "a1")
+		writeFrom(t, client, a, "a2")
+		writeFrom(t, client, b, "b1")
+		waitInletStats(t, ln, InletStats{DefaultQueueFull: 2})
+		if got, want := strings.Join(readDefault(t, ln.Default()), " "), a.String()+":a1"; got != want {
+			t.Errorf("packets of the default connection = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("Closed", func(t *testing.T) {
+		client, ln := inletTrunk(t, WithDefaultOnly(true))
+		if err := ln.Default().Close(); err != nil {
+			t.Fatalf("Close() = %v, want nil", err)
+		}
+		writeFrom(t, client, a, "a1")
+		waitInletStats(t, ln, InletStats{NoDefault: 1})
+	})
+}
+
+// TestInletDefaultWrite ensures the default connection writes to a remote address it has seen from the local
+// address and through the interface of its latest flow, and lets the system choose them for another one.
+func TestInletDefaultWrite(t *testing.T) {
+	a, u := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 9), Port: 9}
+	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
+	client, ln := inletTrunk(t, WithDefaultOnly(true))
+	if _, err := client.WriteToFrom([]byte("a1"), local, a, 3); err != nil {
+		t.Fatal(err)
+	}
+	def := ln.Default()
+	_ = def.SetReadDeadline(time.Now().Add(time.Second))
+	b := make([]byte, 8)
+	if _, addr, err := def.ReadFrom(b); err != nil || addr.String() != a.String() {
+		t.Fatalf("ReadFrom() = %v, %v, want %s, nil", addr, err, a)
+	}
+
+	read := func() (string, net.Addr, net.Addr, int) {
+		t.Helper()
+		_ = client.SetReadDeadline(time.Now().Add(time.Second))
+		n, src, dst, idx, err := client.ReadFromTo(b)
+		if err != nil {
+			t.Fatalf("ReadFromTo() = %v, want nil", err)
+		}
+		return string(b[:n]), src, dst, idx
+	}
+
+	if _, err := def.WriteTo([]byte("x"), a); err != nil {
+		t.Fatalf("WriteTo(%s) = %v, want nil", a, err)
+	}
+	if data, src, dst, idx := read(); data != "x" || src.String() != local.String() || dst.String() != a.String() || idx != 3 {
+		t.Errorf("ReadFromTo() = %q from %s to %s through %d, want %q from %s to %s through 3", data, src, dst, idx, "x", local, a)
+	}
+
+	if _, err := def.WriteTo([]byte("y"), u); err != nil {
+		t.Fatalf("WriteTo(%s) = %v, want nil", u, err)
+	}
+	if data, src, dst, idx := read(); data != "y" || src.String() == local.String() || dst.String() != u.String() || idx != 0 {
+		t.Errorf("ReadFromTo() = %q from %s to %s through %d, want %q from the system's choice to %s through 0", data, src, dst, idx, "y", u)
+	}
+
+	if _, err := def.WriteTo([]byte("z"), nil); err == nil {
+		t.Errorf("WriteTo(nil) = nil, want an error")
+	}
+}
