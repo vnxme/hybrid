@@ -496,14 +496,21 @@ func TestPacketInfoUDPConnFamily(t *testing.T) {
 		})
 	}
 
-	t.Run("NotUDPAddr", func(t *testing.T) {
+	t.Run("BadLocalAddr", func(t *testing.T) {
 		pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = pc.Close() }()
-		if _, err = PacketInfoUDPConn(localAddrConn{pc, oneTrunkAddr}); err == nil {
-			t.Errorf("PacketInfoUDPConn() = nil, want an error")
+		for _, addr := range []net.Addr{
+			nil,                                      // No local address
+			oneTrunkAddr,                             // Not a *net.UDPAddr
+			(*net.UDPAddr)(nil),                      // No port
+			&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, // Not bound to a port
+		} {
+			if c, err := PacketInfoUDPConn(localAddrConn{pc, addr}); err == nil {
+				t.Errorf("PacketInfoUDPConn() with local address %#v = %v, nil, want an error", addr, c)
+			}
 		}
 	})
 }

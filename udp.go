@@ -78,6 +78,9 @@ func PacketInfoUDPConn(conn UDPConn) (FromToUDPConn, error) {
 	if !ok {
 		return nil, errors.New("hybrid: UDPConn has no local *net.UDPAddr")
 	}
+	if addr.AddrPort().Port() == 0 { // Packets read are reported as sent to this port
+		return nil, errors.New("hybrid: UDPConn isn't bound to a port")
+	}
 
 	raw, err := conn.SyscallConn()
 	if err != nil {
