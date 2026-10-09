@@ -26,6 +26,67 @@ import (
 	"time"
 )
 
+// Inlet design. This is the target the code below is being brought in line with.
+//
+// An inlet serves a packet connection, typically a UDP socket, to many handlers at once, the way
+// a TCP listener serves a socket to many connections. Its read loop reads every packet, tells
+// the flows apart, and passes each flow either to an inlet connection, which a handler serves
+// like an accepted TCP connection, or to the default connection, which serves all the other
+// flows together, e.g. as the packet connection of the QUIC server of Caddy, which tells QUIC
+// connections apart itself. Its write loop writes the packets of all those connections.
+//
+// Flows. A flow of a UDP connection that reports the destination address of each packet, e.g. with
+// packet info, is identified by its source and destination addresses, as netip.AddrPort values.
+// A flow of any other connection, e.g. of a UDP connection without packet info or of a trunk, is
+// identified by its source address alone, as a netip.AddrPort value for a *net.UDPAddr, or as the
+// string of any other address. One comparable key type holds either, so a UDP flow is looked up
+// without allocating. Which addresses identify a flow is decided once per inlet, not per packet,
+// so that a flow never splits: an inlet that uses destination addresses drops a packet without one.
+// The interface index isn't part of a flow, as it may change, e.g. with asymmetric routing: the
+// latest one is kept and used for replies. Trunks carry the addresses their writers give, so
+// a test can have many flows over a trunk by writing from distinct source addresses: a trunk end
+// writing without one gives its own local address, which makes a single flow.
+//
+// Lifecycle. The first packet of an unknown flow creates an inlet connection, queues it for Accept,
+// and queues the packet on it. A handler accepting the connection either serves it or releases it,
+// e.g. as no matcher recognizes the flow: then the packets queued on the connection and all the later
+// packets of the flow go to the default connection if there is one, or are dropped if there isn't.
+// Optionally, every new flow goes to the default connection straight away, for an inlet nobody
+// accepts connections from. A flow ends when its connection is closed, by its handler or by its idle
+// timeout, and its next packet starts a new flow straight away: UDP has nothing like TCP's TIME_WAIT
+// and RST to tell a late packet of an old flow from the first packet of a new one.
+//
+// Deadlines. Inlet connections and the default connection have read and write deadlines of their own,
+// like any net.Conn or net.PacketConn. Each flow has an idle timeout, which every packet read or written
+// refreshes: an atomic timestamp per flow, checked by a periodic sweeper, keeps that cheap. Only the read
+// loop sets the read deadline of the underlying connection, to be interrupted when the inlet closes, and
+// only the write loop sets its write deadline, to apply the write timeout of the inlet: as the deadlines
+// of a socket are shared by everything using it, each has a single user.
+//
+// Reading. Only the read loop changes the flow table, so it takes no lock on the way of a packet:
+// closed and expired flows reach it over a channel. It reads into a buffer as large as the largest
+// datagram, and copies each packet into a pooled buffer of its size before queueing it.
+//
+// Writing. Inlet connections and the default connection hand their packets to the write loop, which
+// writes them to the underlying connection one by one, with the addresses of their flows. A write copies
+// its packet into a pooled buffer of its size and returns once the packet is queued, the way a UDP write
+// returns once the system has copied it: if the write queue is full, it waits for room until the write
+// deadline of its connection. So a write can't report an error of the underlying connection: the write
+// loop counts it, and closes the inlet if the underlying connection fails for good. The write timeout
+// of the inlet limits how long the write loop waits on the underlying connection for one packet, so
+// that a stuck write can't hold every flow up. The default connection is a plain net.PacketConn, whose
+// WriteTo knows only the remote address. So it looks the remote address up in an index of the latest
+// flow of each remote address, safe for concurrent use, to write from the local address and through
+// the interface that flow came to, and lets the system choose them for a remote address it hasn't seen.
+// It deliberately gives no access to the socket, e.g. no SyscallConn, so that a QUIC server can't change
+// socket options or read from the socket past the inlet.
+//
+// Dropping. Like a UDP socket whose buffer is full, the inlet never blocks its read loop on a slow reader:
+// it drops a packet if the queue of its connection is full, if the accept queue is full (without creating
+// a flow, so that a retry by the client is a new flow), if the flow table is full, or if the packet has no
+// destination address while the inlet uses destination addresses. The write loop drops a packet whose write
+// times out or fails. Every drop is counted by its reason, and the counters can be read with Stats.
+
 type inletConfig struct {
 	idleTimeout  time.Duration
 	readTimeout  time.Duration
