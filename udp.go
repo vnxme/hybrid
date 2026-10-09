@@ -30,8 +30,6 @@ import (
 type packetInfoUDPConn struct {
 	UDPConn
 
-	net string // Equals `udp`, `udp4` or `udp6`
-
 	rdOOBSize atomic.Int32 // Size of control message buffers for reading, if grown from pktinfo.BufferSize
 	port      uint16       // Contains the local port number
 
@@ -106,21 +104,23 @@ func PacketInfoUDPConn(conn UDPConn) (FromToUDPConn, error) {
 		return nil, err
 	}
 
-	network := "udp"
-	switch {
-	case v4Only:
-		network = "udp4"
-	case v6Only:
-		network = "udp6"
-	}
-
 	return &packetInfoUDPConn{
 		UDPConn: conn,
-		net:     network,
 		port:    addr.AddrPort().Port(),
 		v4Only:  v4Only,
 		v6Only:  v6Only,
 	}, nil
+}
+
+// network returns udp4 or udp6 for an IPv4-only or IPv6-only connection, or udp for a dual-stack one.
+func (u *packetInfoUDPConn) network() string {
+	switch {
+	case u.v4Only:
+		return "udp4"
+	case u.v6Only:
+		return "udp6"
+	}
+	return "udp"
 }
 
 // ReadFromTo wraps around ReadFromToUDPAddrPort. Like [net.UDPConn.ReadFrom], it returns nil
@@ -171,12 +171,12 @@ func (u *packetInfoUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort
 func (u *packetInfoUDPConn) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	dstAddr, dstOk := dst.(*net.UDPAddr)
 	if !dstOk {
-		return 0, &net.OpError{Op: "write", Net: u.net, Source: src, Addr: dst, Err: syscall.EINVAL}
+		return 0, &net.OpError{Op: "write", Net: u.network(), Source: src, Addr: dst, Err: syscall.EINVAL}
 	}
 
 	srcAddr, srcOk := src.(*net.UDPAddr)
 	if src != nil && !srcOk {
-		return 0, &net.OpError{Op: "write", Net: u.net, Source: src, Addr: dst, Err: syscall.EINVAL}
+		return 0, &net.OpError{Op: "write", Net: u.network(), Source: src, Addr: dst, Err: syscall.EINVAL}
 	}
 
 	return u.WriteToFromUDP(b, dstAddr, srcAddr, idx)
@@ -200,7 +200,7 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 	is4 := bits == 32
 	accepted := is4 && !u.v6Only || bits == 128 && !u.v4Only
 	if idx < 0 || idx > math.MaxInt32 || !accepted || srcBits != 0 && srcBits != bits {
-		return 0, &net.OpError{Op: "write", Net: u.net, Source: addrPortToAddr(src), Addr: addrPortToAddr(dst), Err: syscall.EINVAL}
+		return 0, &net.OpError{Op: "write", Net: u.network(), Source: addrPortToAddr(src), Addr: addrPortToAddr(dst), Err: syscall.EINVAL}
 	}
 
 	// Without src, let the system choose it, and the interface too, unless idx is set and the system

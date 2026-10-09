@@ -486,9 +486,9 @@ func TestPacketInfoUDPConnFamily(t *testing.T) {
 				t.Fatalf("PacketInfoUDPConn() = %v, want nil", err)
 			}
 			u := c.(*packetInfoUDPConn)
-			if u.v4Only != test.v4Only || u.v6Only != test.v6Only || u.net != test.net {
+			if u.v4Only != test.v4Only || u.v6Only != test.v6Only || u.network() != test.net {
 				t.Errorf("PacketInfoUDPConn() = v4Only %v, v6Only %v, net %s, want %v, %v, %s",
-					u.v4Only, u.v6Only, u.net, test.v4Only, test.v6Only, test.net)
+					u.v4Only, u.v6Only, u.network(), test.v4Only, test.v6Only, test.net)
 			}
 			if want := uint16(pc.LocalAddr().(*net.UDPAddr).Port); u.port != want { //nolint:gosec // G115
 				t.Errorf("PacketInfoUDPConn() = port %d, want %d", u.port, want)
