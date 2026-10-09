@@ -17,6 +17,7 @@
 package hybrid
 
 import (
+	"math"
 	"net"
 	"net/netip"
 	"syscall"
@@ -79,56 +80,50 @@ func BenchmarkIsLocalIP6(b *testing.B) {
 	})
 }
 
+// TestMarshalParsePacketInfo ensures the marshallers report the size they need, and that IPv6 packet info,
+// which has the same layout for sending and receiving, is parsed as it has been marshalled. IPv4 packet info
+// isn't parsed, as it has different meanings or even types for sending and receiving, e.g. on Linux,
+// in_pktinfo carries the source address in ipi_spec_dst for sending, but the destination one in ipi_addr
+// for receiving, while BSD sends IP_SENDSRCADDR with no interface index. Real IPv4 control messages are
+// covered by TestControlUDPPacketInfo and TestPacketInfoUDPConnInterfaces.
 func TestMarshalParsePacketInfo(t *testing.T) {
-	wr4, wr6 := make([]byte, cMsgBufferSize), make([]byte, cMsgBufferSize)
-
-	var addr netip.Addr
-	var idx int
-	var n int
-	var ok bool
-	var oob []byte
-	for _, test := range []struct {
-		addr netip.Addr
-		idx  int
-		v6   bool
+	for _, marshal := range []struct {
+		name string
+		f    func(oob []byte, src netip.Addr, idx int, full bool) (int, bool)
 	}{
-		{netip.Addr{}, 0, false},
-		{netip.Addr{}, 1, false},
-		{netip.Addr{}, 2 ^ 31 - 1, false},
-		{netip.IPv4Unspecified(), 0, false},
-		{netip.AddrFrom4([4]byte{127, 0, 0, 1}), 0, false},
-		{netip.Addr{}, 0, true},
-		{netip.Addr{}, 1, true},
-		{netip.Addr{}, 2 ^ 31 - 1, true},
-		{netip.IPv6Unspecified(), 0, true},
-		{netip.AddrFrom16([16]byte{15: 1}), 0, true},
+		{"marshalPacketInfo4", marshalPacketInfo4},
+		{"marshalPacketInfo6", marshalPacketInfo6},
 	} {
-		if test.v6 {
-			n, ok = marshalPacketInfo6(wr6, test.addr, test.idx, true)
-			if !ok {
-				t.Errorf("marshalPacketInfo6(%v, %v, %v) failed", wr6, test.addr, test.idx)
-			}
-			oob = wr6[:n]
-		} else {
-			n, ok = marshalPacketInfo4(wr4, test.addr, test.idx, true)
-			if !ok {
-				t.Errorf("marshalPacketInfo4(%v, %v, %v) failed", wr4, test.addr, test.idx)
-			}
-			oob = wr4[:n]
+		n, ok := marshal.f(make([]byte, cMsgBufferSize), netip.Addr{}, 0, true)
+		if n <= 0 || n > cMsgBufferSize || !ok {
+			t.Errorf("%s() into %d bytes = %d, %v, want up to %d, true", marshal.name, cMsgBufferSize, n, ok, cMsgBufferSize)
 		}
+		if got, ok := marshal.f(make([]byte, n-1), netip.Addr{}, 0, true); got != n || ok {
+			t.Errorf("%s() into %d bytes = %d, %v, want %d, false", marshal.name, n-1, got, ok, n)
+		}
+	}
 
-		addr, idx, ok = parsePacketInfo(oob)
-		switch {
-		case !ok:
-			t.Errorf("parsePacketInfo(%v) failed", oob)
-		case test.addr.IsValid() && addr != test.addr:
-			t.Errorf("parsePacketInfo(%v) returned %v; want %v", oob, addr, test.addr)
-		case !test.addr.IsValid() && !test.v6 && addr != netip.IPv4Unspecified():
-			t.Errorf("parsePacketInfo(%v) returned %v; want %v", oob, addr, netip.IPv4Unspecified())
-		case !test.addr.IsValid() && test.v6 && addr != netip.IPv6Unspecified():
-			t.Errorf("parsePacketInfo(%v) returned %v; want %v", oob, addr, netip.IPv6Unspecified())
-		case idx != test.idx:
-			t.Errorf("parsePacketInfo(%v) returned %v; want %v", oob, idx, test.idx)
+	for _, test := range []struct {
+		src  netip.Addr
+		idx  int
+		want netip.Addr
+	}{
+		{netip.Addr{}, 0, netip.IPv6Unspecified()},
+		{netip.Addr{}, 1, netip.IPv6Unspecified()},
+		{netip.Addr{}, math.MaxInt32, netip.IPv6Unspecified()},
+		{netip.IPv6Unspecified(), 0, netip.IPv6Unspecified()},
+		{netip.IPv6Loopback(), 0, netip.IPv6Loopback()},
+		{netip.IPv6Loopback(), 1, netip.IPv6Loopback()},
+		{netip.MustParseAddr("2001:db8::1"), math.MaxInt32, netip.MustParseAddr("2001:db8::1")},
+	} {
+		oob := make([]byte, cMsgBufferSize)
+		for i := range oob {
+			oob[i] = 0xff // Any byte left unwritten is noticed
+		}
+		n, _ := marshalPacketInfo6(oob, test.src, test.idx, true)
+		if dst, idx, ok := parsePacketInfo(oob[:n]); dst != test.want || idx != test.idx || !ok {
+			t.Errorf("parsePacketInfo() of marshalPacketInfo6(%s, %d) = %s, %d, %v, want %s, %d, true",
+				test.src, test.idx, dst, idx, ok, test.want, test.idx)
 		}
 	}
 }
