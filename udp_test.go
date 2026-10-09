@@ -549,6 +549,89 @@ func TestAddrPortToUDPAddr(t *testing.T) {
 	}
 }
 
+// BenchmarkPacketInfoUDPConn measures writes and reads with packet info over loopback, next to
+// those of the underlying *net.UDPConn. Each operation is a write and the read of the same datagram.
+func BenchmarkPacketInfoUDPConn(b *testing.B) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		b.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	lo := netip.MustParseAddr("127.0.0.1")
+	listen := func() (*net.UDPConn, netip.AddrPort) {
+		pc, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(lo, 0)))
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(func() { _ = pc.Close() })
+		_ = pc.SetReadDeadline(time.Now().Add(time.Minute)) // Fail rather than hang if a datagram is lost
+		return pc, pc.LocalAddr().(*net.UDPAddr).AddrPort()
+	}
+	pc, self := listen()
+	peer, other := listen()
+	c, err := PacketInfoUDPConn(pc)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	p := make([]byte, 64)
+	write := func() error { // From the peer to the packet info conn
+		_, err := peer.WriteToUDPAddrPort(p, self)
+		return err
+	}
+	read := func() error { // By the peer from the packet info conn
+		_, _, err := peer.ReadFromUDPAddrPort(p)
+		return err
+	}
+	for _, bench := range []struct {
+		name string
+		op   func() error
+	}{
+		{"WriteToFromUDPAddrPort", func() error {
+			if _, err := c.WriteToFromUDPAddrPort(p, other, netip.AddrPortFrom(lo, 0), 0); err != nil {
+				return err
+			}
+			return read()
+		}},
+		{"WriteToUDPAddrPort", func() error { // Without packet info
+			if _, err := pc.WriteToUDPAddrPort(p, other); err != nil {
+				return err
+			}
+			return read()
+		}},
+		{"ReadFromToUDPAddrPort", func() error {
+			if err := write(); err != nil {
+				return err
+			}
+			_, _, _, _, err := c.ReadFromToUDPAddrPort(p)
+			return err
+		}},
+		{"ReadFromTo", func() error {
+			if err := write(); err != nil {
+				return err
+			}
+			_, _, _, _, err := c.ReadFromTo(p)
+			return err
+		}},
+		{"ReadFromUDPAddrPort", func() error { // Without packet info
+			if err := write(); err != nil {
+				return err
+			}
+			_, _, err := pc.ReadFromUDPAddrPort(p)
+			return err
+		}},
+	} {
+		b.Run(bench.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := bench.op(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 // localAddrs returns the addresses of each interface that is up, with zones for IPv6 link-local ones.
 func localAddrs(t *testing.T) [][]netip.Addr {
 	t.Helper()
