@@ -212,9 +212,9 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 
 	var oobN int
 	if is4 {
-		oobN, _ = marshalPacketInfo4(oob, src.Addr().Unmap(), idx, true)
+		oobN, _ = marshalPacketInfo4(oob, src.Addr().Unmap(), idx)
 	} else {
-		oobN, _ = marshalPacketInfo6(oob, src.Addr().Unmap(), idx, true)
+		oobN, _ = marshalPacketInfo6(oob, src.Addr().Unmap(), idx)
 	}
 	n, _, err = u.WriteMsgUDPAddrPort(b, oob[:oobN], dst)
 

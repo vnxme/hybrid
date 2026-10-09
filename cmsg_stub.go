@@ -33,13 +33,13 @@ var errPacketInfoUnsupported = fmt.Errorf("hybrid: packet info on %s/%s: %w", ru
 
 // marshalPacketInfo4 writes a platform-specific IPv4 packet info control message into the given OOB buffer.
 // It returns the number of bytes written/required, and true if the buffer has been large enough.
-func marshalPacketInfo4(oob []byte, src netip.Addr, idx int, full bool) (int, bool) {
+func marshalPacketInfo4(oob []byte, src netip.Addr, idx int) (int, bool) {
 	return 0, true
 }
 
 // marshalPacketInfo6 write a platform-specific IPv6 packet info control message into the given OOB buffer.
 // It returns the number of bytes written/required, and true if the buffer has been large enough.
-func marshalPacketInfo6(oob []byte, src netip.Addr, idx int, full bool) (int, bool) {
+func marshalPacketInfo6(oob []byte, src netip.Addr, idx int) (int, bool) {
 	return 0, true
 }
 

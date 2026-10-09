@@ -91,16 +91,16 @@ func BenchmarkIsLocalIP6(b *testing.B) {
 func TestMarshalParsePacketInfo(t *testing.T) {
 	for _, marshal := range []struct {
 		name string
-		f    func(oob []byte, src netip.Addr, idx int, full bool) (int, bool)
+		f    func(oob []byte, src netip.Addr, idx int) (int, bool)
 	}{
 		{"marshalPacketInfo4", marshalPacketInfo4},
 		{"marshalPacketInfo6", marshalPacketInfo6},
 	} {
-		n, ok := marshal.f(make([]byte, cMsgBufferSize), netip.Addr{}, 0, true)
+		n, ok := marshal.f(make([]byte, cMsgBufferSize), netip.Addr{}, 0)
 		if n <= 0 || n > cMsgBufferSize || !ok {
 			t.Errorf("%s() into %d bytes = %d, %v, want up to %d, true", marshal.name, cMsgBufferSize, n, ok, cMsgBufferSize)
 		}
-		if got, ok := marshal.f(make([]byte, n-1), netip.Addr{}, 0, true); got != n || ok {
+		if got, ok := marshal.f(make([]byte, n-1), netip.Addr{}, 0); got != n || ok {
 			t.Errorf("%s() into %d bytes = %d, %v, want %d, false", marshal.name, n-1, got, ok, n)
 		}
 	}
@@ -122,7 +122,7 @@ func TestMarshalParsePacketInfo(t *testing.T) {
 		for i := range oob {
 			oob[i] = 0xff // Any byte left unwritten is noticed
 		}
-		n, _ := marshalPacketInfo6(oob, test.src, test.idx, true)
+		n, _ := marshalPacketInfo6(oob, test.src, test.idx)
 		if dst, idx, ok := parsePacketInfo(oob[:n]); dst != test.want || idx != test.idx || !ok {
 			t.Errorf("parsePacketInfo() of marshalPacketInfo6(%s, %d) = %s, %d, %v, want %s, %d, true",
 				test.src, test.idx, dst, idx, ok, test.want, test.idx)
@@ -140,7 +140,7 @@ func TestParsePacketInfoBounds(t *testing.T) {
 	// with its length field set to n
 	message := func(size, n int) []byte {
 		oob := make([]byte, max(size, cMsgIPv6PacketInfoPayload))
-		marshalPacketInfo6(oob, ip, 7, true)
+		marshalPacketInfo6(oob, ip, 7)
 		reflect.ValueOf(&(*cMsgHeader)(unsafe.Pointer(&oob[0])).Len).Elem().SetUint(uint64(n))
 		return oob[:size]
 	}

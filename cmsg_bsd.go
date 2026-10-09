@@ -89,16 +89,14 @@ var (
 
 // marshalPacketInfo4 writes a platform-specific IPv4 packet info control message into the given OOB buffer.
 // It returns the number of bytes written/required, and true if the buffer has been large enough.
-func marshalPacketInfo4(oob []byte, src netip.Addr, idx int, full bool) (int, bool) {
+func marshalPacketInfo4(oob []byte, src netip.Addr, idx int) (int, bool) {
 	if len(oob) < cMsgIPv4DestAddrPayload {
 		return cMsgIPv4DestAddrPayload, false
 	}
 
-	if full {
-		hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
-		hdr.SetLen(cMsgIPv4DestAddrLen)
-		hdr.Level, hdr.Type = cMsgIPv4DestAddrLevel, cMsgIPv4DestAddrType
-	}
+	hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
+	hdr.SetLen(cMsgIPv4DestAddrLen)
+	hdr.Level, hdr.Type = cMsgIPv4DestAddrLevel, cMsgIPv4DestAddrType
 
 	info := (*cMsgIPv4DestAddr)(unsafe.Pointer(&oob[cMsgHeaderSpace]))
 	if src.Is4() {
@@ -113,16 +111,14 @@ func marshalPacketInfo4(oob []byte, src netip.Addr, idx int, full bool) (int, bo
 
 // marshalPacketInfo6 write a platform-specific IPv6 packet info control message into the given OOB buffer.
 // It returns the number of bytes written/required, and true if the buffer has been large enough.
-func marshalPacketInfo6(oob []byte, src netip.Addr, idx int, full bool) (int, bool) {
+func marshalPacketInfo6(oob []byte, src netip.Addr, idx int) (int, bool) {
 	if len(oob) < cMsgIPv6PacketInfoPayload {
 		return cMsgIPv6PacketInfoPayload, false
 	}
 
-	if full {
-		hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
-		hdr.SetLen(cMsgIPv6PacketInfoLen)
-		hdr.Level, hdr.Type = cMsgIPv6PacketInfoLevel, cMsgIPv6PacketInfoType
-	}
+	hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
+	hdr.SetLen(cMsgIPv6PacketInfoLen)
+	hdr.Level, hdr.Type = cMsgIPv6PacketInfoLevel, cMsgIPv6PacketInfoType
 
 	info := (*cMsgIPv6PacketInfo)(unsafe.Pointer(&oob[cMsgHeaderSpace]))
 	if src.Is6() {
