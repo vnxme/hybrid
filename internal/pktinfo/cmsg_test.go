@@ -18,12 +18,12 @@ package pktinfo
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"reflect"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -156,7 +156,7 @@ type failingRawConn struct {
 func (c *failingRawConn) Control(func(fd uintptr)) error {
 	defer func() { c.calls++ }()
 	if slices.Contains(c.fail, c.calls) {
-		return errors.New("failed")
+		return fmt.Errorf("call %d failed", c.calls)
 	}
 	return nil
 }
@@ -192,6 +192,22 @@ func TestEnableErrors(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("DualStackNeither", func(t *testing.T) { // Both errors are reported
+		err := Enable(&failingRawConn{fail: append(slices.Clone(enableCalls4), call6)}, false, false)
+		for _, call := range []int{0, call6} {
+			if want := fmt.Sprintf("call %d failed", call); err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("Enable() = %v, want an error with %q", err, want)
+			}
+		}
+	})
+
+	t.Run("BothOnly", func(t *testing.T) { // Neither IP version, so no options are set
+		c := &failingRawConn{}
+		if err := Enable(c, true, true); err == nil || c.calls != 0 {
+			t.Errorf("Enable(true, true) = %v after %d calls, want an error after none", err, c.calls)
+		}
+	})
 
 	t.Run("IsV6Only", func(t *testing.T) {
 		if _, err := IsV6Only(&failingRawConn{fail: []int{0}}); err == nil {

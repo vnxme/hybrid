@@ -27,10 +27,39 @@
 package pktinfo
 
 import (
+	"errors"
 	"iter"
 	"net/netip"
+	"syscall"
 	"unsafe"
 )
+
+// Enable enables packet info on a socket for IPv4 unless v6Only is set, and for IPv6 unless v4Only is set.
+// For a dual-stack socket, i.e. with neither set, it fails only if it fails for both IP versions,
+// reporting both errors. It fails if both are set, as no IP version would be left.
+func Enable(c syscall.RawConn, v4Only, v6Only bool) error {
+	if v4Only && v6Only {
+		return errors.New("hybrid: packet info for neither IP version")
+	}
+
+	var err4, err6 error
+	if !v6Only {
+		err4 = enable4(c)
+	}
+	if !v4Only {
+		err6 = rawConnEnableSockOpt(c, cMsgIPv6PacketInfoLevel, cMsgIPv6PacketInfoOpt)
+	}
+
+	switch {
+	case v4Only:
+		return err4
+	case v6Only:
+		return err6
+	case err4 != nil && err6 != nil:
+		return errors.Join(err4, err6)
+	}
+	return nil
+}
 
 // Marshal writes a packet info control message for sending from src through the interface idx into oob,
 // for IPv4 if v4 is set, or for IPv6 otherwise, and returns the number of bytes written. It clears

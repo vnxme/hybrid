@@ -68,27 +68,7 @@ func Parse(oob []byte) (dst netip.Addr, idx int, ok bool) {
 	return
 }
 
-// Enable enables IPv4 and/or IPv6 packet info for the given raw network connection.
-func Enable(c syscall.RawConn, v4Only, v6Only bool) error {
-	var err4 error
-	if !v6Only {
-		err4 = rawConnEnableSockOpt(c, cMsgIPv4PacketInfoLevel, cMsgIPv4PacketInfoOpt)
-		if err4 != nil && v4Only {
-			return err4
-		}
-	}
-
-	var err6 error
-	if !v4Only {
-		err6 = rawConnEnableSockOpt(c, cMsgIPv6PacketInfoLevel, cMsgIPv6PacketInfoOpt)
-		if err6 != nil && v6Only {
-			return err6
-		}
-	}
-
-	if err4 != nil && err6 != nil {
-		return err4
-	}
-
-	return nil
+// enable4 enables IPv4 packet info for the given raw network connection.
+func enable4(c syscall.RawConn) error {
+	return rawConnEnableSockOpt(c, cMsgIPv4PacketInfoLevel, cMsgIPv4PacketInfoOpt)
 }
