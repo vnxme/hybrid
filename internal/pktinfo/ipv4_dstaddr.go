@@ -45,6 +45,7 @@ const (
 )
 
 var (
+	// BufferSize is the size of an OOB buffer that holds packet info of either IP version.
 	BufferSize = max(128, cMsgIPv4DestAddrPayload+cMsgIPv4InterfacePayload, cMsgIPv6PacketInfoPayload)
 
 	cMsgIPv4DestAddrLen      = cMsgHeaderSpace + cMsgIPv4DestAddrSize

@@ -25,6 +25,7 @@ import (
 )
 
 var (
+	// BufferSize is the size of an OOB buffer that holds packet info of either IP version.
 	BufferSize = max(128, cMsgIPv4PacketInfoPayload, cMsgIPv6PacketInfoPayload)
 
 	cMsgIPv4PacketInfoLen     = cMsgHeaderSpace + cMsgIPv4PacketInfoSize

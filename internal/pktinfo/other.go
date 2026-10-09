@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	BufferSize    = 0
+	BufferSize    = 0 // There is no packet info to hold
 	ChoosesSource = true
 	Truncated     = 0
 )
