@@ -25,6 +25,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/vnxme/hybrid/internal/pktinfo"
 )
 
 // TestControlUDPPacketInfo ensures packet info is enabled for every IP version a socket accepts,
@@ -71,13 +73,13 @@ func TestControlUDPPacketInfo(t *testing.T) {
 				_ = client.Close()
 
 				_ = conn.SetReadDeadline(time.Now().Add(time.Second))
-				oob := make([]byte, cMsgBufferSize)
+				oob := make([]byte, pktinfo.BufferSize)
 				_, oobN, _, _, err := conn.ReadMsgUDPAddrPort(make([]byte, 1), oob)
 				if err != nil {
 					t.Fatalf("ReadMsgUDPAddrPort() from %s = %v", dst, err)
 				}
-				if got, _, ok := parsePacketInfo(oob[:oobN]); !ok || got.Unmap() != dst {
-					t.Errorf("parsePacketInfo() of a packet to %s = %v, %v, want %s, true", dst, got, ok, dst)
+				if got, _, ok := pktinfo.Parse(oob[:oobN]); !ok || got.Unmap() != dst {
+					t.Errorf("pktinfo.Parse() of a packet to %s = %v, %v, want %s, true", dst, got, ok, dst)
 				}
 			}
 		})

@@ -14,7 +14,7 @@
 
 //go:build aix || darwin || dragonfly || freebsd || illumos || linux || netbsd || openbsd || solaris || zos
 
-package hybrid
+package pktinfo
 
 import (
 	"syscall"
@@ -29,7 +29,7 @@ const (
 	cMsgIPv6PacketInfoOpt   = unix.IPV6_RECVPKTINFO
 	cMsgIPv6PacketInfoType  = unix.IPV6_PKTINFO
 
-	cMsgTruncated = unix.MSG_CTRUNC // Set in the flags of a read whose control messages are truncated
+	Truncated = unix.MSG_CTRUNC // Set in the flags of a read whose control messages are truncated
 )
 
 var (
@@ -42,8 +42,8 @@ func cMsgLenOf(hdr *cMsgHeader) int {
 	return int(hdr.Len) //nolint:gosec // G115
 }
 
-// rawConnIsV6Only returns true if IPV6_V6ONLY socket option is enabled.
-func rawConnIsV6Only(c syscall.RawConn) (bool, error) {
+// IsV6Only returns true if IPV6_V6ONLY socket option is enabled.
+func IsV6Only(c syscall.RawConn) (bool, error) {
 	return rawConnGetSockOptBool(c, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY)
 }
 

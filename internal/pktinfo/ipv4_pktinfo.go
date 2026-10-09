@@ -16,7 +16,7 @@
 
 //go:build darwin || illumos || linux || solaris || windows || zos
 
-package hybrid
+package pktinfo
 
 import (
 	"net/netip"
@@ -25,15 +25,15 @@ import (
 )
 
 var (
-	cMsgBufferSize = max(128, cMsgIPv4PacketInfoPayload, cMsgIPv6PacketInfoPayload)
+	BufferSize = max(128, cMsgIPv4PacketInfoPayload, cMsgIPv6PacketInfoPayload)
 
 	cMsgIPv4PacketInfoLen     = cMsgHeaderSpace + cMsgIPv4PacketInfoSize
 	cMsgIPv4PacketInfoPayload = cMsgHeaderSpace + cMsgAlignOf(cMsgIPv4PacketInfoSize)
 )
 
-// marshalPacketInfo4 writes an IPv4 packet info control message into the given OOB buffer.
+// Marshal4 writes an IPv4 packet info control message into the given OOB buffer.
 // It returns the number of bytes written/required, and true if the buffer has been large enough.
-func marshalPacketInfo4(oob []byte, src netip.Addr, idx int) (int, bool) {
+func Marshal4(oob []byte, src netip.Addr, idx int) (int, bool) {
 	if len(oob) < cMsgIPv4PacketInfoPayload {
 		return cMsgIPv4PacketInfoPayload, false
 	}
@@ -51,11 +51,11 @@ func marshalPacketInfo4(oob []byte, src netip.Addr, idx int) (int, bool) {
 	return cMsgIPv4PacketInfoPayload, true
 }
 
-// parsePacketInfo searches a packet info control message in the given OOB buffer.
+// Parse searches a packet info control message in the given OOB buffer.
 // It returns a destination address, a local interface index, and true if the message has been found.
 // Like [unix.ParseSocketControlMessage], it stops at a message longer than the rest of the buffer,
 // and it skips a message too short for packet info, e.g. as truncation has shortened it.
-func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
+func Parse(oob []byte) (dst netip.Addr, idx int, ok bool) {
 	for len(oob) >= cMsgHeaderSpace {
 		hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
 		n := cMsgLenOf(hdr)
@@ -69,7 +69,7 @@ func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
 			info := (*cMsgIPv4PacketInfo)(unsafe.Pointer(&data[0]))
 			return netip.AddrFrom4(info.Addr), int(info.Ifindex), true
 		case hdr.Level == cMsgIPv6PacketInfoLevel && hdr.Type == cMsgIPv6PacketInfoType && len(data) >= cMsgIPv6PacketInfoSize:
-			return parsePacketInfo6(data)
+			return parse6(data)
 		}
 
 		oob = oob[min(cMsgAlignOf(n), len(oob)):] // The last message may come without padding
@@ -78,8 +78,8 @@ func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
 	return
 }
 
-// rawConnEnablePacketInfo enables IPv4 and/or IPv6 packet info for the given raw network connection.
-func rawConnEnablePacketInfo(c syscall.RawConn, v4Only, v6Only bool) error {
+// Enable enables IPv4 and/or IPv6 packet info for the given raw network connection.
+func Enable(c syscall.RawConn, v4Only, v6Only bool) error {
 	var err4 error
 	if !v6Only {
 		err4 = rawConnSetSockOptBool(c, cMsgIPv4PacketInfoLevel, cMsgIPv4PacketInfoOpt, true)

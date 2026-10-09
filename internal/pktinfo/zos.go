@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build darwin || illumos || solaris
+//go:build zos
 
-package hybrid
+package pktinfo
 
 import "golang.org/x/sys/unix"
 
@@ -34,8 +34,6 @@ const (
 
 // setPacketInfo4 fills IPv4 packet info for sending from src through the interface idx.
 func setPacketInfo4(info *cMsgIPv4PacketInfo, src [4]byte, idx int) {
-	info.Spec_dst = src
-	// The kernel ignores it for sending, but leave no stale bytes from a pooled buffer
-	info.Addr = [4]byte{}
+	info.Addr = src
 	info.Ifindex = uint32(idx) //nolint:gosec // G115
 }

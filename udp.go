@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+
+	"github.com/vnxme/hybrid/internal/pktinfo"
 )
 
 // packetInfoUDPConn is a FromToUDPConn wrapping a UDPConn with packet info enabled for every IP version it accepts.
@@ -30,7 +32,7 @@ type packetInfoUDPConn struct {
 
 	net string // Equals `udp`, `udp4` or `udp6`
 
-	rdOOBSize atomic.Int32 // Size of control message buffers for reading, if grown from cMsgBufferSize
+	rdOOBSize atomic.Int32 // Size of control message buffers for reading, if grown from pktinfo.BufferSize
 	port      uint16       // Contains the local port number
 
 	v4Only bool // Equals true if no IPv6 could be expected
@@ -93,13 +95,13 @@ func PacketInfoUDPConn(conn UDPConn) (FromToUDPConn, error) {
 	case !ip.Unmap().IsUnspecified(): // An IPv6 socket bound to a specific address
 		v4Only, v6Only = ip.Is4In6(), !ip.Is4In6()
 	default: // An IPv6 socket bound to the unspecified address, dual-stack unless IPV6_V6ONLY is set
-		if v6Only, err = rawConnIsV6Only(raw); err != nil {
+		if v6Only, err = pktinfo.IsV6Only(raw); err != nil {
 			return nil, err
 		}
 	}
 
 	// Make platform-specific socket configuration calls to enable packet info
-	err = rawConnEnablePacketInfo(raw, v4Only, v6Only)
+	err = pktinfo.Enable(raw, v4Only, v6Only)
 	if err != nil {
 		return nil, err
 	}
@@ -144,13 +146,13 @@ func (u *packetInfoUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort
 	stored := u.rdOOBSize.Load()
 	size := int(stored)
 	if size == 0 {
-		size = cMsgBufferSize
+		size = pktinfo.BufferSize
 	}
 	oob, ref := getBuf(size)
 	defer putBuf(ref)
 
 	n, oobN, flags, src, err := u.ReadMsgUDPAddrPort(b, oob)
-	if flags&cMsgTruncated != 0 && size < 1<<bufPoolMaxBits {
+	if flags&pktinfo.Truncated != 0 && size < 1<<bufPoolMaxBits {
 		// Windows reports the size control messages take, while other platforms report the size read
 		u.rdOOBSize.CompareAndSwap(stored, int32(min(max(2*size, oobN), 1<<bufPoolMaxBits))) //nolint:gosec // G115
 	}
@@ -158,7 +160,7 @@ func (u *packetInfoUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort
 		return n, netip.AddrPort{}, netip.AddrPort{}, 0, err
 	}
 	src = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
-	if dst, idx, ok := parsePacketInfo(oob[:min(oobN, len(oob))]); ok {
+	if dst, idx, ok := pktinfo.Parse(oob[:min(oobN, len(oob))]); ok {
 		return n, src, netip.AddrPortFrom(dst.Unmap(), u.port), idx, nil
 	}
 	return n, src, netip.AddrPort{}, 0, nil
@@ -206,15 +208,15 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 		return u.WriteToUDPAddrPort(b, dst)
 	}
 
-	oob, ref := getBuf(cMsgBufferSize)
+	oob, ref := getBuf(pktinfo.BufferSize)
 	defer putBuf(ref)
 	clear(oob) // A pooled buffer may contain anything, e.g. in padding bytes the marshaller skips
 
 	var oobN int
 	if is4 {
-		oobN, _ = marshalPacketInfo4(oob, src.Addr().Unmap(), idx)
+		oobN, _ = pktinfo.Marshal4(oob, src.Addr().Unmap(), idx)
 	} else {
-		oobN, _ = marshalPacketInfo6(oob, src.Addr().Unmap(), idx)
+		oobN, _ = pktinfo.Marshal6(oob, src.Addr().Unmap(), idx)
 	}
 	n, _, err = u.WriteMsgUDPAddrPort(b, oob[:oobN], dst)
 
@@ -265,11 +267,11 @@ func ControlUDPPacketInfo(network, _ string, c syscall.RawConn) error {
 	v4Only := strings.HasSuffix(network, "4")
 	v6Only := !v4Only && strings.HasSuffix(network, "6")
 	if v6Only { // Network is udp6 for a dual-stack socket too, so check whether it accepts IPv4
-		only, err := rawConnIsV6Only(c)
+		only, err := pktinfo.IsV6Only(c)
 		if err != nil {
 			return err
 		}
 		v6Only = only
 	}
-	return rawConnEnablePacketInfo(c, v4Only, v6Only)
+	return pktinfo.Enable(c, v4Only, v6Only)
 }

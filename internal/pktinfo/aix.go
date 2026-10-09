@@ -12,21 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !(aix || darwin || dragonfly || freebsd || illumos || linux || netbsd || openbsd || solaris || windows || zos)
+//go:build aix
 
-package hybrid
+package pktinfo
 
 import (
-	"errors"
-	"testing"
+	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
-// TestControlUDPPacketInfoUnsupported ensures enabling packet info fails with errors.ErrUnsupported
-// on platforms without packet info.
-func TestControlUDPPacketInfoUnsupported(t *testing.T) {
-	for _, network := range []string{"udp", "udp4", "udp6"} {
-		if err := ControlUDPPacketInfo(network, "", nil); !errors.Is(err, errors.ErrUnsupported) {
-			t.Errorf("ControlUDPPacketInfo(%s) = %v, want errors.ErrUnsupported", network, err)
-		}
-	}
+type inet6Pktinfo struct {
+	Addr    [16]byte /* in6_addr */
+	Ifindex uint32
 }
+
+type (
+	cMsgIPv4Interface  = syscall.SockaddrDatalink
+	cMsgIPv6PacketInfo = inet6Pktinfo
+)
+
+const (
+	cMsgIPv4InterfaceOpt = unix.IP_RECVINTERFACE // unix.IP_RECVIF is defined, but it doesn't work
+
+	cMsgIPv4InterfaceSize  = unix.SizeofSockaddrDatalink
+	cMsgIPv6PacketInfoSize = int(unsafe.Sizeof(cMsgIPv6PacketInfo{}))
+)

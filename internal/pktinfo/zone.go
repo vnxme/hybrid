@@ -13,13 +13,9 @@
 // limitations under the License.
 
 // A significant part of the code in this file was copied from
-// https://github.com/golang/net/tree/v0.53.0 and
-// https://github.com/golang/sys/tree/v0.43.0 in April 2026.
-// Sources: https://github.com/golang/net/blob/v0.53.0/ipv4/helper.go,
-// https://github.com/golang/net/blob/v0.53.0/internal/socket/sys_posix.go,
-// https://github.com/golang/sys/blob/v0.43.0/unix/sockcmsg_unix_other.go.
-// Licenses: https://github.com/golang/net/blob/v0.53.0/LICENSE,
-// https://github.com/golang/sys/blob/v0.43.0/LICENSE
+// https://github.com/golang/net/tree/v0.53.0 in April 2026.
+// Source: https://github.com/golang/net/blob/v0.53.0/internal/socket/sys_posix.go.
+// License: https://github.com/golang/net/blob/v0.53.0/LICENSE
 // The original copyright is preserved below.
 
 // Copyright 2017-2019 The Go Authors. All rights reserved.
@@ -28,45 +24,14 @@
 
 //go:build aix || darwin || dragonfly || freebsd || illumos || linux || netbsd || openbsd || solaris || windows || zos
 
-package hybrid
+package pktinfo
 
 import (
 	"net"
-	"net/netip"
 	"strconv"
 	"sync"
 	"time"
 )
-
-// boolInt returns 1 for true and 0 for false.
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
-// cMsgAlignOf returns the number of bytes a structure of size n takes
-// including padding bytes to match the platform-specific data alignment.
-//
-// Note: cMsgAlign must be a power of two: 1, 2, 4, 8, etc.
-func cMsgAlignOf(n int) int {
-	return (n + cMsgAlign - 1) & ^(cMsgAlign - 1)
-}
-
-// isLocalIP6 checks if the given netip.Addr is a link-local unicast,
-// interface-local multicast or link-local multicast IPv6 address.
-//
-// Note: x is assumed to be a valid IPv6, i.e. no extra checks are done.
-func isLocalIP6(x netip.Addr) bool {
-	a16 := x.As16()
-	s := uint16(a16[0])<<8 | uint16(a16[1])
-	if s&0xffc0 == 0xfe80 {
-		return true
-	}
-	s = s & 0xff0f
-	return s == 0xff01 || s == 0xff02
-}
 
 // An ipv6ZoneCache represents a cache holding partial network
 // interface information. It is used for reducing the cost of IPv6

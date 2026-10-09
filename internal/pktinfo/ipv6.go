@@ -14,7 +14,7 @@
 
 //go:build aix || darwin || dragonfly || freebsd || illumos || linux || netbsd || openbsd || solaris || windows || zos
 
-package hybrid
+package pktinfo
 
 import (
 	"net"
@@ -27,9 +27,9 @@ var (
 	cMsgIPv6PacketInfoPayload = cMsgHeaderSpace + cMsgAlignOf(cMsgIPv6PacketInfoSize)
 )
 
-// marshalPacketInfo6 writes an IPv6 packet info control message into the given OOB buffer.
+// Marshal6 writes an IPv6 packet info control message into the given OOB buffer.
 // It returns the number of bytes written/required, and true if the buffer has been large enough.
-func marshalPacketInfo6(oob []byte, src netip.Addr, idx int) (int, bool) {
+func Marshal6(oob []byte, src netip.Addr, idx int) (int, bool) {
 	if len(oob) < cMsgIPv6PacketInfoPayload {
 		return cMsgIPv6PacketInfoPayload, false
 	}
@@ -54,13 +54,27 @@ func marshalPacketInfo6(oob []byte, src netip.Addr, idx int) (int, bool) {
 	return cMsgIPv6PacketInfoPayload, true
 }
 
-// parsePacketInfo6 returns the destination address and the local interface index from IPv6 packet info,
+// parse6 returns the destination address and the local interface index from IPv6 packet info,
 // which data must be long enough to hold.
-func parsePacketInfo6(data []byte) (dst netip.Addr, idx int, ok bool) {
+func parse6(data []byte) (dst netip.Addr, idx int, ok bool) {
 	info := (*cMsgIPv6PacketInfo)(unsafe.Pointer(&data[0]))
 	dst = netip.AddrFrom16(info.Addr)
 	if info.Ifindex > 0 && isLocalIP6(dst) {
 		dst = dst.WithZone(zoneCache.name(int(info.Ifindex)))
 	}
 	return dst, int(info.Ifindex), true
+}
+
+// isLocalIP6 checks if the given netip.Addr is a link-local unicast,
+// interface-local multicast or link-local multicast IPv6 address.
+//
+// Note: x is assumed to be a valid IPv6, i.e. no extra checks are done.
+func isLocalIP6(x netip.Addr) bool {
+	a16 := x.As16()
+	s := uint16(a16[0])<<8 | uint16(a16[1])
+	if s&0xffc0 == 0xfe80 {
+		return true
+	}
+	s = s & 0xff0f
+	return s == 0xff01 || s == 0xff02
 }

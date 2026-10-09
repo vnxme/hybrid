@@ -12,30 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build aix
-
-package hybrid
-
-import (
-	"syscall"
-	"unsafe"
-
-	"golang.org/x/sys/unix"
-)
-
-type inet6Pktinfo struct {
-	Addr    [16]byte /* in6_addr */
-	Ifindex uint32
-}
-
-type (
-	cMsgIPv4Interface  = syscall.SockaddrDatalink
-	cMsgIPv6PacketInfo = inet6Pktinfo
-)
-
-const (
-	cMsgIPv4InterfaceOpt = unix.IP_RECVINTERFACE // unix.IP_RECVIF is defined, but it doesn't work
-
-	cMsgIPv4InterfaceSize  = unix.SizeofSockaddrDatalink
-	cMsgIPv6PacketInfoSize = int(unsafe.Sizeof(cMsgIPv6PacketInfo{}))
-)
+// Package pktinfo enables, marshals and parses packet info control messages, which carry
+// the local address and the local interface index of each UDP packet read or written,
+// on every platform that supports them.
+package pktinfo

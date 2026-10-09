@@ -17,7 +17,7 @@
 
 //go:build aix || dragonfly || freebsd || netbsd || openbsd
 
-package hybrid
+package pktinfo
 
 import (
 	"encoding/binary"
@@ -45,16 +45,16 @@ const (
 )
 
 var (
-	cMsgBufferSize = max(128, cMsgIPv4DestAddrPayload+cMsgIPv4InterfacePayload, cMsgIPv6PacketInfoPayload)
+	BufferSize = max(128, cMsgIPv4DestAddrPayload+cMsgIPv4InterfacePayload, cMsgIPv6PacketInfoPayload)
 
 	cMsgIPv4DestAddrLen      = cMsgHeaderSpace + cMsgIPv4DestAddrSize
 	cMsgIPv4DestAddrPayload  = cMsgHeaderSpace + cMsgAlignOf(cMsgIPv4DestAddrSize)
 	cMsgIPv4InterfacePayload = cMsgHeaderSpace + cMsgAlignOf(cMsgIPv4InterfaceSize)
 )
 
-// marshalPacketInfo4 writes an IPv4 source address control message into the given OOB buffer.
+// Marshal4 writes an IPv4 source address control message into the given OOB buffer.
 // It returns the number of bytes written/required, and true if the buffer has been large enough.
-func marshalPacketInfo4(oob []byte, src netip.Addr, _ int) (int, bool) {
+func Marshal4(oob []byte, src netip.Addr, _ int) (int, bool) {
 	if len(oob) < cMsgIPv4DestAddrPayload {
 		return cMsgIPv4DestAddrPayload, false
 	}
@@ -73,11 +73,11 @@ func marshalPacketInfo4(oob []byte, src netip.Addr, _ int) (int, bool) {
 	return cMsgIPv4DestAddrPayload, true
 }
 
-// parsePacketInfo searches packet info control messages in the given OOB buffer.
+// Parse searches packet info control messages in the given OOB buffer.
 // It returns a destination address, a local interface index, and true if a message has been found.
 // Like [unix.ParseSocketControlMessage], it stops at a message longer than the rest of the buffer,
 // and it skips a message too short for packet info, e.g. as truncation has shortened it.
-func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
+func Parse(oob []byte) (dst netip.Addr, idx int, ok bool) {
 	for len(oob) >= cMsgHeaderSpace {
 		hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
 		n := cMsgLenOf(hdr)
@@ -93,7 +93,7 @@ func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
 			// The link-level address may be shorter than cMsgIPv4Interface, so read the index only
 			idx, ok = int(binary.NativeEndian.Uint16(data[cMsgIPv4InterfaceIndexOffset:])), true
 		case hdr.Level == cMsgIPv6PacketInfoLevel && hdr.Type == cMsgIPv6PacketInfoType && len(data) >= cMsgIPv6PacketInfoSize:
-			return parsePacketInfo6(data)
+			return parse6(data)
 		}
 
 		oob = oob[min(cMsgAlignOf(n), len(oob)):] // The last message may come without padding
@@ -102,8 +102,8 @@ func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
 	return
 }
 
-// rawConnEnablePacketInfo enables IPv4 and/or IPv6 packet info for the given raw network connection.
-func rawConnEnablePacketInfo(c syscall.RawConn, v4Only, v6Only bool) error {
+// Enable enables IPv4 and/or IPv6 packet info for the given raw network connection.
+func Enable(c syscall.RawConn, v4Only, v6Only bool) error {
 	var err4 error
 	if !v6Only {
 		err4 = errors.Join( // Either option alone leaves IPv4 packet info incomplete

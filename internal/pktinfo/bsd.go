@@ -12,28 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build zos
+//go:build dragonfly || freebsd || netbsd || openbsd
 
-package hybrid
+package pktinfo
 
 import "golang.org/x/sys/unix"
 
 type (
-	cMsgIPv4PacketInfo = unix.Inet4Pktinfo
+	cMsgIPv4Interface  = unix.SockaddrDatalink
 	cMsgIPv6PacketInfo = unix.Inet6Pktinfo
 )
 
 const (
-	cMsgIPv4PacketInfoLevel = unix.IPPROTO_IP
-	cMsgIPv4PacketInfoOpt   = unix.IP_RECVPKTINFO
-	cMsgIPv4PacketInfoType  = cMsgIPv4PacketInfoOpt
+	cMsgIPv4InterfaceOpt = unix.IP_RECVIF
 
-	cMsgIPv4PacketInfoSize = unix.SizeofInet4Pktinfo
+	cMsgIPv4InterfaceSize  = unix.SizeofSockaddrDatalink
 	cMsgIPv6PacketInfoSize = unix.SizeofInet6Pktinfo
 )
-
-// setPacketInfo4 fills IPv4 packet info for sending from src through the interface idx.
-func setPacketInfo4(info *cMsgIPv4PacketInfo, src [4]byte, idx int) {
-	info.Addr = src
-	info.Ifindex = uint32(idx) //nolint:gosec // G115
-}

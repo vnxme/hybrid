@@ -14,7 +14,7 @@
 
 //go:build windows
 
-package hybrid
+package pktinfo
 
 import (
 	"syscall"
@@ -48,7 +48,7 @@ const (
 	cMsgIPv4PacketInfoSize = int(unsafe.Sizeof(cMsgIPv4PacketInfo{}))
 	cMsgIPv6PacketInfoSize = int(unsafe.Sizeof(cMsgIPv6PacketInfo{}))
 
-	cMsgTruncated = windows.MSG_CTRUNC // Set in the flags of a read whose control messages are truncated
+	Truncated = windows.MSG_CTRUNC // Set in the flags of a read whose control messages are truncated
 )
 
 var (
@@ -67,8 +67,8 @@ func setPacketInfo4(info *cMsgIPv4PacketInfo, src [4]byte, idx int) {
 	info.Ifindex = uint32(idx) //nolint:gosec // G115
 }
 
-// rawConnIsV6Only returns true if IPV6_V6ONLY socket option is enabled.
-func rawConnIsV6Only(c syscall.RawConn) (bool, error) {
+// IsV6Only returns true if IPV6_V6ONLY socket option is enabled.
+func IsV6Only(c syscall.RawConn) (bool, error) {
 	return rawConnGetSockOptBool(c, windows.IPPROTO_IPV6, windows.IPV6_V6ONLY)
 }
 

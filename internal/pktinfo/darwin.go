@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build linux
+// Platforms with in_pktinfo and IP_RECVPKTINFO: darwin, illumos and solaris.
 
-package hybrid
+//go:build darwin || illumos || solaris
+
+package pktinfo
 
 import "golang.org/x/sys/unix"
 
@@ -25,7 +27,7 @@ type (
 
 const (
 	cMsgIPv4PacketInfoLevel = unix.IPPROTO_IP
-	cMsgIPv4PacketInfoOpt   = unix.IP_PKTINFO
+	cMsgIPv4PacketInfoOpt   = unix.IP_RECVPKTINFO
 	cMsgIPv4PacketInfoType  = cMsgIPv4PacketInfoOpt
 
 	cMsgIPv4PacketInfoSize = unix.SizeofInet4Pktinfo
@@ -37,5 +39,5 @@ func setPacketInfo4(info *cMsgIPv4PacketInfo, src [4]byte, idx int) {
 	info.Spec_dst = src
 	// The kernel ignores it for sending, but leave no stale bytes from a pooled buffer
 	info.Addr = [4]byte{}
-	info.Ifindex = int32(idx) //nolint:gosec // G115
+	info.Ifindex = uint32(idx) //nolint:gosec // G115
 }

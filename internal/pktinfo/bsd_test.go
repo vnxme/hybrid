@@ -14,7 +14,7 @@
 
 //go:build aix || dragonfly || freebsd || netbsd || openbsd
 
-package hybrid
+package pktinfo
 
 import (
 	"errors"
@@ -39,10 +39,10 @@ func (c *failingRawConn) Control(func(fd uintptr)) error {
 	return nil
 }
 
-// TestRawConnEnablePacketInfoErrors ensures IPv4 packet info fails if either of its two options fails,
+// TestEnableErrors ensures IPv4 packet info fails if either of its two options fails,
 // i.e. IP_RECVDSTADDR (call 0) or IP_RECVIF (call 1), and that a dual-stack socket fails only
 // if IPv6 packet info (call 2) fails too.
-func TestRawConnEnablePacketInfoErrors(t *testing.T) {
+func TestEnableErrors(t *testing.T) {
 	tests := []struct {
 		name           string
 		v4Only, v6Only bool
@@ -63,8 +63,8 @@ func TestRawConnEnablePacketInfoErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			c := &failingRawConn{fail: test.fail}
-			if err := rawConnEnablePacketInfo(c, test.v4Only, test.v6Only); (err != nil) != test.wantErr {
-				t.Errorf("rawConnEnablePacketInfo() = %v, want an error %v", err, test.wantErr)
+			if err := Enable(c, test.v4Only, test.v6Only); (err != nil) != test.wantErr {
+				t.Errorf("Enable() = %v, want an error %v", err, test.wantErr)
 			}
 		})
 	}
