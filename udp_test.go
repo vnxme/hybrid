@@ -508,7 +508,7 @@ func TestPacketInfoUDPConnFamily(t *testing.T) {
 	})
 }
 
-func TestUDPAddrFromValidAddrPort(t *testing.T) {
+func TestAddrPortToUDPAddr(t *testing.T) {
 	tests := []struct {
 		ap   netip.AddrPort
 		want *net.UDPAddr
@@ -521,14 +521,14 @@ func TestUDPAddrFromValidAddrPort(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.ap.String(), func(t *testing.T) {
-			if got := UDPAddrFromValidAddrPort(test.ap); !reflect.DeepEqual(got, test.want) {
-				t.Errorf("UDPAddrFromValidAddrPort() = %#v, want %#v", got, test.want)
+			if got := addrPortToUDPAddr(test.ap); !reflect.DeepEqual(got, test.want) {
+				t.Errorf("addrPortToUDPAddr() = %#v, want %#v", got, test.want)
 			}
 
-			// Unlike UDPAddrFromValidAddrPort, addrFromValidAddrPort returns a nil net.Addr
-			got := addrFromValidAddrPort(test.ap)
+			// Unlike addrPortToUDPAddr, addrPortToAddr returns a nil net.Addr
+			got := addrPortToAddr(test.ap)
 			if test.want == nil && got != nil || test.want != nil && !reflect.DeepEqual(got, test.want) {
-				t.Errorf("addrFromValidAddrPort() = %#v, want %#v", got, test.want)
+				t.Errorf("addrPortToAddr() = %#v, want %#v", got, test.want)
 			}
 		})
 	}

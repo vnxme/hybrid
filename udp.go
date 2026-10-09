@@ -127,13 +127,13 @@ func PacketInfoUDPConn(conn UDPConn) (FromToUDPConn, error) {
 // instead of a nil *net.UDPAddr for an address it doesn't know, so that it compares equal to nil.
 func (u *packetInfoUDPConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, src, dst, idx, err := u.ReadFromToUDPAddrPort(b)
-	return n, addrFromValidAddrPort(src), addrFromValidAddrPort(dst), idx, err
+	return n, addrPortToAddr(src), addrPortToAddr(dst), idx, err
 }
 
 // ReadFromToUDP wraps around ReadFromToUDPAddrPort.
 func (u *packetInfoUDPConn) ReadFromToUDP(b []byte) (int, *net.UDPAddr, *net.UDPAddr, int, error) {
 	n, src, dst, idx, err := u.ReadFromToUDPAddrPort(b)
-	return n, UDPAddrFromValidAddrPort(src), UDPAddrFromValidAddrPort(dst), idx, err
+	return n, addrPortToUDPAddr(src), addrPortToUDPAddr(dst), idx, err
 }
 
 // ReadFromToUDPAddrPort calls [net.UDPConn.ReadMsgUDPAddrPort] and a platform-specific packet info parser
@@ -200,7 +200,7 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 	is4 := bits == 32
 	accepted := is4 && !u.v6Only || bits == 128 && !u.v4Only
 	if idx < 0 || idx > math.MaxInt32 || !accepted || srcBits != 0 && srcBits != bits {
-		return 0, &net.OpError{Op: "write", Net: u.net, Source: addrFromValidAddrPort(src), Addr: addrFromValidAddrPort(dst), Err: syscall.EINVAL}
+		return 0, &net.OpError{Op: "write", Net: u.net, Source: addrPortToAddr(src), Addr: addrPortToAddr(dst), Err: syscall.EINVAL}
 	}
 
 	// Without src, let the system choose it, and the interface too, unless idx is set and the system
@@ -222,11 +222,19 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 	return n, err
 }
 
-// addrFromValidAddrPort returns a *net.UDPAddr if the given netip.AddrPort is valid, or nil.
-// Unlike [UDPAddrFromValidAddrPort], it returns a nil net.Addr, not a nil *net.UDPAddr in it.
-func addrFromValidAddrPort(ap netip.AddrPort) net.Addr {
+// addrPortToUDPAddr returns a *net.UDPAddr for a valid netip.AddrPort, or nil.
+func addrPortToUDPAddr(ap netip.AddrPort) *net.UDPAddr {
 	if ap.IsValid() {
 		return net.UDPAddrFromAddrPort(ap)
+	}
+	return nil
+}
+
+// addrPortToAddr is addrPortToUDPAddr returning a net.Addr, which is nil for an invalid netip.AddrPort,
+// rather than holding a nil *net.UDPAddr, which wouldn't compare equal to nil.
+func addrPortToAddr(ap netip.AddrPort) net.Addr {
+	if a := addrPortToUDPAddr(ap); a != nil {
+		return a
 	}
 	return nil
 }
@@ -235,14 +243,6 @@ func addrFromValidAddrPort(ap netip.AddrPort) net.Addr {
 // whose methods would panic instead of returning an error.
 func isNilUDPConn(conn UDPConn) bool {
 	return conn == nil || conn == (*net.UDPConn)(nil)
-}
-
-// UDPAddrFromValidAddrPort returns a pointer to net.UDPAddr if the given netip.AddrPort is valid, or nil.
-func UDPAddrFromValidAddrPort(ap netip.AddrPort) *net.UDPAddr {
-	if ap.IsValid() {
-		return net.UDPAddrFromAddrPort(ap)
-	}
-	return nil
 }
 
 // Interface guards
