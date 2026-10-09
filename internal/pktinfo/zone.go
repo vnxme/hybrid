@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// A significant part of the code in this file was copied from
-// https://github.com/golang/net/tree/v0.53.0 in April 2026.
+// The code in this file is derived from https://github.com/golang/net/tree/v0.53.0 (April 2026).
 // Source: https://github.com/golang/net/blob/v0.53.0/internal/socket/sys_posix.go.
 // License: https://github.com/golang/net/blob/v0.53.0/LICENSE
 // The original copyright is preserved below.
@@ -30,85 +29,84 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// An ipv6ZoneCache represents a cache holding partial network
-// interface information. It is used for reducing the cost of IPv6
-// addressing scope zone resolution.
-//
-// Multiple names sharing the index are managed by first-come
-// first-served basis for consistency.
+const (
+	zoneMaxAge  = time.Minute // A list older than this is refreshed, as interfaces come and go
+	zoneMissAge = time.Second // A list older than this is refreshed when an interface is missing from it
+)
+
+// An ipv6ZoneCache resolves IPv6 zones, i.e. the names and the indices of the network interfaces,
+// without listing the interfaces each time. Its list is read without locking, and replaced by
+// a single goroutine at a time once it's too old. Multiple names sharing an index are managed
+// on a first-come first-served basis.
 type ipv6ZoneCache struct {
-	toIndex      map[string]int // interface name to its index
-	toName       map[int]string // interface index to its name
-	lastFetched  time.Time      // last time routing information was fetched
-	sync.RWMutex                // guard the preceding
+	current atomic.Pointer[zoneList]
+	list    func() ([]net.Interface, error) // Lists the interfaces, e.g. net.Interfaces
+	mu      sync.Mutex                      // Serializes listing the interfaces
 }
 
-var zoneCache = ipv6ZoneCache{
-	toIndex: make(map[string]int),
-	toName:  make(map[int]string),
+// A zoneList is an immutable list of the network interfaces.
+type zoneList struct {
+	toIndex map[string]int // Interface names to their indices
+	toName  map[int]string // Interface indices to their names
+	fetched time.Time      // When the interfaces were listed, even if that failed
 }
 
-// update refreshes the network interface information if the cache was last
-// updated more than 1 minute ago, or if force is set. It returns whether the
-// cache was updated.
-func (zc *ipv6ZoneCache) update(ift []net.Interface, force bool) (updated bool) { //nolint:unparam // keep the original
-	zc.Lock()
-	defer zc.Unlock()
-	now := time.Now()
-	if !force && zc.lastFetched.After(now.Add(-60*time.Second)) {
-		return false
+var zoneCache = ipv6ZoneCache{list: net.Interfaces}
+
+// get returns a list of the interfaces no older than maxAge. If listing them fails,
+// the previous list is kept, but its age is reset, so that it isn't retried too soon.
+func (zc *ipv6ZoneCache) get(maxAge time.Duration) *zoneList {
+	if l := zc.current.Load(); l != nil && time.Since(l.fetched) < maxAge {
+		return l
 	}
-	zc.lastFetched = now
-	if len(ift) == 0 {
-		var err error
-		if ift, err = net.Interfaces(); err != nil {
-			return false
+
+	zc.mu.Lock()
+	defer zc.mu.Unlock()
+	l := zc.current.Load()
+	if l != nil && time.Since(l.fetched) < maxAge {
+		return l // Another goroutine has just refreshed it
+	}
+
+	next := &zoneList{fetched: time.Now()}
+	if ift, err := zc.list(); err == nil {
+		next.toIndex = make(map[string]int, len(ift))
+		next.toName = make(map[int]string, len(ift))
+		for _, ifi := range ift {
+			next.toIndex[ifi.Name] = ifi.Index
+			if _, ok := next.toName[ifi.Index]; !ok {
+				next.toName[ifi.Index] = ifi.Name
+			}
 		}
+	} else if l != nil {
+		next.toIndex, next.toName = l.toIndex, l.toName
 	}
-	zc.toIndex = make(map[string]int, len(ift))
-	zc.toName = make(map[int]string, len(ift))
-	for _, ifi := range ift {
-		zc.toIndex[ifi.Name] = ifi.Index
-		if _, ok := zc.toName[ifi.Index]; !ok {
-			zc.toName[ifi.Index] = ifi.Name
-		}
-	}
-	return true
+	zc.current.Store(next)
+	return next
 }
 
-func (zc *ipv6ZoneCache) name(zone int) string {
-	updated := zoneCache.update(nil, false)
-	zoneCache.RLock()
-	name, ok := zoneCache.toName[zone]
-	zoneCache.RUnlock()
-	if !ok && !updated {
-		zoneCache.update(nil, true)
-		zoneCache.RLock()
-		name, ok = zoneCache.toName[zone]
-		zoneCache.RUnlock()
+// name returns the name of the interface with the given index, or the index itself as a name.
+func (zc *ipv6ZoneCache) name(index int) string {
+	if name, ok := zc.get(zoneMaxAge).toName[index]; ok {
+		return name
 	}
-	if !ok { // last resort
-		name = strconv.Itoa(zone)
+	if name, ok := zc.get(zoneMissAge).toName[index]; ok {
+		return name
 	}
-	return name
+	return strconv.Itoa(index)
 }
 
-func (zc *ipv6ZoneCache) index(zone string) int {
-	updated := zoneCache.update(nil, false)
-	zoneCache.RLock()
-	index, ok := zoneCache.toIndex[zone]
-	zoneCache.RUnlock()
-	if !ok && !updated {
-		zoneCache.update(nil, true)
-		zoneCache.RLock()
-		index, ok = zoneCache.toIndex[zone]
-		zoneCache.RUnlock()
+// index returns the index of the interface with the given name. A numeric name is taken as an index,
+// unless an interface has this name. If no interface has the name, it returns 0.
+func (zc *ipv6ZoneCache) index(name string) int {
+	if index, ok := zc.get(zoneMaxAge).toIndex[name]; ok {
+		return index
 	}
-	if !ok { // last resort
-		index, _ = strconv.Atoi(zone)
+	if index, err := strconv.Atoi(name); err == nil {
+		return index
 	}
-	return index
+	return zc.get(zoneMissAge).toIndex[name]
 }
