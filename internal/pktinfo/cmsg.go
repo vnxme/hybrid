@@ -26,10 +26,31 @@
 
 package pktinfo
 
+import (
+	"iter"
+	"unsafe"
+)
+
 // cMsgAlignOf returns the number of bytes a structure of size n takes
 // including padding bytes to match the platform-specific data alignment.
 //
 // Note: cMsgAlign must be a power of two: 1, 2, 4, 8, etc.
 func cMsgAlignOf(n int) int {
 	return (n + cMsgAlign - 1) & ^(cMsgAlign - 1)
+}
+
+// cMsgs returns an iterator over the control messages in the given OOB buffer, yielding the header
+// and the data of each. Like [unix.ParseSocketControlMessage], it stops at a message longer than
+// the rest of the buffer, and it accepts the last message without padding.
+func cMsgs(oob []byte) iter.Seq2[*cMsgHeader, []byte] {
+	return func(yield func(*cMsgHeader, []byte) bool) {
+		for b := oob; len(b) >= cMsgHeaderSpace; {
+			hdr := (*cMsgHeader)(unsafe.Pointer(&b[0]))
+			n := cMsgLenOf(hdr)
+			if n < cMsgHeaderSpace || n > len(b) || !yield(hdr, b[cMsgHeaderSpace:n]) {
+				return
+			}
+			b = b[min(cMsgAlignOf(n), len(b)):]
+		}
+	}
 }

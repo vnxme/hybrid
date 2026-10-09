@@ -53,17 +53,9 @@ func Marshal4(oob []byte, src netip.Addr, idx int) (int, bool) {
 
 // Parse searches a packet info control message in the given OOB buffer.
 // It returns a destination address, a local interface index, and true if the message has been found.
-// Like [unix.ParseSocketControlMessage], it stops at a message longer than the rest of the buffer,
-// and it skips a message too short for packet info, e.g. as truncation has shortened it.
+// It skips a message too short for packet info, e.g. as truncation has shortened it.
 func Parse(oob []byte) (dst netip.Addr, idx int, ok bool) {
-	for len(oob) >= cMsgHeaderSpace {
-		hdr := (*cMsgHeader)(unsafe.Pointer(&oob[0]))
-		n := cMsgLenOf(hdr)
-		if n < cMsgHeaderSpace || n > len(oob) {
-			break
-		}
-		data := oob[cMsgHeaderSpace:n]
-
+	for hdr, data := range cMsgs(oob) {
 		switch {
 		case hdr.Level == cMsgIPv4PacketInfoLevel && hdr.Type == cMsgIPv4PacketInfoType && len(data) >= cMsgIPv4PacketInfoSize:
 			info := (*cMsgIPv4PacketInfo)(unsafe.Pointer(&data[0]))
@@ -71,8 +63,6 @@ func Parse(oob []byte) (dst netip.Addr, idx int, ok bool) {
 		case hdr.Level == cMsgIPv6PacketInfoLevel && hdr.Type == cMsgIPv6PacketInfoType && len(data) >= cMsgIPv6PacketInfoSize:
 			return parse6(data)
 		}
-
-		oob = oob[min(cMsgAlignOf(n), len(oob)):] // The last message may come without padding
 	}
 
 	return
