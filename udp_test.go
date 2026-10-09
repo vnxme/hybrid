@@ -17,21 +17,14 @@ package hybrid
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
 	"reflect"
 	"runtime"
 	"slices"
-	"strconv"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
-
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
-	"golang.org/x/sys/windows"
 )
 
 // TestControlUDPPacketInfo ensures packet info is enabled for every IP version a socket accepts,
@@ -98,71 +91,95 @@ func TestControlUDPPacketInfo(t *testing.T) {
 	})
 }
 
+// TestNeedPacketInfoUDPConn ensures packet info is reported as needed only for sockets bound to
+// an unspecified address, and not yet wrapped with PacketInfoUDPConn.
 func TestNeedPacketInfoUDPConn(t *testing.T) {
-	l41, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	l42, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 0})
-	l43, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 0})
-	l61, _ := net.ListenUDP("udp6", &net.UDPAddr{IP: net.ParseIP("::1"), Port: 0})
-	l62, _ := net.ListenUDP("udp6", &net.UDPAddr{IP: net.ParseIP("::"), Port: 0})
-	l63, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("::"), Port: 0})
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
 
-	type args struct {
-		conn *net.UDPConn
-	}
 	tests := []struct {
-		name string
-		args args
-		want bool
+		network, address string
+		want             bool
 	}{
-		{"nil", args{nil}, false},
-		{l41.LocalAddr().String(), args{l41}, false},
-		{l42.LocalAddr().String(), args{l42}, true},
-		{l43.LocalAddr().String(), args{l43}, true},
-		{l61.LocalAddr().String(), args{l61}, false},
-		{l62.LocalAddr().String(), args{l62}, true},
-		{l63.LocalAddr().String(), args{l63}, true},
+		{"udp4", "127.0.0.1:0", false},
+		{"udp4", "0.0.0.0:0", true},
+		{"udp", "0.0.0.0:0", true},
+		{"udp6", "[::1]:0", false},
+		{"udp6", "[::]:0", true},
+		{"udp", "[::]:0", true},
+		{"udp", ":0", true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := NeedPacketInfoUDPConn(tt.args.conn); got != tt.want {
-				t.Errorf("NeedPacketInfoUDPConn() = %v, want %v", got, tt.want)
+	for _, test := range tests {
+		t.Run(test.network+","+test.address, func(t *testing.T) {
+			pc, err := net.ListenPacket(test.network, test.address)
+			if err != nil {
+				t.Skipf("ListenPacket() = %v", err) // E.g. no IPv6 support
+			}
+			defer func() { _ = pc.Close() }()
+			conn := pc.(*net.UDPConn)
+			if got := NeedPacketInfoUDPConn(conn); got != test.want {
+				t.Errorf("NeedPacketInfoUDPConn() = %v, want %v", got, test.want)
+			}
+
+			c, err := PacketInfoUDPConn(conn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if NeedPacketInfoUDPConn(c) {
+				t.Errorf("NeedPacketInfoUDPConn() of a wrapped conn = true, want false")
 			}
 		})
 	}
 
-	_ = l41.Close()
-	_ = l42.Close()
-	_ = l43.Close()
-	_ = l61.Close()
-	_ = l62.Close()
-	_ = l63.Close()
+	t.Run("Nil", func(t *testing.T) {
+		if NeedPacketInfoUDPConn(nil) || NeedPacketInfoUDPConn((*net.UDPConn)(nil)) {
+			t.Errorf("NeedPacketInfoUDPConn() of nil = true, want false")
+		}
+	})
+
+	t.Run("NotUDPAddr", func(t *testing.T) {
+		pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = pc.Close() }()
+		if NeedPacketInfoUDPConn(localAddrConn{pc, oneTrunkAddr}) {
+			t.Errorf("NeedPacketInfoUDPConn() = true, want false")
+		}
+	})
 }
 
+// TestPacketInfoUDPConn ensures nil is rejected, and a FromToUDPConn is returned as is.
 func TestPacketInfoUDPConn(t *testing.T) {
-	type args struct {
-		conn *net.UDPConn
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    FromToPacketConn
-		wantErr bool
-	}{
-		{"nil", args{nil}, nil, true},
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := PacketInfoUDPConn(tt.args.conn)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("PacketInfoUDPConn() error = %v, wantErr %v", err, tt.wantErr)
-				return
+	t.Run("Nil", func(t *testing.T) {
+		for _, conn := range []UDPConn{nil, (*net.UDPConn)(nil)} {
+			if c, err := PacketInfoUDPConn(conn); c != nil || err == nil {
+				t.Errorf("PacketInfoUDPConn(%#v) = %v, %v, want nil, an error", conn, c, err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("PacketInfoUDPConn() got = %v, want %v", got, tt.want)
-			}
-		})
-	}
+		}
+	})
+
+	t.Run("Wrapped", func(t *testing.T) {
+		switch runtime.GOOS {
+		case "js", "plan9", "wasip1":
+			t.Skipf("not supported on %s", runtime.GOOS)
+		}
+
+		pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = pc.Close() }()
+		c, err := PacketInfoUDPConn(pc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := PacketInfoUDPConn(c); got != c || err != nil {
+			t.Errorf("PacketInfoUDPConn() of a wrapped conn = %v, %v, want %v, nil", got, err, c)
+		}
+	})
 }
 
 // TestPacketInfoUDPConnNilAddrs ensures unknown addresses are returned as nil net.Addr values,
@@ -485,690 +502,139 @@ func TestPacketInfoUDPConnFamily(t *testing.T) {
 }
 
 func TestUDPAddrFromValidAddrPort(t *testing.T) {
-	type args struct {
-		ap netip.AddrPort
-	}
 	tests := []struct {
-		name string
-		args args
+		ap   netip.AddrPort
 		want *net.UDPAddr
 	}{
-		// TODO: Add test cases.
+		{netip.AddrPort{}, nil},
+		{netip.MustParseAddrPort("127.0.0.1:80"), &net.UDPAddr{IP: net.IP{127, 0, 0, 1}, Port: 80}},
+		{netip.MustParseAddrPort("[::ffff:127.0.0.1]:80"), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 80}},
+		{netip.MustParseAddrPort("[::1]:0"), &net.UDPAddr{IP: net.IPv6loopback}},
+		{netip.MustParseAddrPort("[fe80::1%eth0]:80"), &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 80, Zone: "eth0"}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := UDPAddrFromValidAddrPort(tt.args.ap); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("UDPAddrFromValidAddrPort() = %v, want %v", got, tt.want)
+	for _, test := range tests {
+		t.Run(test.ap.String(), func(t *testing.T) {
+			if got := UDPAddrFromValidAddrPort(test.ap); !reflect.DeepEqual(got, test.want) {
+				t.Errorf("UDPAddrFromValidAddrPort() = %#v, want %#v", got, test.want)
+			}
+
+			// Unlike UDPAddrFromValidAddrPort, addrFromValidAddrPort returns a nil net.Addr
+			got := addrFromValidAddrPort(test.ap)
+			if test.want == nil && got != nil || test.want != nil && !reflect.DeepEqual(got, test.want) {
+				t.Errorf("addrFromValidAddrPort() = %#v, want %#v", got, test.want)
 			}
 		})
 	}
 }
 
-//func Test_selectiveUDPConn_ReadFromTo(t *testing.T) {
-//	type fields struct {
-//		UDPConn   *net.UDPConn
-//		rdOOB     []byte
-//		wr4OOB    []byte
-//		wr6OOB    []byte
-//		rdMutex   sync.Mutex
-//		wrMutex   sync.Mutex
-//		fdNet     string
-//		fdNetHas4 bool
-//		fdNetHas6 bool
-//	}
-//	type args struct {
-//		b []byte
-//	}
-//	tests := []struct {
-//		name    string
-//		fields  fields
-//		args    args
-//		want    int
-//		want1   net.Addr
-//		want2   net.Addr
-//		want3   int
-//		wantErr bool
-//	}{
-//		// TODO: Add test cases.
-//	}
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			u := &packetInfoUDPConn{
-//				UDPConn:   tt.fields.UDPConn,
-//				rdOOB:     tt.fields.rdOOB,
-//				wr4OOB:    tt.fields.wr4OOB,
-//				wr6OOB:    tt.fields.wr6OOB,
-//				rdMutex:   tt.fields.rdMutex,
-//				wrMutex:   tt.fields.wrMutex,
-//				fdNet:     tt.fields.fdNet,
-//				fdNetHas4: tt.fields.fdNetHas4,
-//				fdNetHas6: tt.fields.fdNetHas6,
-//			}
-//			got, got1, got2, got3, err := u.ReadFromTo(tt.args.b)
-//			if (err != nil) != tt.wantErr {
-//				t.Errorf("ReadFromTo() error = %v, wantErr %v", err, tt.wantErr)
-//				return
-//			}
-//			if got != tt.want {
-//				t.Errorf("ReadFromTo() got = %v, want %v", got, tt.want)
-//			}
-//			if !reflect.DeepEqual(got1, tt.want1) {
-//				t.Errorf("ReadFromTo() got1 = %v, want %v", got1, tt.want1)
-//			}
-//			if !reflect.DeepEqual(got2, tt.want2) {
-//				t.Errorf("ReadFromTo() got2 = %v, want %v", got2, tt.want2)
-//			}
-//			if got3 != tt.want3 {
-//				t.Errorf("ReadFromTo() got3 = %v, want %v", got3, tt.want3)
-//			}
-//		})
-//	}
-//}
-//
-//func Test_selectiveUDPConn_ReadFromToUDP(t *testing.T) {
-//	type fields struct {
-//		UDPConn   *net.UDPConn
-//		rdOOB     []byte
-//		wrOOB     []byte
-//		rdMutex   sync.Mutex
-//		wrMutex   sync.Mutex
-//		fdNet     string
-//		fdNetHas4 bool
-//		fdNetHas6 bool
-//	}
-//	type args struct {
-//		b []byte
-//	}
-//	tests := []struct {
-//		name    string
-//		fields  fields
-//		args    args
-//		want    int
-//		want1   *net.UDPAddr
-//		want2   *net.UDPAddr
-//		want3   int
-//		wantErr bool
-//	}{
-//		// TODO: Add test cases.
-//	}
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			u := &packetInfoUDPConn{
-//				UDPConn:   tt.fields.UDPConn,
-//				rdOOB:     tt.fields.rdOOB,
-//				wrOOB:     tt.fields.wrOOB,
-//				rdMutex:   tt.fields.rdMutex,
-//				wrMutex:   tt.fields.wrMutex,
-//				fdNet:     tt.fields.fdNet,
-//				fdNetHas4: tt.fields.fdNetHas4,
-//				fdNetHas6: tt.fields.fdNetHas6,
-//			}
-//			got, got1, got2, got3, err := u.ReadFromToUDP(tt.args.b)
-//			if (err != nil) != tt.wantErr {
-//				t.Errorf("ReadFromToUDP() error = %v, wantErr %v", err, tt.wantErr)
-//				return
-//			}
-//			if got != tt.want {
-//				t.Errorf("ReadFromToUDP() got = %v, want %v", got, tt.want)
-//			}
-//			if !reflect.DeepEqual(got1, tt.want1) {
-//				t.Errorf("ReadFromToUDP() got1 = %v, want %v", got1, tt.want1)
-//			}
-//			if !reflect.DeepEqual(got2, tt.want2) {
-//				t.Errorf("ReadFromToUDP() got2 = %v, want %v", got2, tt.want2)
-//			}
-//			if got3 != tt.want3 {
-//				t.Errorf("ReadFromToUDP() got3 = %v, want %v", got3, tt.want3)
-//			}
-//		})
-//	}
-//}
-//
-//func Test_selectiveUDPConn_ReadFromToUDPAddrPort(t *testing.T) {
-//	type fields struct {
-//		UDPConn   *net.UDPConn
-//		rdOOB     []byte
-//		wrOOB     []byte
-//		rdMutex   sync.Mutex
-//		wrMutex   sync.Mutex
-//		fdNet     string
-//		fdNetHas4 bool
-//		fdNetHas6 bool
-//	}
-//	type args struct {
-//		b []byte
-//	}
-//	tests := []struct {
-//		name    string
-//		fields  fields
-//		args    args
-//		want    int
-//		want1   netip.AddrPort
-//		want2   netip.AddrPort
-//		want3   int
-//		wantErr bool
-//	}{
-//		// TODO: Add test cases.
-//	}
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			u := &packetInfoUDPConn{
-//				UDPConn:   tt.fields.UDPConn,
-//				rdOOB:     tt.fields.rdOOB,
-//				wrOOB:     tt.fields.wrOOB,
-//				rdMutex:   tt.fields.rdMutex,
-//				wrMutex:   tt.fields.wrMutex,
-//				fdNet:     tt.fields.fdNet,
-//				fdNetHas4: tt.fields.fdNetHas4,
-//				fdNetHas6: tt.fields.fdNetHas6,
-//			}
-//			got, got1, got2, got3, err := u.ReadFromToUDPAddrPort(tt.args.b)
-//			if (err != nil) != tt.wantErr {
-//				t.Errorf("ReadFromToUDPAddrPort() error = %v, wantErr %v", err, tt.wantErr)
-//				return
-//			}
-//			if got != tt.want {
-//				t.Errorf("ReadFromToUDPAddrPort() got = %v, want %v", got, tt.want)
-//			}
-//			if !reflect.DeepEqual(got1, tt.want1) {
-//				t.Errorf("ReadFromToUDPAddrPort() got1 = %v, want %v", got1, tt.want1)
-//			}
-//			if !reflect.DeepEqual(got2, tt.want2) {
-//				t.Errorf("ReadFromToUDPAddrPort() got2 = %v, want %v", got2, tt.want2)
-//			}
-//			if got3 != tt.want3 {
-//				t.Errorf("ReadFromToUDPAddrPort() got3 = %v, want %v", got3, tt.want3)
-//			}
-//		})
-//	}
-//}
-//
-//func Test_selectiveUDPConn_WriteToFrom(t *testing.T) {
-//	type fields struct {
-//		UDPConn   *net.UDPConn
-//		rdOOB     []byte
-//		wrOOB     []byte
-//		rdMutex   sync.Mutex
-//		wrMutex   sync.Mutex
-//		fdNet     string
-//		fdNetHas4 bool
-//		fdNetHas6 bool
-//	}
-//	type args struct {
-//		b   []byte
-//		dst net.Addr
-//		src net.Addr
-//		idx int
-//	}
-//	tests := []struct {
-//		name    string
-//		fields  fields
-//		args    args
-//		want    int
-//		wantErr bool
-//	}{
-//		// TODO: Add test cases.
-//	}
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			u := &packetInfoUDPConn{
-//				UDPConn:   tt.fields.UDPConn,
-//				rdOOB:     tt.fields.rdOOB,
-//				wrOOB:     tt.fields.wrOOB,
-//				rdMutex:   tt.fields.rdMutex,
-//				wrMutex:   tt.fields.wrMutex,
-//				fdNet:     tt.fields.fdNet,
-//				fdNetHas4: tt.fields.fdNetHas4,
-//				fdNetHas6: tt.fields.fdNetHas6,
-//			}
-//			got, err := u.WriteToFrom(tt.args.b, tt.args.dst, tt.args.src, tt.args.idx)
-//			if (err != nil) != tt.wantErr {
-//				t.Errorf("WriteToFrom() error = %v, wantErr %v", err, tt.wantErr)
-//				return
-//			}
-//			if got != tt.want {
-//				t.Errorf("WriteToFrom() got = %v, want %v", got, tt.want)
-//			}
-//		})
-//	}
-//}
-//
-//func Test_selectiveUDPConn_WriteToFromUDP(t *testing.T) {
-//	type fields struct {
-//		UDPConn   *net.UDPConn
-//		rdOOB     []byte
-//		wrOOB     []byte
-//		rdMutex   sync.Mutex
-//		wrMutex   sync.Mutex
-//		fdNet     string
-//		fdNetHas4 bool
-//		fdNetHas6 bool
-//	}
-//	type args struct {
-//		b   []byte
-//		dst *net.UDPAddr
-//		src *net.UDPAddr
-//		idx int
-//	}
-//	tests := []struct {
-//		name    string
-//		fields  fields
-//		args    args
-//		want    int
-//		wantErr bool
-//	}{
-//		// TODO: Add test cases.
-//	}
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			u := &packetInfoUDPConn{
-//				UDPConn:   tt.fields.UDPConn,
-//				rdOOB:     tt.fields.rdOOB,
-//				wrOOB:     tt.fields.wrOOB,
-//				rdMutex:   tt.fields.rdMutex,
-//				wrMutex:   tt.fields.wrMutex,
-//				fdNet:     tt.fields.fdNet,
-//				fdNetHas4: tt.fields.fdNetHas4,
-//				fdNetHas6: tt.fields.fdNetHas6,
-//			}
-//			got, err := u.WriteToFromUDP(tt.args.b, tt.args.dst, tt.args.src, tt.args.idx)
-//			if (err != nil) != tt.wantErr {
-//				t.Errorf("WriteToFromUDP() error = %v, wantErr %v", err, tt.wantErr)
-//				return
-//			}
-//			if got != tt.want {
-//				t.Errorf("WriteToFromUDP() got = %v, want %v", got, tt.want)
-//			}
-//		})
-//	}
-//}
-//
-//func Test_selectiveUDPConn_WriteToFromUDPAddrPort(t *testing.T) {
-//	type fields struct {
-//		UDPConn   *net.UDPConn
-//		rdOOB     []byte
-//		wrOOB     []byte
-//		rdMutex   sync.Mutex
-//		wrMutex   sync.Mutex
-//		fdNet     string
-//		fdNetHas4 bool
-//		fdNetHas6 bool
-//	}
-//	type args struct {
-//		b   []byte
-//		dst netip.AddrPort
-//		src netip.AddrPort
-//		idx int
-//	}
-//	tests := []struct {
-//		name    string
-//		fields  fields
-//		args    args
-//		wantN   int
-//		wantErr bool
-//	}{
-//		// TODO: Add test cases.
-//	}
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			u := &packetInfoUDPConn{
-//				UDPConn:   tt.fields.UDPConn,
-//				rdOOB:     tt.fields.rdOOB,
-//				wrOOB:     tt.fields.wrOOB,
-//				rdMutex:   tt.fields.rdMutex,
-//				wrMutex:   tt.fields.wrMutex,
-//				fdNet:     tt.fields.fdNet,
-//				fdNetHas4: tt.fields.fdNetHas4,
-//				fdNetHas6: tt.fields.fdNetHas6,
-//			}
-//			gotN, err := u.WriteToFromUDPAddrPort(tt.args.b, tt.args.dst, tt.args.src, tt.args.idx)
-//			if (err != nil) != tt.wantErr {
-//				t.Errorf("WriteToFromUDPAddrPort() error = %v, wantErr %v", err, tt.wantErr)
-//				return
-//			}
-//			if gotN != tt.wantN {
-//				t.Errorf("WriteToFromUDPAddrPort() gotN = %v, want %v", gotN, tt.wantN)
-//			}
-//		})
-//	}
-//}
+// localAddrs returns the addresses of each interface that is up, with zones for IPv6 link-local ones.
+func localAddrs(t *testing.T) [][]netip.Addr {
+	t.Helper()
+	ifs, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var addrs [][]netip.Addr
+	for _, ifc := range ifs {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagRunning == 0 {
+			continue
+		}
+		ips, err := ifc.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ifcAddrs []netip.Addr
+		for _, ip := range ips {
+			if ipNet, ok := ip.(*net.IPNet); ok {
+				addr, _ := netip.AddrFromSlice(ipNet.IP)
+				if addr = addr.Unmap(); addr.Is6() && addr.IsLinkLocalUnicast() {
+					addr = addr.WithZone(ifc.Name)
+				}
+				ifcAddrs = append(ifcAddrs, addr)
+			}
+		}
+		addrs = append(addrs, ifcAddrs)
+	}
+	return addrs
+}
 
-func TestDualStackPacketInfo(t *testing.T) {
+// TestPacketInfoUDPConnInterfaces ensures a packet to any local address is read with this address as dst
+// and with a local interface index, and that a reply written with them comes from this address,
+// as well as a reply written with another address of the same kind on the same interface as src.
+func TestPacketInfoUDPConnInterfaces(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
 	}
 
-	ifs, err := net.Interfaces()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	type config struct {
-		name   string
-		rdNet  string
-		wrNet  string
-		rdAddr netip.Addr
-		wrAddr netip.Addr
-		rdSrc  netip.Addr
-		rdDst  netip.Addr
-		wrDst  netip.Addr
-		wrSrc  netip.Addr
-		rdIdx  int
-		wrIdx  int
-	}
-	configs := make([]config, 0, 100)
-	makeConfig := func(name, net string, addr, rdSrc, rdDst, wrDst, wrSrc netip.Addr, rdIdx, wrIdx int) config {
-		return config{
-			name:   name,
-			rdNet:  net,
-			wrNet:  net,
-			rdAddr: addr,
-			wrAddr: addr,
-			rdSrc:  rdSrc,
-			rdDst:  rdDst,
-			wrDst:  wrDst,
-			wrSrc:  wrSrc,
-			rdIdx:  rdIdx,
-			wrIdx:  wrIdx,
-		}
-	}
-
-	var addr, a1, a2 netip.Addr
-	var addrs []netip.Addr
-	var ifc net.Interface
-	var ipc net.Addr
-	var ipi, loIdx int
-	var ips []net.Addr
-	var lo127001, lo127002 netip.Addr
-	var ok bool
-	for _, l := range []struct {
-		net  string
-		addr netip.Addr
-	}{
-		{net: "udp", addr: netip.IPv6Unspecified()},
-		{net: "udp4", addr: netip.IPv4Unspecified().Unmap()},
-		{net: "udp6", addr: netip.IPv6Unspecified()},
+	addrs := localAddrs(t)
+	for _, socket := range []struct{ network, address string }{
+		{"udp4", "0.0.0.0:0"},
+		{"udp6", "[::]:0"},
+		{"udp", "[::]:0"},
 	} {
-		for _, ifc = range ifs {
-			if ifc.Flags&net.FlagUp > 0 && ifc.Flags&net.FlagRunning > 0 {
-				ips, err = ifc.Addrs()
-				if err != nil {
-					t.Error(err)
-					continue
-				} else if ifc.Flags&net.FlagLoopback > 0 {
-					loIdx = ifc.Index
-				} else if len(ips) == 0 {
-					continue
-				}
+		t.Run(socket.network+","+socket.address, func(t *testing.T) {
+			pc, err := net.ListenPacket(socket.network, socket.address)
+			if err != nil {
+				t.Skipf("ListenPacket() = %v", err) // E.g. no IPv6 support
+			}
+			defer func() { _ = pc.Close() }()
+			c, err := PacketInfoUDPConn(pc.(*net.UDPConn))
+			if err != nil {
+				t.Fatal(err)
+			}
+			u := c.(*packetInfoUDPConn)
 
-				// t.Logf("Found interface #%d `%s` with addresses:", ifc.Index, ifc.Name)
-
-				addrs = make([]netip.Addr, len(ips))
-				for ipi, ipc = range ips {
-					switch ipc.(type) {
-					case *net.IPAddr:
-						if addr, ok = netip.AddrFromSlice(ipc.(*net.IPAddr).IP); ok {
-							addr = addr.WithZone(ipc.(*net.IPAddr).Zone)
-							if addr.IsLinkLocalUnicast() {
-								addr = addr.WithZone(strconv.Itoa(ifc.Index))
-							}
-							addr = addr.Unmap()
-							addrs[ipi] = addr
-							// t.Logf(" - %s", addr)
-						}
-					case *net.IPNet:
-						if addr, ok = netip.AddrFromSlice(ipc.(*net.IPNet).IP); ok {
-							if addr.IsLinkLocalUnicast() {
-								addr = addr.WithZone(zoneCache.name(ifc.Index))
-							}
-							addr = addr.Unmap()
-							addrs[ipi] = addr
-							// t.Logf(" - %s", addr)
-						}
-					}
-				}
-
-				for _, a1 = range addrs {
-					if !a1.IsValid() || (a1.Is4() && l.net == "udp6") || (a1.Is6() && l.net == "udp4") {
+			b := make([]byte, 8)
+			for _, ifcAddrs := range addrs {
+				for _, to := range ifcAddrs {
+					if to.Is4() && u.v6Only || to.Is6() && u.v4Only {
 						continue
 					}
-
-					configs = append(configs, makeConfig(
-						fmt.Sprintf("%s,blank,0", a1), l.net, l.addr, a1, a1, a1, netip.Addr{}, ifc.Index, 0))
-					configs = append(configs, makeConfig(
-						fmt.Sprintf("%s,blank,%d", a1, ifc.Index), l.net, l.addr, a1, a1, a1, netip.Addr{}, ifc.Index, ifc.Index))
-
-					for _, a2 = range addrs {
-						if a1.Is4() == a2.Is4() && a1.IsLinkLocalUnicast() == a2.IsLinkLocalUnicast() {
-							configs = append(configs, makeConfig(
-								fmt.Sprintf("%s,%s,0", a1, a2), l.net, l.addr, a2, a1, a1, a2, ifc.Index, 0))
-							configs = append(configs, makeConfig(
-								fmt.Sprintf("%s,%s,%d", a1, a2, ifc.Index), l.net, l.addr, a2, a1, a1, a2, ifc.Index, ifc.Index))
+					t.Run(to.String(), func(t *testing.T) {
+						network := "udp6"
+						if to.Is4() {
+							network = "udp4"
 						}
-					}
+						client, err := net.ListenUDP(network, nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer func() { _ = client.Close() }()
+
+						if _, err = client.WriteToUDPAddrPort([]byte("abc"), netip.AddrPortFrom(to, u.port)); err != nil {
+							t.Fatal(err)
+						}
+						_ = c.SetReadDeadline(time.Now().Add(time.Second))
+						_, src, dst, idx, err := c.ReadFromToUDPAddrPort(b)
+						if err != nil {
+							t.Fatalf("ReadFromToUDPAddrPort() = %v, want nil", err)
+						}
+						if dst.Addr().WithZone("") != to.WithZone("") || dst.Port() != u.port || idx <= 0 {
+							t.Errorf("ReadFromToUDPAddrPort() = dst %s, idx %d, want %s, a positive index",
+								dst, idx, netip.AddrPortFrom(to, u.port))
+						}
+
+						for _, from := range ifcAddrs {
+							if from.Is4() != to.Is4() || from.IsLinkLocalUnicast() != to.IsLinkLocalUnicast() {
+								continue
+							}
+							for _, replyIdx := range []int{idx, 0} {
+								if _, err := c.WriteToFromUDPAddrPort([]byte("def"), src, netip.AddrPortFrom(from, 0), replyIdx); err != nil {
+									t.Errorf("WriteToFromUDPAddrPort(src %s, idx %d) = %v, want nil", from, replyIdx, err)
+									continue
+								}
+								_ = client.SetReadDeadline(time.Now().Add(time.Second))
+								_, got, err := client.ReadFromUDPAddrPort(b)
+								if err != nil || got.Addr().Unmap().WithZone("") != from.WithZone("") || got.Port() != u.port {
+									t.Errorf("client.ReadFromUDPAddrPort() after a reply from %s with idx %d = %s, %v, want %s, nil",
+										from, replyIdx, got, err, netip.AddrPortFrom(from, u.port))
+								}
+							}
+						}
+					})
 				}
-			}
-		}
-
-		if l.net != "udp6" {
-			lo127001 = netip.AddrFrom4([4]byte{127, 0, 0, 1})
-			lo127002 = netip.AddrFrom4([4]byte{127, 0, 0, 2})
-			configs = append(configs, makeConfig(
-				fmt.Sprintf("%s,blank,0", lo127002), l.net, l.addr, lo127001, lo127002, lo127002, netip.Addr{}, loIdx, 0))
-			configs = append(configs, makeConfig(
-				fmt.Sprintf("%s,blank,%d", lo127002, loIdx), l.net, l.addr, lo127001, lo127002, lo127002, netip.Addr{}, loIdx, loIdx))
-			configs = append(configs, makeConfig(
-				fmt.Sprintf("%s,%s,0", lo127002, lo127001), l.net, l.addr, lo127001, lo127002, lo127002, lo127001, loIdx, 0))
-			configs = append(configs, makeConfig(
-				fmt.Sprintf("%s,%s,%d", lo127002, lo127001, loIdx), l.net, l.addr, lo127001, lo127002, lo127002, lo127001, loIdx, loIdx))
-		}
-	}
-
-	var done chan struct{}
-	var lc net.ListenConfig
-	var rdc, wrc FromToUDPConn
-	var rdErr, wrErr error
-	var rdPC, wrPC PacketConn
-	var rdPort, wrPort uint16
-	var wg sync.WaitGroup
-	rdb, wrb := make([]byte, 1), make([]byte, 0)
-	for _, c := range configs {
-		t.Run(fmt.Sprintf("(%s,%s)", c.rdNet, c.name), func(t *testing.T) {
-			rdPC, rdErr = lc.ListenPacket(context.Background(), c.rdNet, netip.AddrPortFrom(c.rdAddr, rdPort).String())
-			if rdErr != nil {
-				t.Error(rdErr)
-				_ = rdPC.Close()
-				return
-			}
-			wrPC, wrErr = lc.ListenPacket(context.Background(), c.wrNet, netip.AddrPortFrom(c.wrAddr, wrPort).String())
-			if wrErr != nil {
-				t.Error(wrErr)
-				_ = rdPC.Close()
-				_ = wrPC.Close()
-				return
-			}
-
-			rdc, rdErr = PacketInfoUDPConn(rdPC.(*net.UDPConn))
-			if rdErr != nil {
-				t.Error(rdErr)
-				_ = rdPC.Close()
-				_ = wrPC.Close()
-				return
-			}
-			wrc, wrErr = PacketInfoUDPConn(wrPC.(*net.UDPConn))
-			if wrErr != nil {
-				t.Error(wrErr)
-				_ = rdPC.Close()
-				_ = wrPC.Close()
-				return
-			}
-
-			rdPort, wrPort = uint16((rdPC.LocalAddr()).(*net.UDPAddr).Port), uint16((wrPC.LocalAddr()).(*net.UDPAddr).Port)
-
-			done = make(chan struct{})
-			wg.Add(1)
-			go func(t *testing.T, c FromToUDPConn, b []byte, dst, src netip.AddrPort, idx int, done chan struct{}, wg *sync.WaitGroup) {
-				var err error
-				for {
-					_ = c.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
-					_, err = c.WriteToFromUDPAddrPort(b, dst, src, idx)
-					if err != nil {
-						t.Error(err)
-						break
-					} else {
-						t.Logf("wrc.WriteToFromUDPAddrPort(_, %v, %v, %v) = _, nil", dst, src, idx)
-					}
-					time.Sleep(10 * time.Millisecond)
-					if isClosedChan(done) {
-						break
-					}
-				}
-				wg.Done()
-			}(t, wrc, wrb, netip.AddrPortFrom(c.wrDst, rdPort), netip.AddrPortFrom(c.wrSrc, wrPort), c.wrIdx, done, &wg)
-
-			err = rdc.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			_, src, dst, idx, err := rdc.ReadFromToUDPAddrPort(rdb)
-			if err != nil {
-				t.Error(err)
-			} else {
-				t.Logf("rdc.ReadFromToUDPAddrPort(_) = _, %v, %v, %v, _", src, dst, idx)
-			}
-			switch {
-			case (c.wrSrc.IsValid() || c.wrIdx == 0) && src.Addr().Unmap() != c.rdSrc:
-				t.Errorf("rdc.ReadFromToUDPAddrPort(_): src.Addr().Unmap() = %v; want %v", src.Addr().Unmap(), c.rdSrc)
-			case !(c.wrSrc.IsValid() || c.wrIdx == 0) && !src.Addr().Unmap().IsUnspecified():
-				t.Errorf("rdc.ReadFromToUDPAddrPort(_): src.Addr().Unmap() = %v; want %v", src.Addr().Unmap(), c.rdSrc)
-			case dst.Addr().Unmap() != c.rdDst:
-				t.Errorf("rdc.ReadFromToUDPAddrPort(_): dst.Addr().Unmap() = %v; want %v", dst.Addr().Unmap(), c.rdDst)
-			case idx != c.rdIdx:
-				t.Errorf("rdc.ReadFromToUDPAddrPort(_): idx = %d; want %d", idx, c.rdIdx)
-			}
-			close(done)
-			wg.Wait()
-
-			if rdErr = rdPC.Close(); rdErr != nil {
-				t.Error(rdErr)
-			}
-			if wrErr = wrPC.Close(); wrErr != nil {
-				t.Error(wrErr)
 			}
 		})
 	}
-}
-
-func TestUDPConn2(t *testing.T) {
-	// Listen on a UDP socket
-	server, err := net.ListenPacket("udp4", ":12345")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = server.Close() }()
-
-	// Get the raw connection
-	rawConn, err := server.(interface {
-		SyscallConn() (syscall.RawConn, error)
-	}).SyscallConn()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Enable IP_PKTINFO socket option
-	err = rawConn.Control(func(fd uintptr) {
-		//if runtime.GOOS == "linux" {
-		//	err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_PKTINFO, 1)
-		//} else if runtime.GOOS == "darwin" || runtime.GOOS == "freebsd" {
-		//	// Use IP_RECVDSTADDR on BSD-based systems for similar functionality
-		//	err = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_RECVDSTADDR, 1)
-		//}
-		err = windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IP, windows.IP_PKTINFO, 1)
-		if err != nil {
-			t.Fatalf("failed to set socket option: %v\n", err)
-		}
-		//err = windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IP, windows.IP_PKTINFO, 1)
-		//if err != nil {
-		//	t.Fatalf("failed to set socket option: %v\n", err)
-		//}
-		//err = windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IPV6, windows.IPV6_PKTINFO, 1)
-		//if err != nil {
-		//	t.Fatalf("failed to set socket option: %v\n", err)
-		//}
-		//err = windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IPV6, windows.IPV6_PKTINFO, 1)
-		//if err != nil {
-		//	t.Fatalf("failed to set socket option: %v\n", err)
-		//}
-	})
-
-	go func(t *testing.T) {
-		client, err := net.ListenPacket("udp4", ":0")
-		if err != nil {
-			t.Error(err)
-		}
-		defer func() { _ = client.Close() }()
-
-		_, err = client.WriteTo([]byte{}, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
-		if err != nil {
-			t.Error(err)
-		}
-	}(t)
-
-	// Use ipv4.NewPacketConn to read messages with control data
-	pc := ipv4.NewPacketConn(server)
-
-	// Read a packet and control message
-	buffer := make([]byte, 1500)
-	// oob := make([]byte, 100) // Out-of-band data buffer
-	_, cm, srcAddr, err := pc.ReadFrom(buffer)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Logf("PacketConn.ReadFrom() = %v, %v", cm, srcAddr)
-}
-
-func TestUDPConn3(t *testing.T) {
-	serverPC, err := net.ListenPacket("udp4", ":12345")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = serverPC.Close() }()
-
-	p4 := ipv4.NewPacketConn(serverPC)
-	p6 := ipv6.NewPacketConn(serverPC)
-
-	err = p4.SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
-	if err != nil {
-		t.Logf("IPv4 SetControlMessage failed: %v", err)
-	}
-	err = p6.SetControlMessage(ipv6.FlagDst|ipv6.FlagInterface, true)
-	if err != nil {
-		t.Logf("IPv6 SetControlMessage failed: %v", err)
-	}
-
-	go func(t *testing.T) {
-		clientPC, err := net.ListenPacket("udp4", ":0")
-		if err != nil {
-			t.Error(err)
-		}
-		defer func() { _ = clientPC.Close() }()
-
-		_, err = clientPC.WriteTo([]byte{}, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
-		if err != nil {
-			t.Error(err)
-		}
-	}(t)
-
-	// Read a packet and control message
-	buffer := make([]byte, 1500)
-	// oob := make([]byte, 100) // Out-of-band data buffer
-	_, cm, srcAddr, err := p4.ReadFrom(buffer)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	t.Logf("IPv4 PacketConn.ReadFrom() = %v, %v", cm, srcAddr)
 }
