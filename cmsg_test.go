@@ -21,7 +21,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
-	"syscall"
+	"runtime"
 	"testing"
 	"unsafe"
 )
@@ -170,46 +170,38 @@ func TestParsePacketInfoBounds(t *testing.T) {
 	}
 }
 
+// TestRawConnIsV6Only ensures IPV6_V6ONLY is read as Go sets it on IPv6 sockets: enabled for udp6,
+// and disabled for dual-stack udp, except where the system doesn't support IPv4-mapped addresses.
+// IPv4 sockets aren't tested, as the option is only defined for IPv6 ones, e.g. Linux fails to get it.
 func TestRawConnIsV6Only(t *testing.T) {
-	var err error
-	var ok bool
-	var pc net.PacketConn
-	var raw syscall.RawConn
-	for _, test := range []struct {
-		net  string
-		only bool
+	noMapping := runtime.GOOS == "dragonfly" || runtime.GOOS == "openbsd" // Every IPv6 socket is IPv6-only
+	tests := []struct {
+		network, address string
+		want             bool
 	}{
-		{net: "udp", only: false},
-		{net: "udp4", only: true},
-		{net: "udp6", only: true},
-	} {
-		pc, err = net.ListenPacket(test.net, ":0")
-		if err != nil {
-			t.Error(err)
-			continue
-		}
+		{"udp6", "[::1]:0", true},
+		{"udp6", "[::]:0", true},
+		{"udp", "[::]:0", noMapping},
+		{"udp", ":0", noMapping},
+	}
+	for _, test := range tests {
+		t.Run(test.network+","+test.address, func(t *testing.T) {
+			pc, err := net.ListenPacket(test.network, test.address)
+			if err != nil {
+				t.Skipf("ListenPacket() = %v", err) // E.g. no IPv6 support
+			}
+			defer func() { _ = pc.Close() }()
+			if pc.LocalAddr().(*net.UDPAddr).AddrPort().Addr().Is4() {
+				t.Skip("an IPv4 socket, e.g. on a host without IPv6")
+			}
 
-		raw, err = pc.(*net.UDPConn).SyscallConn()
-		if err != nil {
-			t.Error(err)
-			_ = pc.Close()
-			continue
-		}
-
-		ok, err = rawConnIsV6Only(raw)
-		if err != nil {
-			t.Error(err)
-			_ = pc.Close()
-			continue
-		}
-
-		if ok != test.only {
-			t.Errorf("rawConnIsV6Only() returned %v; want %v", ok, test.only)
-		}
-
-		err = pc.Close()
-		if err != nil {
-			t.Error(err)
-		}
+			raw, err := pc.(*net.UDPConn).SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := rawConnIsV6Only(raw); got != test.want || err != nil {
+				t.Errorf("rawConnIsV6Only() = %v, %v, want %v, nil", got, err, test.want)
+			}
+		})
 	}
 }
