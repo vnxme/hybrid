@@ -18,6 +18,7 @@ package hybrid
 
 import (
 	"encoding/binary"
+	"errors"
 	"net"
 	"net/netip"
 	"syscall"
@@ -182,11 +183,10 @@ func parsePacketInfo(oob []byte) (dst netip.Addr, idx int, ok bool) {
 func rawConnEnablePacketInfo(c syscall.RawConn, v4Only, v6Only bool) error {
 	var err4 error
 	if !v6Only {
-		err4 = rawConnSetSockOptBool(c, cMsgIPv4DestAddrLevel, cMsgIPv4DestAddrOpt, true)
-		if err4 != nil && v4Only {
-			return err4
-		}
-		err4 = rawConnSetSockOptBool(c, cMsgIPv4InterfaceLevel, cMsgIPv4InterfaceOpt, true)
+		err4 = errors.Join( // Either option alone leaves IPv4 packet info incomplete
+			rawConnSetSockOptBool(c, cMsgIPv4DestAddrLevel, cMsgIPv4DestAddrOpt, true),
+			rawConnSetSockOptBool(c, cMsgIPv4InterfaceLevel, cMsgIPv4InterfaceOpt, true),
+		)
 		if err4 != nil && v4Only {
 			return err4
 		}
