@@ -39,8 +39,8 @@ type packetInfoUDPConn struct {
 
 // NeedPacketInfoUDPConn reports whether conn is bound to an unspecified address, so that the local
 // address a packet comes to is only known from packet info, e.g. by wrapping conn with
-// [PacketInfoUDPConn]. It returns false if conn already implements FromToUDPConn,
-// or if it doesn't provide access to the underlying socket.
+// [PacketInfoUDPConn]. It returns false if conn already implements FromToUDPConn, if it isn't bound
+// to a port, or if it doesn't provide access to the underlying socket, as PacketInfoUDPConn would fail.
 func NeedPacketInfoUDPConn(conn UDPConn) bool {
 	if isNilUDPConn(conn) {
 		return false
@@ -59,7 +59,8 @@ func NeedPacketInfoUDPConn(conn UDPConn) bool {
 		return false
 	}
 
-	return addr.AddrPort().Addr().Unmap().IsUnspecified()
+	ap := addr.AddrPort()
+	return ap.Port() != 0 && ap.Addr().Unmap().IsUnspecified()
 }
 
 // PacketInfoUDPConn enables packet info on conn for every IP version it accepts, and wraps it

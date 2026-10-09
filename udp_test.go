@@ -142,14 +142,22 @@ func TestNeedPacketInfoUDPConn(t *testing.T) {
 		}
 	})
 
-	t.Run("NotUDPAddr", func(t *testing.T) {
+	t.Run("BadLocalAddr", func(t *testing.T) { // A wildcard socket, but not as its local address says
 		pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = pc.Close() }()
-		if NeedPacketInfoUDPConn(localAddrConn{pc, oneTrunkAddr}) {
-			t.Errorf("NeedPacketInfoUDPConn() = true, want false")
+		for _, addr := range []net.Addr{
+			nil,                                   // No local address
+			oneTrunkAddr,                          // Not a *net.UDPAddr
+			(*net.UDPAddr)(nil),                   // No port
+			&net.UDPAddr{IP: net.IPv4zero},        // Not bound to a port
+			&net.UDPAddr{IP: net.IPv6unspecified}, // Not bound to a port
+		} {
+			if NeedPacketInfoUDPConn(localAddrConn{pc, addr}) {
+				t.Errorf("NeedPacketInfoUDPConn() with local address %#v = true, want false", addr)
+			}
 		}
 	})
 }
