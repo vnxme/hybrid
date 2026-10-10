@@ -185,12 +185,13 @@ func (c *InletConfig) resolve() inletConfig {
 	return cfg
 }
 
-type inletPacketSmall struct {
-	c   *inletConn // The flow read from or written for, if any
-	to  net.Addr   // The address written to, if there is no flow
-	ref *[]byte    // Reference for putBuf, if b comes from getBuf
-	b   []byte     // Reusable buffer
-	n   int        // Bytes consumed
+// inletPacket is a packet queued for reading from an inlet connection or from the fallback connection,
+// or for writing by the write loop.
+type inletPacket struct {
+	conn *inletConn // The inlet connection of the flow of the packet, if any
+	dst  net.Addr   // The address to write to, if there is no conn
+	ref  *[]byte    // Reference to the pooled buffer of buf, if any
+	buf  []byte
 }
 
 // InletStats counts the packets an inlet has dropped, by reason.
@@ -224,9 +225,9 @@ type inlet struct {
 	udp FromToUDPConn    // The same as pc if it's a FromToUDPConn, which reports destination addresses
 	fb  *inletFallback   // Fallback connection, if any
 
-	acChan chan *inletConn        // Accept channel
-	wrChan chan *inletPacketSmall // Write channel
-	done   chan struct{}          // Done channel
+	acChan chan *inletConn   // Accept channel
+	wrChan chan *inletPacket // Write channel
+	done   chan struct{}     // Done channel
 
 	rt map[flowKey]*inletConn // Routing table
 
@@ -266,7 +267,7 @@ func Inlet(pc PacketConn, config *InletConfig) InletListener {
 	i := &inlet{
 		pc:     PacketToFromToPacketConn(pc, cfg.packetInfo),
 		acChan: make(chan *inletConn, cfg.acceptQueueSize),
-		wrChan: make(chan *inletPacketSmall, cfg.writeQueueSize),
+		wrChan: make(chan *inletPacket, cfg.writeQueueSize),
 		done:   make(chan struct{}),
 		rt:     make(map[flowKey]*inletConn),
 		start:  time.Now(),

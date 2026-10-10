@@ -43,10 +43,10 @@ func (i *inlet) send(b []byte, c *inletConn, to net.Addr, done <-chan struct{}, 
 		return 0, os.ErrDeadlineExceeded
 	}
 
-	pkt := &inletPacketSmall{c: c, to: to, n: len(b)}
+	pkt := &inletPacket{conn: c, dst: to}
 	if len(b) > 0 {
-		pkt.b, pkt.ref = getBuf(len(b))
-		copy(pkt.b, b)
+		pkt.buf, pkt.ref = getBuf(len(b))
+		copy(pkt.buf, b)
 	}
 	select {
 	case i.wrChan <- pkt:
@@ -88,12 +88,12 @@ func (i *inlet) writeLoop() {
 // write writes a packet to the underlying connection, with the addresses of its flow if it has one,
 // and drops it if the write times out or fails. It reports false if the underlying connection is closed,
 // and closes the inlet then.
-func (i *inlet) write(pkt *inletPacketSmall) bool {
+func (i *inlet) write(pkt *inletPacket) bool {
 	defer putBuf(pkt.ref)
 
-	remote, local, idx := pkt.to, net.Addr(nil), 0
-	if pkt.c != nil {
-		remote, local, idx = pkt.c.remoteAddr, pkt.c.localAddr, pkt.c.LocalIfIdx()
+	remote, local, idx := pkt.dst, net.Addr(nil), 0
+	if pkt.conn != nil {
+		remote, local, idx = pkt.conn.remoteAddr, pkt.conn.localAddr, pkt.conn.LocalIfIdx()
 	}
 
 	var err error
@@ -101,7 +101,7 @@ func (i *inlet) write(pkt *inletPacketSmall) bool {
 		err = i.pc.SetWriteDeadline(time.Now().Add(i.cfg.writeTimeout))
 	}
 	if err == nil {
-		_, err = i.pc.WriteToFrom(pkt.b[:pkt.n], remote, local, idx)
+		_, err = i.pc.WriteToFrom(pkt.buf, remote, local, idx)
 	}
 
 	var nrr net.Error

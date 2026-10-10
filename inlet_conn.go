@@ -27,7 +27,7 @@ import (
 // receive copies the next packet of q into b, waiting until one comes, until done is closed, or until
 // the deadline d passes, and returns the inlet connection of its flow. Once remoteDone is closed, it still
 // returns the packets queued, then io.EOF.
-func receive(b []byte, q chan *inletPacketSmall, done, remoteDone <-chan struct{}, mu *sync.Mutex, d *deadline[noHook]) (int, *inletConn, error) {
+func receive(b []byte, q chan *inletPacket, done, remoteDone <-chan struct{}, mu *sync.Mutex, d *deadline[noHook]) (int, *inletConn, error) {
 	switch {
 	case isClosedChan(done):
 		return 0, nil, io.ErrClosedPipe
@@ -48,7 +48,7 @@ func receive(b []byte, q chan *inletPacketSmall, done, remoteDone <-chan struct{
 		return 0, nil, os.ErrDeadlineExceeded
 	}
 
-	var pkt *inletPacketSmall
+	var pkt *inletPacket
 	select {
 	case pkt = <-q:
 	case <-done:
@@ -62,9 +62,9 @@ func receive(b []byte, q chan *inletPacketSmall, done, remoteDone <-chan struct{
 	case <-d.Wait():
 		return 0, nil, os.ErrDeadlineExceeded
 	}
-	n := copy(b, pkt.b[:pkt.n])
+	n := copy(b, pkt.buf)
 	putBuf(pkt.ref)
-	return n, pkt.c, nil
+	return n, pkt.conn, nil
 }
 
 type inletConn struct {
@@ -72,7 +72,7 @@ type inletConn struct {
 	remoteAddr net.Addr
 
 	localDone chan struct{}
-	rdRx      chan *inletPacketSmall // Packets of the flow, unless it's been released
+	rdRx      chan *inletPacket // Packets of the flow, unless it's been released
 
 	parent     *inlet
 	remoteDone <-chan struct{}
@@ -226,7 +226,7 @@ func (ic *inletConn) SetWriteDeadline(t time.Time) error {
 type inletFallback struct {
 	parent *inlet
 
-	rdRx chan *inletPacketSmall // Packets of released flows
+	rdRx chan *inletPacket // Packets of released flows
 
 	localDone chan struct{}
 
@@ -240,7 +240,7 @@ type inletFallback struct {
 func (i *inlet) newFallback() *inletFallback {
 	return &inletFallback{
 		parent:     i,
-		rdRx:       make(chan *inletPacketSmall, i.cfg.fallbackQueueSize),
+		rdRx:       make(chan *inletPacket, i.cfg.fallbackQueueSize),
 		localDone:  make(chan struct{}),
 		rdDeadline: makeDeadline(noHook{}),
 		wrDeadline: makeDeadline(noHook{}),

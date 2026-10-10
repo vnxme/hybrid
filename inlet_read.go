@@ -56,7 +56,7 @@ func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
 	}
 
 	ic := &inletConn{
-		rdRx: make(chan *inletPacketSmall, i.cfg.readQueueSize),
+		rdRx: make(chan *inletPacket, i.cfg.readQueueSize),
 
 		localDone:  make(chan struct{}),
 		remoteDone: i.done,
@@ -260,10 +260,10 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 	c.touch()
 	c.localIfIdx.Store(int64(p.idx)) // The latest one is used for replies
 
-	pkt := &inletPacketSmall{c: c, n: len(data)}
+	pkt := &inletPacket{conn: c}
 	if len(data) > 0 {
-		pkt.b, pkt.ref = getBuf(len(data))
-		copy(pkt.b, data)
+		pkt.buf, pkt.ref = getBuf(len(data))
+		copy(pkt.buf, data)
 	}
 
 	c.mu.Lock() // Keeps the packets of a flow in order while it's being released
@@ -281,7 +281,7 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 }
 
 // toFallback passes a packet of a released flow to the fallback connection, or drops it if there is none.
-func (i *inlet) toFallback(pkt *inletPacketSmall) {
+func (i *inlet) toFallback(pkt *inletPacket) {
 	if i.fb == nil || isClosedChan(i.fb.localDone) {
 		putBuf(pkt.ref)
 		i.drops.noFallback.Add(1)
