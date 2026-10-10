@@ -28,10 +28,11 @@ import (
 func TestInletFallbackWrite(t *testing.T) {
 	a, u := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 9), Port: 9}
 	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
-	client, ln := inletTrunk(t, &InletConfig{FallbackOnly: true})
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	if _, err := client.WriteToFrom([]byte("a1"), local, a, 3); err != nil {
 		t.Fatal(err)
 	}
+	releaseInletConn(t, ln)
 	fb := ln.Fallback()
 	_ = fb.SetReadDeadline(time.Now().Add(time.Second))
 	b := make([]byte, 8)
@@ -180,7 +181,7 @@ func TestInletWriteFailed(t *testing.T) {
 	setup := func(t *testing.T, err error) (FromToPacketConn, InletListener) {
 		client, server := BufferedTrunk(16, nil, nil)
 		t.Cleanup(func() { _ = client.Close() })
-		ln := Inlet(&failingWrites{server, bad, err}, &InletConfig{FallbackOnly: true})
+		ln := Inlet(&failingWrites{server, bad, err}, &InletConfig{FallbackConn: true})
 		t.Cleanup(func() { _ = ln.Close() })
 		return client, ln
 	}
@@ -227,10 +228,11 @@ func TestInletWriteFailed(t *testing.T) {
 // other than UDP, and writes from its local address.
 func TestInletFallbackWriteOther(t *testing.T) {
 	c, local := testAddr("c"), testAddr("local")
-	client, ln := inletTrunk(t, &InletConfig{FallbackOnly: true})
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	if _, err := client.WriteToFrom([]byte("c1"), local, c, 0); err != nil {
 		t.Fatal(err)
 	}
+	releaseInletConn(t, ln)
 	_ = readFallback(t, ln.Fallback())
 	if _, err := ln.Fallback().WriteTo([]byte("x"), c); err != nil {
 		t.Fatal(err)

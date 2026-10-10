@@ -297,6 +297,15 @@ func acceptInletConn(t *testing.T, ln PacketListener) MixedConn {
 	}
 }
 
+// releaseInletConn accepts the next inlet connection and releases it, handing its flow over to the fallback
+// connection.
+func releaseInletConn(t *testing.T, ln PacketListener) {
+	t.Helper()
+	if err := acceptInletConn(t, ln).(interface{ Release() error }).Release(); err != nil {
+		t.Fatalf("Release() = %v, want nil", err)
+	}
+}
+
 // readInletConn returns the packets read from an inlet connection until none comes for a while.
 func readInletConn(t *testing.T, c MixedConn) []string {
 	t.Helper()
@@ -375,7 +384,6 @@ func TestInletConfig(t *testing.T) {
 		{"NoTimeouts", &InletConfig{IdleTimeout: -1, WriteTimeout: -1}, with(func(cfg *inletConfig) { cfg.idleTimeout, cfg.writeTimeout = 0, 0 })},
 		{"ReadBufferSizeMin", &InletConfig{ReadBufferSize: minInletReadBufferSize - 1}, with(func(cfg *inletConfig) { cfg.readBufferSize = minInletReadBufferSize })},
 		{"FallbackConn", &InletConfig{FallbackConn: true}, with(func(cfg *inletConfig) { cfg.fallbackConn = true })},
-		{"FallbackOnly", &InletConfig{FallbackOnly: true}, with(func(cfg *inletConfig) { cfg.fallbackConn, cfg.fallbackOnly = true, true })},
 		{"Set", &InletConfig{
 			AcceptQueueSize:   1,
 			ReadQueueSize:     2,

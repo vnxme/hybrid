@@ -47,10 +47,9 @@ import (
 // and queues the packet on it. A handler accepting the connection either serves it or releases it,
 // e.g. as no matcher recognizes the flow: then the packets queued on the connection and all the later
 // packets of the flow go to the fallback connection if there is one, or are dropped if there isn't.
-// Optionally, every new flow goes to the fallback connection straight away, for an inlet nobody
-// accepts connections from. A flow ends when its connection is closed, by its handler or by its idle
-// timeout, and its next packet starts a new flow straight away: UDP has nothing like TCP's TIME_WAIT
-// and RST to tell a late packet of an old flow from the first packet of a new one.
+// A flow ends when its connection is closed, by its handler or by its idle timeout, and its next
+// packet starts a new flow straight away: UDP has nothing like TCP's TIME_WAIT and RST to tell a late
+// packet of an old flow from the first packet of a new one.
 //
 // Deadlines. Inlet connections and the fallback connection have read and write deadlines of their own,
 // like any net.Conn or net.PacketConn. Each flow has an idle timeout, which every packet read or written
@@ -126,10 +125,6 @@ type InletConfig struct {
 	// Without one, the packets of a released flow are dropped.
 	FallbackConn bool
 
-	// FallbackOnly sends every new flow to the fallback connection straight away rather than to Accept,
-	// e.g. for an inlet nobody accepts connections from. It implies FallbackConn.
-	FallbackOnly bool
-
 	// PacketInfo makes the inlet enable packet info with [PacketInfoUDPConn] if the underlying PacketConn
 	// satisfies UDPConn, so that flows are told apart by their destination addresses as well, and replies
 	// are sent from the address each flow came to, e.g. for a UDPConn listening on an unspecified address.
@@ -150,7 +145,6 @@ type inletConfig struct {
 	writeQueueSize    int
 
 	fallbackConn bool
-	fallbackOnly bool
 	packetInfo   bool
 }
 
@@ -184,8 +178,7 @@ func (c *InletConfig) resolve() inletConfig {
 		readBufferSize:    orDefault(c.ReadBufferSize, DefaultInletReadBufferSize),
 		readQueueSize:     orDefault(c.ReadQueueSize, DefaultInletReadQueueSize),
 		writeQueueSize:    orDefault(c.WriteQueueSize, DefaultInletWriteQueueSize),
-		fallbackConn:      c.FallbackConn || c.FallbackOnly,
-		fallbackOnly:      c.FallbackOnly,
+		fallbackConn:      c.FallbackConn,
 		packetInfo:        c.PacketInfo,
 	}
 	cfg.readBufferSize = max(cfg.readBufferSize, minInletReadBufferSize)

@@ -188,51 +188,6 @@ func TestInletDrops(t *testing.T) {
 	})
 }
 
-// TestInletFallbackOnly ensures every flow goes to the fallback connection straight away with FallbackOnly,
-// that a full queue of the fallback connection drops packets, and that a closed one does too.
-func TestInletFallbackOnly(t *testing.T) {
-	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-
-	t.Run("Flows", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{FallbackOnly: true})
-		accepted := make(chan error, 1)
-		go func() {
-			_, err := ln.Accept()
-			accepted <- err
-		}()
-		writeFrom(t, client, a, "a1")
-		writeFrom(t, client, b, "b1")
-		writeFrom(t, client, a, "a2")
-		if got, want := strings.Join(readFallback(t, ln.Fallback()), " "), a.String()+":a1 "+b.String()+":b1 "+a.String()+":a2"; got != want {
-			t.Errorf("packets of the fallback connection = %q, want %q", got, want)
-		}
-		_ = ln.Close()
-		if err := <-accepted; err == nil {
-			t.Errorf("Accept() = nil, want an error once the inlet is closed, as no flow is accepted")
-		}
-	})
-
-	t.Run("QueueFull", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{FallbackOnly: true, FallbackQueueSize: 1})
-		writeFrom(t, client, a, "a1")
-		writeFrom(t, client, a, "a2")
-		writeFrom(t, client, b, "b1")
-		waitInletStats(t, ln, InletStats{FallbackQueueFull: 2})
-		if got, want := strings.Join(readFallback(t, ln.Fallback()), " "), a.String()+":a1"; got != want {
-			t.Errorf("packets of the fallback connection = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("Closed", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{FallbackOnly: true})
-		if err := ln.Fallback().Close(); err != nil {
-			t.Fatalf("Close() = %v, want nil", err)
-		}
-		writeFrom(t, client, a, "a1")
-		waitInletStats(t, ln, InletStats{NoFallback: 1})
-	})
-}
-
 // isClosedInletConn reports whether an inlet connection has been closed, e.g. as its flow has expired.
 func isClosedInletConn(c MixedConn) bool { return c.SetDeadline(time.Time{}) != nil }
 

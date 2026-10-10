@@ -222,7 +222,7 @@ func (ic *inletConn) SetWriteDeadline(t time.Time) error {
 }
 
 // inletFallback is the fallback connection of an inlet: a plain PacketConn serving the flows released by
-// their handlers, or every flow with FallbackOnly. It deliberately gives no access to the socket.
+// their handlers. It deliberately gives no access to the socket.
 type inletFallback struct {
 	parent *inlet
 

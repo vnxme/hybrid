@@ -64,15 +64,42 @@ func TestInletReleaseWithoutFallback(t *testing.T) {
 		t.Fatalf("Fallback() = %v, want nil", ln.Fallback())
 	}
 	writeFrom(t, client, a, "a1")
-	if err := acceptInletConn(t, ln).(interface{ Release() error }).Release(); err != nil {
-		t.Fatalf("Release() = %v, want nil", err)
-	}
+	releaseInletConn(t, ln)
 	writeFrom(t, client, a, "a2")
 	writeFrom(t, client, b, "b1")
 	waitInletStats(t, ln, InletStats{NoFallback: 2})
 	if conn := acceptInletConn(t, ln); conn.RemoteAddr().String() != b.String() { // Not a new flow of a
 		t.Errorf("RemoteAddr() = %s, want %s", conn.RemoteAddr(), b)
 	}
+}
+
+// TestInletReleaseDrops ensures the packets of a released flow are dropped if the queue of the fallback
+// connection is full, or if the fallback connection is closed.
+func TestInletReleaseDrops(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+
+	t.Run("QueueFull", func(t *testing.T) {
+		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true, FallbackQueueSize: 1})
+		writeFrom(t, client, a, "a1")
+		releaseInletConn(t, ln)
+		writeFrom(t, client, a, "a2")
+		writeFrom(t, client, a, "a3")
+		waitInletStats(t, ln, InletStats{FallbackQueueFull: 2})
+		if got, want := strings.Join(readFallback(t, ln.Fallback()), " "), a.String()+":a1"; got != want {
+			t.Errorf("packets of the fallback connection = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("Closed", func(t *testing.T) {
+		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+		writeFrom(t, client, a, "a1")
+		releaseInletConn(t, ln)
+		if err := ln.Fallback().Close(); err != nil {
+			t.Fatalf("Close() = %v, want nil", err)
+		}
+		writeFrom(t, client, a, "a2")
+		waitInletStats(t, ln, InletStats{NoFallback: 1})
+	})
 }
 
 // TestInletDeadlines ensures the read and write deadlines of inlet connections and of the fallback connection.

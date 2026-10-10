@@ -220,9 +220,8 @@ func (i *inlet) read(b []byte, p *inletPacketInfo) (n int, err error) {
 }
 
 // route passes a packet to the inlet connection of its flow, or to the fallback connection if the flow
-// has been released. The first packet of a flow creates its inlet connection, and queues it for Accept,
-// or releases it straight away with FallbackOnly. It drops the packet rather than wait if a queue
-// is full or the table is.
+// has been released. The first packet of a flow creates its inlet connection, and queues it for Accept.
+// It drops the packet rather than wait if a queue is full or the table is.
 func (i *inlet) route(data []byte, p *inletPacketInfo) {
 	c, ok := i.rt[p.key]
 	if !ok || c.ended() {
@@ -243,16 +242,11 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 			i.untrack(c)
 		}
 		c = i.newConnection(p)
-		if i.cfg.fallbackOnly {
-			c.released.Store(true)
-			c.closeLocal()
-		} else {
-			select {
-			case i.acChan <- c:
-			default: // Don't create a flow, so that a retry of the packet is a new flow
-				i.drops.acceptQueueFull.Add(1)
-				return
-			}
+		select {
+		case i.acChan <- c:
+		default: // Don't create a flow, so that a retry of the packet is a new flow
+			i.drops.acceptQueueFull.Add(1)
+			return
 		}
 
 		i.rt[p.key] = c
