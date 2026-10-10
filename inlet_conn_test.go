@@ -24,10 +24,10 @@ import (
 )
 
 // TestInletRelease ensures releasing an inlet connection hands the packets queued and the later packets
-// of its flow over to the default connection, in order, while the other flows go on as they were.
+// of its flow over to the fallback connection, in order, while the other flows go on as they were.
 func TestInletRelease(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	client, ln := inletTrunk(t, &InletConfig{DefaultConn: true})
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
 	writeFrom(t, client, a, "a2")
 	conn := acceptInletConn(t, ln)
@@ -37,8 +37,8 @@ func TestInletRelease(t *testing.T) {
 	writeFrom(t, client, a, "a3")
 	writeFrom(t, client, b, "b1")
 
-	if got, want := strings.Join(readDefault(t, ln.Default()), " "), a.String()+":a1 "+a.String()+":a2 "+a.String()+":a3"; got != want {
-		t.Errorf("packets of the default connection = %q, want %q", got, want)
+	if got, want := strings.Join(readFallback(t, ln.Fallback()), " "), a.String()+":a1 "+a.String()+":a2 "+a.String()+":a3"; got != want {
+		t.Errorf("packets of the fallback connection = %q, want %q", got, want)
 	}
 	if other := acceptInletConn(t, ln); other.RemoteAddr().String() != b.String() {
 		t.Errorf("RemoteAddr() = %s, want %s", other.RemoteAddr(), b)
@@ -55,13 +55,13 @@ func TestInletRelease(t *testing.T) {
 	waitInletStats(t, ln, InletStats{})
 }
 
-// TestInletReleaseWithoutDefault ensures releasing an inlet connection without a default connection drops
+// TestInletReleaseWithoutFallback ensures releasing an inlet connection without a fallback connection drops
 // the packets of its flow, without starting a new flow.
-func TestInletReleaseWithoutDefault(t *testing.T) {
+func TestInletReleaseWithoutFallback(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 	client, ln := inletTrunk(t, nil)
-	if ln.Default() != nil {
-		t.Fatalf("Default() = %v, want nil", ln.Default())
+	if ln.Fallback() != nil {
+		t.Fatalf("Fallback() = %v, want nil", ln.Fallback())
 	}
 	writeFrom(t, client, a, "a1")
 	if err := acceptInletConn(t, ln).(interface{ Release() error }).Release(); err != nil {
@@ -69,16 +69,16 @@ func TestInletReleaseWithoutDefault(t *testing.T) {
 	}
 	writeFrom(t, client, a, "a2")
 	writeFrom(t, client, b, "b1")
-	waitInletStats(t, ln, InletStats{NoDefault: 2})
+	waitInletStats(t, ln, InletStats{NoFallback: 2})
 	if conn := acceptInletConn(t, ln); conn.RemoteAddr().String() != b.String() { // Not a new flow of a
 		t.Errorf("RemoteAddr() = %s, want %s", conn.RemoteAddr(), b)
 	}
 }
 
-// TestInletDeadlines ensures the read and write deadlines of inlet connections and of the default connection.
+// TestInletDeadlines ensures the read and write deadlines of inlet connections and of the fallback connection.
 func TestInletDeadlines(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, &InletConfig{DefaultConn: true})
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
 	conn := acceptInletConn(t, ln)
 	_ = readInletConn(t, conn)
@@ -86,12 +86,12 @@ func TestInletDeadlines(t *testing.T) {
 	past := time.Now().Add(-time.Second)
 	b := make([]byte, 8)
 	for name, err := range map[string]error{
-		"Read":            func() error { _ = conn.SetDeadline(past); _, err := conn.Read(b); return err }(),
-		"Write":           func() error { _, err := conn.Write(b); return err }(),
-		"DefaultReadFrom": func() error { _ = ln.Default().SetDeadline(past); _, _, err := ln.Default().ReadFrom(b); return err }(),
-		"DefaultWriteTo": func() error {
-			_ = ln.Default().SetWriteDeadline(past)
-			_, err := ln.Default().WriteTo(b, a)
+		"Read":             func() error { _ = conn.SetDeadline(past); _, err := conn.Read(b); return err }(),
+		"Write":            func() error { _, err := conn.Write(b); return err }(),
+		"FallbackReadFrom": func() error { _ = ln.Fallback().SetDeadline(past); _, _, err := ln.Fallback().ReadFrom(b); return err }(),
+		"FallbackWriteTo": func() error {
+			_ = ln.Fallback().SetWriteDeadline(past)
+			_, err := ln.Fallback().WriteTo(b, a)
 			return err
 		}(),
 	} {
@@ -101,17 +101,17 @@ func TestInletDeadlines(t *testing.T) {
 	}
 
 	// A deadline in the future lets a waiting read time out
-	_ = ln.Default().SetDeadline(time.Now().Add(20 * time.Millisecond))
-	if _, _, err := ln.Default().ReadFrom(b); !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Errorf("ReadFrom() of the default connection = %v, want os.ErrDeadlineExceeded", err)
+	_ = ln.Fallback().SetDeadline(time.Now().Add(20 * time.Millisecond))
+	if _, _, err := ln.Fallback().ReadFrom(b); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("ReadFrom() of the fallback connection = %v, want os.ErrDeadlineExceeded", err)
 	}
-	if err := ln.Default().Close(); err != nil {
+	if err := ln.Fallback().Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := ln.Default().Close(); err == nil {
-		t.Errorf("Close() of the default connection again = nil, want an error")
+	if err := ln.Fallback().Close(); err == nil {
+		t.Errorf("Close() of the fallback connection again = nil, want an error")
 	}
-	if _, _, err := ln.Default().ReadFrom(b); err == nil {
-		t.Errorf("ReadFrom() of the closed default connection = nil, want an error")
+	if _, _, err := ln.Fallback().ReadFrom(b); err == nil {
+		t.Errorf("ReadFrom() of the closed fallback connection = nil, want an error")
 	}
 }

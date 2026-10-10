@@ -188,13 +188,13 @@ func TestInletDrops(t *testing.T) {
 	})
 }
 
-// TestInletDefaultOnly ensures every flow goes to the default connection straight away with WithDefaultOnly,
-// that a full queue of the default connection drops packets, and that a closed one does too.
-func TestInletDefaultOnly(t *testing.T) {
+// TestInletFallbackOnly ensures every flow goes to the fallback connection straight away with FallbackOnly,
+// that a full queue of the fallback connection drops packets, and that a closed one does too.
+func TestInletFallbackOnly(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
 	t.Run("Flows", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{DefaultOnly: true})
+		client, ln := inletTrunk(t, &InletConfig{FallbackOnly: true})
 		accepted := make(chan error, 1)
 		go func() {
 			_, err := ln.Accept()
@@ -203,8 +203,8 @@ func TestInletDefaultOnly(t *testing.T) {
 		writeFrom(t, client, a, "a1")
 		writeFrom(t, client, b, "b1")
 		writeFrom(t, client, a, "a2")
-		if got, want := strings.Join(readDefault(t, ln.Default()), " "), a.String()+":a1 "+b.String()+":b1 "+a.String()+":a2"; got != want {
-			t.Errorf("packets of the default connection = %q, want %q", got, want)
+		if got, want := strings.Join(readFallback(t, ln.Fallback()), " "), a.String()+":a1 "+b.String()+":b1 "+a.String()+":a2"; got != want {
+			t.Errorf("packets of the fallback connection = %q, want %q", got, want)
 		}
 		_ = ln.Close()
 		if err := <-accepted; err == nil {
@@ -213,23 +213,23 @@ func TestInletDefaultOnly(t *testing.T) {
 	})
 
 	t.Run("QueueFull", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{DefaultOnly: true, DefaultQueueSize: 1})
+		client, ln := inletTrunk(t, &InletConfig{FallbackOnly: true, FallbackQueueSize: 1})
 		writeFrom(t, client, a, "a1")
 		writeFrom(t, client, a, "a2")
 		writeFrom(t, client, b, "b1")
-		waitInletStats(t, ln, InletStats{DefaultQueueFull: 2})
-		if got, want := strings.Join(readDefault(t, ln.Default()), " "), a.String()+":a1"; got != want {
-			t.Errorf("packets of the default connection = %q, want %q", got, want)
+		waitInletStats(t, ln, InletStats{FallbackQueueFull: 2})
+		if got, want := strings.Join(readFallback(t, ln.Fallback()), " "), a.String()+":a1"; got != want {
+			t.Errorf("packets of the fallback connection = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{DefaultOnly: true})
-		if err := ln.Default().Close(); err != nil {
+		client, ln := inletTrunk(t, &InletConfig{FallbackOnly: true})
+		if err := ln.Fallback().Close(); err != nil {
 			t.Fatalf("Close() = %v, want nil", err)
 		}
 		writeFrom(t, client, a, "a1")
-		waitInletStats(t, ln, InletStats{NoDefault: 1})
+		waitInletStats(t, ln, InletStats{NoFallback: 1})
 	})
 }
 
@@ -297,19 +297,19 @@ func TestInletIdleTimeout(t *testing.T) {
 	})
 
 	t.Run("Released", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: idle, DefaultConn: true})
+		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: idle, FallbackConn: true})
 		writeFrom(t, client, a, "a1")
 		if err := acceptInletConn(t, ln).(interface{ Release() error }).Release(); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(2 * idle)
 
-		writeFrom(t, client, a, "a2") // A new flow, offered to Accept rather than to the default connection
+		writeFrom(t, client, a, "a2") // A new flow, offered to Accept rather than to the fallback connection
 		if got := readInletConn(t, acceptInletConn(t, ln)); strings.Join(got, " ") != "a2" {
 			t.Errorf("packets of the new flow = %q, want %q", got, "a2")
 		}
-		if got := readDefault(t, ln.Default()); strings.Join(got, " ") != a.String()+":a1" {
-			t.Errorf("packets of the default connection = %q, want the released one only", got)
+		if got := readFallback(t, ln.Fallback()); strings.Join(got, " ") != a.String()+":a1" {
+			t.Errorf("packets of the fallback connection = %q, want the released one only", got)
 		}
 	})
 

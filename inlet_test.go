@@ -330,9 +330,9 @@ func writeFrom(t *testing.T, client FromToPacketConn, src net.Addr, data string)
 	}
 }
 
-// readDefault returns the packets read from a default connection, with their remote addresses,
+// readFallback returns the packets read from a fallback connection, with their remote addresses,
 // until none comes for a while.
-func readDefault(t *testing.T, d PacketConn) []string {
+func readFallback(t *testing.T, d PacketConn) []string {
 	t.Helper()
 	var pkts []string
 	b := make([]byte, 64)
@@ -349,14 +349,14 @@ func readDefault(t *testing.T, d PacketConn) []string {
 // TestInletConfig ensures the fields of an InletConfig not set give their defaults, and the others are applied.
 func TestInletConfig(t *testing.T) {
 	def := inletConfig{
-		idleTimeout:      DefaultInletIdleTimeout,
-		writeTimeout:     DefaultInletWriteTimeout,
-		acceptQueueSize:  DefaultInletAcceptQueueSize,
-		defaultQueueSize: DefaultInletDefaultQueueSize,
-		maxFlows:         DefaultInletMaxFlows,
-		readBufferSize:   DefaultInletReadBufferSize,
-		readQueueSize:    DefaultInletReadQueueSize,
-		writeQueueSize:   DefaultInletWriteQueueSize,
+		idleTimeout:       DefaultInletIdleTimeout,
+		writeTimeout:      DefaultInletWriteTimeout,
+		acceptQueueSize:   DefaultInletAcceptQueueSize,
+		fallbackQueueSize: DefaultInletFallbackQueueSize,
+		maxFlows:          DefaultInletMaxFlows,
+		readBufferSize:    DefaultInletReadBufferSize,
+		readQueueSize:     DefaultInletReadQueueSize,
+		writeQueueSize:    DefaultInletWriteQueueSize,
 	}
 	with := func(f func(*inletConfig)) inletConfig {
 		cfg := def
@@ -371,31 +371,31 @@ func TestInletConfig(t *testing.T) {
 	}{
 		{"Nil", nil, def},
 		{"Zero", &InletConfig{}, def},
-		{"Negative", &InletConfig{AcceptQueueSize: -1, DefaultQueueSize: -1, MaxFlows: -1, ReadBufferSize: -1, ReadQueueSize: -1, WriteQueueSize: -1}, def},
+		{"Negative", &InletConfig{AcceptQueueSize: -1, FallbackQueueSize: -1, MaxFlows: -1, ReadBufferSize: -1, ReadQueueSize: -1, WriteQueueSize: -1}, def},
 		{"NoTimeouts", &InletConfig{IdleTimeout: -1, WriteTimeout: -1}, with(func(cfg *inletConfig) { cfg.idleTimeout, cfg.writeTimeout = 0, 0 })},
 		{"ReadBufferSizeMin", &InletConfig{ReadBufferSize: minInletReadBufferSize - 1}, with(func(cfg *inletConfig) { cfg.readBufferSize = minInletReadBufferSize })},
-		{"DefaultConn", &InletConfig{DefaultConn: true}, with(func(cfg *inletConfig) { cfg.defaultConn = true })},
-		{"DefaultOnly", &InletConfig{DefaultOnly: true}, with(func(cfg *inletConfig) { cfg.defaultConn, cfg.defaultOnly = true, true })},
+		{"FallbackConn", &InletConfig{FallbackConn: true}, with(func(cfg *inletConfig) { cfg.fallbackConn = true })},
+		{"FallbackOnly", &InletConfig{FallbackOnly: true}, with(func(cfg *inletConfig) { cfg.fallbackConn, cfg.fallbackOnly = true, true })},
 		{"Set", &InletConfig{
-			AcceptQueueSize:  1,
-			ReadQueueSize:    2,
-			DefaultQueueSize: 3,
-			IdleTimeout:      4,
-			MaxFlows:         5,
-			ReadBufferSize:   minInletReadBufferSize + 6,
-			WriteQueueSize:   7,
-			WriteTimeout:     8,
-			PacketInfo:       true,
+			AcceptQueueSize:   1,
+			ReadQueueSize:     2,
+			FallbackQueueSize: 3,
+			IdleTimeout:       4,
+			MaxFlows:          5,
+			ReadBufferSize:    minInletReadBufferSize + 6,
+			WriteQueueSize:    7,
+			WriteTimeout:      8,
+			PacketInfo:        true,
 		}, inletConfig{
-			idleTimeout:      4,
-			writeTimeout:     8,
-			acceptQueueSize:  1,
-			defaultQueueSize: 3,
-			maxFlows:         5,
-			readBufferSize:   minInletReadBufferSize + 6,
-			readQueueSize:    2,
-			writeQueueSize:   7,
-			packetInfo:       true,
+			idleTimeout:       4,
+			writeTimeout:      8,
+			acceptQueueSize:   1,
+			fallbackQueueSize: 3,
+			maxFlows:          5,
+			readBufferSize:    minInletReadBufferSize + 6,
+			readQueueSize:     2,
+			writeQueueSize:    7,
+			packetInfo:        true,
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -407,10 +407,10 @@ func TestInletConfig(t *testing.T) {
 }
 
 // TestInletClose ensures that once an inlet is closed, Accept fails, an inlet connection returns the packets
-// queued and then io.EOF, writes fail, and the default connection fails too.
+// queued and then io.EOF, writes fail, and the fallback connection fails too.
 func TestInletClose(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, &InletConfig{DefaultConn: true})
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
 	writeFrom(t, client, a, "a2")
 	conn := acceptInletConn(t, ln)
@@ -437,14 +437,14 @@ func TestInletClose(t *testing.T) {
 	if _, err := conn.Write([]byte("x")); err == nil {
 		t.Errorf("Write() = nil, want an error")
 	}
-	if _, _, err := ln.Default().ReadFrom(b); !errors.Is(err, io.EOF) {
-		t.Errorf("ReadFrom() of the default connection = %v, want io.EOF", err)
+	if _, _, err := ln.Fallback().ReadFrom(b); !errors.Is(err, io.EOF) {
+		t.Errorf("ReadFrom() of the fallback connection = %v, want io.EOF", err)
 	}
-	if _, err := ln.Default().WriteTo([]byte("x"), a); err == nil {
-		t.Errorf("WriteTo() of the default connection = nil, want an error")
+	if _, err := ln.Fallback().WriteTo([]byte("x"), a); err == nil {
+		t.Errorf("WriteTo() of the fallback connection = nil, want an error")
 	}
 	for _, set := range []func(time.Time) error{conn.SetDeadline, conn.SetReadDeadline, conn.SetWriteDeadline,
-		ln.Default().SetDeadline, ln.Default().SetReadDeadline, ln.Default().SetWriteDeadline} {
+		ln.Fallback().SetDeadline, ln.Fallback().SetReadDeadline, ln.Fallback().SetWriteDeadline} {
 		if err := set(time.Time{}); err == nil {
 			t.Errorf("setting a deadline = nil, want an error")
 		}

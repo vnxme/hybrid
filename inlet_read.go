@@ -219,9 +219,9 @@ func (i *inlet) read(b []byte, p *inletPacketInfo) (n int, err error) {
 	return n, err
 }
 
-// route passes a packet to the inlet connection of its flow, or to the default connection if the flow
+// route passes a packet to the inlet connection of its flow, or to the fallback connection if the flow
 // has been released. The first packet of a flow creates its inlet connection, and queues it for Accept,
-// or releases it straight away with WithDefaultOnly. It drops the packet rather than wait if a queue
+// or releases it straight away with FallbackOnly. It drops the packet rather than wait if a queue
 // is full or the table is.
 func (i *inlet) route(data []byte, p *inletPacketInfo) {
 	c, ok := i.rt[p.key]
@@ -243,7 +243,7 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 			i.untrack(c)
 		}
 		c = i.newConnection(p)
-		if i.cfg.defaultOnly {
+		if i.cfg.fallbackOnly {
 			c.released.Store(true)
 			c.closeLocal()
 		} else {
@@ -274,7 +274,7 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 
 	c.mu.Lock() // Keeps the packets of a flow in order while it's being released
 	if c.released.Load() {
-		i.toDefault(pkt)
+		i.toFallback(pkt)
 	} else {
 		select {
 		case c.rdRx <- pkt:
@@ -286,17 +286,17 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 	c.mu.Unlock()
 }
 
-// toDefault passes a packet of a released flow to the default connection, or drops it if there is none.
-func (i *inlet) toDefault(pkt *inletPacketSmall) {
-	if i.def == nil || isClosedChan(i.def.localDone) {
+// toFallback passes a packet of a released flow to the fallback connection, or drops it if there is none.
+func (i *inlet) toFallback(pkt *inletPacketSmall) {
+	if i.fb == nil || isClosedChan(i.fb.localDone) {
 		putBuf(pkt.ref)
-		i.drops.noDefault.Add(1)
+		i.drops.noFallback.Add(1)
 		return
 	}
 	select {
-	case i.def.rdRx <- pkt:
+	case i.fb.rdRx <- pkt:
 	default:
 		putBuf(pkt.ref)
-		i.drops.defaultQueueFull.Add(1)
+		i.drops.fallbackQueueFull.Add(1)
 	}
 }

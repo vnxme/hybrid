@@ -89,7 +89,7 @@ type inletConn struct {
 	mu   sync.Mutex // Keeps the packets of the flow in order while it's being released
 	rdMu sync.Mutex // Serialize Read operations
 
-	released atomic.Bool // Set before closing localDone, if the flow goes on to the default connection
+	released atomic.Bool // Set before closing localDone, if the flow goes on to the fallback connection
 }
 
 func (ic *inletConn) Read(b []byte) (int, error) {
@@ -141,8 +141,8 @@ func (ic *inletConn) Close() error {
 	return nil
 }
 
-// Release hands the flow of the connection over to the default connection of the inlet: the packets
-// queued and all the later packets of the flow go there, or are dropped if the inlet has no default
+// Release hands the flow of the connection over to the fallback connection of the inlet: the packets
+// queued and all the later packets of the flow go there, or are dropped if the inlet has no fallback
 // connection. The connection is closed, but its flow goes on until it's idle.
 func (ic *inletConn) Release() error {
 	ic.mu.Lock()
@@ -155,7 +155,7 @@ func (ic *inletConn) Release() error {
 	for {
 		select {
 		case pkt := <-ic.rdRx:
-			ic.parent.toDefault(pkt)
+			ic.parent.toFallback(pkt)
 		default:
 			ic.closeLocal()
 			return nil
@@ -221,9 +221,9 @@ func (ic *inletConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-// inletDefault is the default connection of an inlet: a plain PacketConn serving the flows released by
-// their handlers, or every flow with WithDefaultOnly. It deliberately gives no access to the socket.
-type inletDefault struct {
+// inletFallback is the fallback connection of an inlet: a plain PacketConn serving the flows released by
+// their handlers, or every flow with FallbackOnly. It deliberately gives no access to the socket.
+type inletFallback struct {
 	parent *inlet
 
 	rdRx chan *inletPacketSmall // Packets of released flows
@@ -237,10 +237,10 @@ type inletDefault struct {
 	rdMu sync.Mutex // Serialize Read operations
 }
 
-func (i *inlet) newDefault() *inletDefault {
-	return &inletDefault{
+func (i *inlet) newFallback() *inletFallback {
+	return &inletFallback{
 		parent:     i,
-		rdRx:       make(chan *inletPacketSmall, i.cfg.defaultQueueSize),
+		rdRx:       make(chan *inletPacketSmall, i.cfg.fallbackQueueSize),
 		localDone:  make(chan struct{}),
 		rdDeadline: makeDeadline(noHook{}),
 		wrDeadline: makeDeadline(noHook{}),
@@ -248,7 +248,7 @@ func (i *inlet) newDefault() *inletDefault {
 }
 
 // ReadFrom reads a packet of a released flow, and returns the remote address of the flow.
-func (d *inletDefault) ReadFrom(b []byte) (int, net.Addr, error) {
+func (d *inletFallback) ReadFrom(b []byte) (int, net.Addr, error) {
 	n, c, err := receive(b, d.rdRx, d.localDone, d.parent.done, &d.rdMu, &d.rdDeadline)
 	if err != nil {
 		return 0, nil, d.opError("read", nil, err)
@@ -258,7 +258,7 @@ func (d *inletDefault) ReadFrom(b []byte) (int, net.Addr, error) {
 
 // WriteTo writes a packet to addr, from the local address and through the interface of the latest flow
 // of addr, or from those the system chooses if the inlet hasn't seen addr.
-func (d *inletDefault) WriteTo(b []byte, addr net.Addr) (int, error) {
+func (d *inletFallback) WriteTo(b []byte, addr net.Addr) (int, error) {
 	if addr == nil {
 		return 0, d.opError("write", nil, errMissingAddress)
 	}
@@ -266,8 +266,8 @@ func (d *inletDefault) WriteTo(b []byte, addr net.Addr) (int, error) {
 	return n, d.opError("write", addr, err)
 }
 
-// Close closes the default connection, so that the packets of released flows are dropped from now on.
-func (d *inletDefault) Close() error {
+// Close closes the fallback connection, so that the packets of released flows are dropped from now on.
+func (d *inletFallback) Close() error {
 	err := net.ErrClosed
 	d.once.Do(func() {
 		close(d.localDone)
@@ -276,9 +276,9 @@ func (d *inletDefault) Close() error {
 	return err
 }
 
-func (d *inletDefault) LocalAddr() net.Addr { return d.parent.pc.LocalAddr() }
+func (d *inletFallback) LocalAddr() net.Addr { return d.parent.pc.LocalAddr() }
 
-func (d *inletDefault) SetDeadline(t time.Time) error {
+func (d *inletFallback) SetDeadline(t time.Time) error {
 	if isClosedChan(d.localDone) || isClosedChan(d.parent.done) {
 		return io.ErrClosedPipe
 	}
@@ -287,7 +287,7 @@ func (d *inletDefault) SetDeadline(t time.Time) error {
 	return nil
 }
 
-func (d *inletDefault) SetReadDeadline(t time.Time) error {
+func (d *inletFallback) SetReadDeadline(t time.Time) error {
 	if isClosedChan(d.localDone) || isClosedChan(d.parent.done) {
 		return io.ErrClosedPipe
 	}
@@ -295,7 +295,7 @@ func (d *inletDefault) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
-func (d *inletDefault) SetWriteDeadline(t time.Time) error {
+func (d *inletFallback) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(d.localDone) || isClosedChan(d.parent.done) {
 		return io.ErrClosedPipe
 	}
@@ -303,8 +303,8 @@ func (d *inletDefault) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-// opError wraps an error of an operation on the default connection, except for the end of reading.
-func (d *inletDefault) opError(op string, addr net.Addr, err error) error {
+// opError wraps an error of an operation on the fallback connection, except for the end of reading.
+func (d *inletFallback) opError(op string, addr net.Addr, err error) error {
 	if err == nil || err == io.EOF || errors.Is(err, io.ErrClosedPipe) {
 		return err
 	}

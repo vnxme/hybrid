@@ -27,7 +27,7 @@ import (
 // An inlet serves a packet connection, typically a UDP socket, to many handlers at once, the way
 // a TCP listener serves a socket to many connections. Its read loop reads every packet, tells
 // the flows apart, and passes each flow either to an inlet connection, which a handler serves
-// like an accepted TCP connection, or to the default connection, which serves all the other
+// like an accepted TCP connection, or to the fallback connection, which serves all the other
 // flows together, e.g. as the packet connection of the QUIC server of Caddy, which tells QUIC
 // connections apart itself. Its write loop writes the packets of all those connections.
 //
@@ -46,13 +46,13 @@ import (
 // Lifecycle. The first packet of an unknown flow creates an inlet connection, queues it for Accept,
 // and queues the packet on it. A handler accepting the connection either serves it or releases it,
 // e.g. as no matcher recognizes the flow: then the packets queued on the connection and all the later
-// packets of the flow go to the default connection if there is one, or are dropped if there isn't.
-// Optionally, every new flow goes to the default connection straight away, for an inlet nobody
+// packets of the flow go to the fallback connection if there is one, or are dropped if there isn't.
+// Optionally, every new flow goes to the fallback connection straight away, for an inlet nobody
 // accepts connections from. A flow ends when its connection is closed, by its handler or by its idle
 // timeout, and its next packet starts a new flow straight away: UDP has nothing like TCP's TIME_WAIT
 // and RST to tell a late packet of an old flow from the first packet of a new one.
 //
-// Deadlines. Inlet connections and the default connection have read and write deadlines of their own,
+// Deadlines. Inlet connections and the fallback connection have read and write deadlines of their own,
 // like any net.Conn or net.PacketConn. Each flow has an idle timeout, which every packet read or written
 // refreshes: an atomic timestamp per flow, checked by a periodic sweeper, keeps that cheap. Only the read
 // loop sets the read deadline of the underlying connection, to be interrupted when the inlet closes, and
@@ -63,14 +63,14 @@ import (
 // closed and expired flows reach it over a channel. It reads into a buffer as large as the largest
 // datagram, and copies each packet into a pooled buffer of its size before queueing it.
 //
-// Writing. Inlet connections and the default connection hand their packets to the write loop, which
+// Writing. Inlet connections and the fallback connection hand their packets to the write loop, which
 // writes them to the underlying connection one by one, with the addresses of their flows. A write copies
 // its packet into a pooled buffer of its size and returns once the packet is queued, the way a UDP write
 // returns once the system has copied it: if the write queue is full, it waits for room until the write
 // deadline of its connection. So a write can't report an error of the underlying connection: the write
 // loop counts it, and closes the inlet if the underlying connection fails for good. The write timeout
 // of the inlet limits how long the write loop waits on the underlying connection for one packet, so
-// that a stuck write can't hold every flow up. The default connection is a plain net.PacketConn, whose
+// that a stuck write can't hold every flow up. The fallback connection is a plain net.PacketConn, whose
 // WriteTo knows only the remote address. So it looks the remote address up in an index of the latest
 // flow of each remote address, safe for concurrent use, to write from the local address and through
 // the interface that flow came to, and lets the system choose them for a remote address it hasn't seen.
@@ -94,10 +94,10 @@ type InletConfig struct {
 	// [DefaultInletReadQueueSize] by default. A packet is dropped if the queue of its inlet connection is full.
 	ReadQueueSize int
 
-	// DefaultQueueSize is the maximum number of packets waiting to be read from the default connection,
-	// [DefaultInletDefaultQueueSize] by default. A packet is dropped if the queue of the default connection
+	// FallbackQueueSize is the maximum number of packets waiting to be read from the fallback connection,
+	// [DefaultInletFallbackQueueSize] by default. A packet is dropped if the queue of the fallback connection
 	// is full.
-	DefaultQueueSize int
+	FallbackQueueSize int
 
 	// IdleTimeout is how long a flow may go without a packet read or written before it ends,
 	// [DefaultInletIdleTimeout] by default: its inlet connection is closed, and its next packet starts
@@ -122,13 +122,13 @@ type InletConfig struct {
 	// dropping it, [DefaultInletWriteTimeout] by default. A negative timeout makes it wait as long as it takes.
 	WriteTimeout time.Duration
 
-	// DefaultConn gives the inlet a default connection, which serves the flows released by their handlers.
+	// FallbackConn gives the inlet a fallback connection, which serves the flows released by their handlers.
 	// Without one, the packets of a released flow are dropped.
-	DefaultConn bool
+	FallbackConn bool
 
-	// DefaultOnly sends every new flow to the default connection straight away rather than to Accept,
-	// e.g. for an inlet nobody accepts connections from. It implies DefaultConn.
-	DefaultOnly bool
+	// FallbackOnly sends every new flow to the fallback connection straight away rather than to Accept,
+	// e.g. for an inlet nobody accepts connections from. It implies FallbackConn.
+	FallbackOnly bool
 
 	// PacketInfo makes the inlet enable packet info with [PacketInfoUDPConn] if the underlying PacketConn
 	// satisfies UDPConn, so that flows are told apart by their destination addresses as well, and replies
@@ -142,16 +142,16 @@ type inletConfig struct {
 	idleTimeout  time.Duration
 	writeTimeout time.Duration
 
-	acceptQueueSize  int
-	defaultQueueSize int
-	maxFlows         int
-	readBufferSize   int
-	readQueueSize    int
-	writeQueueSize   int
+	acceptQueueSize   int
+	fallbackQueueSize int
+	maxFlows          int
+	readBufferSize    int
+	readQueueSize     int
+	writeQueueSize    int
 
-	defaultConn bool
-	defaultOnly bool
-	packetInfo  bool
+	fallbackConn bool
+	fallbackOnly bool
+	packetInfo   bool
 }
 
 // resolve returns the configuration of an inlet, with the defaults of the fields not set.
@@ -176,17 +176,17 @@ func (c *InletConfig) resolve() inletConfig {
 	}
 
 	cfg := inletConfig{
-		idleTimeout:      timeout(c.IdleTimeout, DefaultInletIdleTimeout),
-		writeTimeout:     timeout(c.WriteTimeout, DefaultInletWriteTimeout),
-		acceptQueueSize:  orDefault(c.AcceptQueueSize, DefaultInletAcceptQueueSize),
-		defaultQueueSize: orDefault(c.DefaultQueueSize, DefaultInletDefaultQueueSize),
-		maxFlows:         orDefault(c.MaxFlows, DefaultInletMaxFlows),
-		readBufferSize:   orDefault(c.ReadBufferSize, DefaultInletReadBufferSize),
-		readQueueSize:    orDefault(c.ReadQueueSize, DefaultInletReadQueueSize),
-		writeQueueSize:   orDefault(c.WriteQueueSize, DefaultInletWriteQueueSize),
-		defaultConn:      c.DefaultConn || c.DefaultOnly,
-		defaultOnly:      c.DefaultOnly,
-		packetInfo:       c.PacketInfo,
+		idleTimeout:       timeout(c.IdleTimeout, DefaultInletIdleTimeout),
+		writeTimeout:      timeout(c.WriteTimeout, DefaultInletWriteTimeout),
+		acceptQueueSize:   orDefault(c.AcceptQueueSize, DefaultInletAcceptQueueSize),
+		fallbackQueueSize: orDefault(c.FallbackQueueSize, DefaultInletFallbackQueueSize),
+		maxFlows:          orDefault(c.MaxFlows, DefaultInletMaxFlows),
+		readBufferSize:    orDefault(c.ReadBufferSize, DefaultInletReadBufferSize),
+		readQueueSize:     orDefault(c.ReadQueueSize, DefaultInletReadQueueSize),
+		writeQueueSize:    orDefault(c.WriteQueueSize, DefaultInletWriteQueueSize),
+		fallbackConn:      c.FallbackConn || c.FallbackOnly,
+		fallbackOnly:      c.FallbackOnly,
+		packetInfo:        c.PacketInfo,
 	}
 	cfg.readBufferSize = max(cfg.readBufferSize, minInletReadBufferSize)
 	return cfg
@@ -202,22 +202,22 @@ type inletPacketSmall struct {
 
 // InletStats counts the packets an inlet has dropped, by reason.
 type InletStats struct {
-	ConnQueueFull    uint64 // The queue of the inlet connection of the packet was full
-	AcceptQueueFull  uint64 // The accept queue was full when the packet started a new flow
-	TableFull        uint64 // The flow table was full when the packet started a new flow
-	NoDestination    uint64 // The packet had no destination address, while the inlet uses them
-	DefaultQueueFull uint64 // The queue of the default connection was full
-	NoDefault        uint64 // The packet of a released flow had no open default connection to go to
-	WriteTimedOut    uint64 // The write loop timed out writing the packet
-	WriteFailed      uint64 // The write loop failed to write the packet, e.g. to an unreachable address
+	ConnQueueFull     uint64 // The queue of the inlet connection of the packet was full
+	AcceptQueueFull   uint64 // The accept queue was full when the packet started a new flow
+	TableFull         uint64 // The flow table was full when the packet started a new flow
+	NoDestination     uint64 // The packet had no destination address, while the inlet uses them
+	FallbackQueueFull uint64 // The queue of the fallback connection was full
+	NoFallback        uint64 // The packet of a released flow had no open fallback connection to go to
+	WriteTimedOut     uint64 // The write loop timed out writing the packet
+	WriteFailed       uint64 // The write loop failed to write the packet, e.g. to an unreachable address
 }
 
-// InletListener is a PacketListener of an inlet, with its default connection and statistics.
+// InletListener is a PacketListener of an inlet, with its fallback connection and statistics.
 type InletListener interface {
 	PacketListener
 
-	// Default returns the default connection of the inlet, or nil if it has none.
-	Default() PacketConn
+	// Fallback returns the fallback connection of the inlet, or nil if it has none.
+	Fallback() PacketConn
 
 	// Stats returns the numbers of packets dropped so far, by reason.
 	Stats() InletStats
@@ -229,7 +229,7 @@ type inlet struct {
 
 	pc  FromToPacketConn // Underlying PacketConn
 	udp FromToUDPConn    // The same as pc if it's a FromToUDPConn, which reports destination addresses
-	def *inletDefault    // Default connection, if any
+	fb  *inletFallback   // Fallback connection, if any
 
 	acChan chan *inletConn        // Accept channel
 	wrChan chan *inletPacketSmall // Write channel
@@ -247,7 +247,7 @@ type inlet struct {
 		sync.Mutex
 	}
 
-	remotes struct { // The latest flow of each remote address, for the writes of the default connection
+	remotes struct { // The latest flow of each remote address, for the writes of the fallback connection
 		m map[flowKey]*inletConn
 		sync.RWMutex
 	}
@@ -256,7 +256,7 @@ type inlet struct {
 
 	drops struct {
 		connQueueFull, acceptQueueFull, tableFull, noDestination atomic.Uint64 // Reading
-		defaultQueueFull, noDefault                              atomic.Uint64 // Releasing
+		fallbackQueueFull, noFallback                            atomic.Uint64 // Releasing
 		writeTimedOut, writeFailed                               atomic.Uint64 // Writing
 	}
 
@@ -282,8 +282,8 @@ func Inlet(pc PacketConn, config *InletConfig) InletListener {
 	i.udp, _ = i.pc.(FromToUDPConn)
 	i.remotes.m = make(map[flowKey]*inletConn)
 	i.flows.m = make(map[*inletConn]struct{})
-	if cfg.defaultConn {
-		i.def = i.newDefault()
+	if cfg.fallbackConn {
+		i.fb = i.newFallback()
 	}
 
 	i.wg.Add(2)
@@ -313,25 +313,25 @@ func (i *inlet) Accept() (MixedConn, error) {
 // Addr returns the local network address, if known.
 func (i *inlet) Addr() net.Addr { return i.pc.LocalAddr() }
 
-// Default returns the default connection of the inlet, or nil if it has none.
-func (i *inlet) Default() PacketConn {
-	if i.def == nil {
-		return nil // Not a nil *inletDefault, which wouldn't compare equal to nil
+// Fallback returns the fallback connection of the inlet, or nil if it has none.
+func (i *inlet) Fallback() PacketConn {
+	if i.fb == nil {
+		return nil // Not a nil *inletFallback, which wouldn't compare equal to nil
 	}
-	return i.def
+	return i.fb
 }
 
 // Stats returns the numbers of packets dropped so far, by reason.
 func (i *inlet) Stats() InletStats {
 	return InletStats{
-		ConnQueueFull:    i.drops.connQueueFull.Load(),
-		AcceptQueueFull:  i.drops.acceptQueueFull.Load(),
-		TableFull:        i.drops.tableFull.Load(),
-		NoDestination:    i.drops.noDestination.Load(),
-		DefaultQueueFull: i.drops.defaultQueueFull.Load(),
-		NoDefault:        i.drops.noDefault.Load(),
-		WriteTimedOut:    i.drops.writeTimedOut.Load(),
-		WriteFailed:      i.drops.writeFailed.Load(),
+		ConnQueueFull:     i.drops.connQueueFull.Load(),
+		AcceptQueueFull:   i.drops.acceptQueueFull.Load(),
+		TableFull:         i.drops.tableFull.Load(),
+		NoDestination:     i.drops.noDestination.Load(),
+		FallbackQueueFull: i.drops.fallbackQueueFull.Load(),
+		NoFallback:        i.drops.noFallback.Load(),
+		WriteTimedOut:     i.drops.writeTimedOut.Load(),
+		WriteFailed:       i.drops.writeFailed.Load(),
 	}
 }
 
@@ -393,14 +393,14 @@ func (i *inlet) logError(err error) {
 
 // Defaults of the fields of InletConfig, which apply when a field isn't set
 const (
-	DefaultInletAcceptQueueSize  = 8
-	DefaultInletDefaultQueueSize = 1024 // As the default connection may serve many flows
-	DefaultInletIdleTimeout      = 30 * time.Second
-	DefaultInletMaxFlows         = 8192
-	DefaultInletReadBufferSize   = math.MaxUint16 - (20 + 8) // The largest IPv4 UDP datagram is 64 KiB net of headers
-	DefaultInletReadQueueSize    = 32
-	DefaultInletWriteQueueSize   = 64
-	DefaultInletWriteTimeout     = 500 * time.Millisecond
+	DefaultInletAcceptQueueSize   = 8
+	DefaultInletFallbackQueueSize = 1024 // As the fallback connection may serve many flows
+	DefaultInletIdleTimeout       = 30 * time.Second
+	DefaultInletMaxFlows          = 8192
+	DefaultInletReadBufferSize    = math.MaxUint16 - (20 + 8) // The largest IPv4 UDP datagram is 64 KiB net of headers
+	DefaultInletReadQueueSize     = 32
+	DefaultInletWriteQueueSize    = 64
+	DefaultInletWriteTimeout      = 500 * time.Millisecond
 
 	minInletReadBufferSize = 512 // A read buffer of less than 512 bytes seems impractical
 )
@@ -409,5 +409,5 @@ const (
 var (
 	_ PacketConnWrapper = (*inlet)(nil)
 	_ InletListener     = (*inlet)(nil)
-	_ PacketConn        = (*inletDefault)(nil)
+	_ PacketConn        = (*inletFallback)(nil)
 )
