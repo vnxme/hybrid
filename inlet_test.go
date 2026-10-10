@@ -856,3 +856,94 @@ func TestInletWriteFailed(t *testing.T) {
 		}
 	})
 }
+
+// isClosedInletConn reports whether an inlet connection has been closed, e.g. as its flow has expired.
+func isClosedInletConn(c MixedConn) bool { return c.SetDeadline(time.Time{}) != nil }
+
+// TestInletIdleTimeout ensures a flow ends once it's been idle for the idle timeout, released or not,
+// so that its next packet starts a new flow, while packets read or written keep it going.
+func TestInletIdleTimeout(t *testing.T) {
+	const idle = 200 * time.Millisecond // Long enough for the scheduling stalls of a busy machine
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+
+	t.Run("Expired", func(t *testing.T) {
+		client, ln := inletTrunk(t, WithIdleTimeout(idle))
+		writeFrom(t, client, a, "a1")
+		conn := acceptInletConn(t, ln)
+		time.Sleep(2 * idle) // Over one and a quarter idle timeouts
+		if !isClosedInletConn(conn) {
+			t.Fatalf("the connection of an idle flow is open, want closed")
+		}
+
+		writeFrom(t, client, a, "a2")
+		if got := readInletConn(t, acceptInletConn(t, ln)); strings.Join(got, " ") != "a2" {
+			t.Errorf("packets of the new flow = %q, want %q", got, "a2")
+		}
+	})
+
+	t.Run("KeptByReads", func(t *testing.T) {
+		client, ln := inletTrunk(t, WithIdleTimeout(idle))
+		writeFrom(t, client, a, "a0")
+		conn := acceptInletConn(t, ln)
+		for i := range 12 { // Three idle timeouts in all
+			time.Sleep(idle / 4)
+			writeFrom(t, client, a, fmt.Sprintf("a%d", i+1))
+		}
+		if isClosedInletConn(conn) {
+			t.Errorf("the connection of an active flow is closed, want open")
+		}
+		if got := readInletConn(t, conn); len(got) != 13 {
+			t.Errorf("packets of the flow = %q, want 13 of them", got)
+		}
+	})
+
+	t.Run("KeptByWrites", func(t *testing.T) {
+		client, ln := inletTrunk(t, WithIdleTimeout(idle))
+		writeFrom(t, client, a, "a0")
+		conn := acceptInletConn(t, ln)
+		go func() { // Drain the trunk, so that writes never wait
+			b := make([]byte, 8)
+			for {
+				if _, _, err := client.ReadFrom(b); err != nil {
+					return
+				}
+			}
+		}()
+		for range 12 {
+			time.Sleep(idle / 4)
+			if _, err := conn.Write([]byte("w")); err != nil {
+				t.Fatalf("Write() = %v, want nil", err)
+			}
+		}
+		if isClosedInletConn(conn) {
+			t.Errorf("the connection of an active flow is closed, want open")
+		}
+	})
+
+	t.Run("Released", func(t *testing.T) {
+		client, ln := inletTrunk(t, WithIdleTimeout(idle), WithDefaultConn(true))
+		writeFrom(t, client, a, "a1")
+		if err := acceptInletConn(t, ln).(interface{ Release() error }).Release(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * idle)
+
+		writeFrom(t, client, a, "a2") // A new flow, offered to Accept rather than to the default connection
+		if got := readInletConn(t, acceptInletConn(t, ln)); strings.Join(got, " ") != "a2" {
+			t.Errorf("packets of the new flow = %q, want %q", got, "a2")
+		}
+		if got := readDefault(t, ln.Default()); strings.Join(got, " ") != a.String()+":a1" {
+			t.Errorf("packets of the default connection = %q, want the released one only", got)
+		}
+	})
+
+	t.Run("Disabled", func(t *testing.T) {
+		client, ln := inletTrunk(t, WithIdleTimeout(0))
+		writeFrom(t, client, a, "a1")
+		conn := acceptInletConn(t, ln)
+		time.Sleep(2 * idle)
+		if isClosedInletConn(conn) {
+			t.Errorf("the connection of a flow is closed without an idle timeout, want open")
+		}
+	})
+}

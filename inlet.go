@@ -93,7 +93,6 @@ type inletConfig struct {
 
 	acceptQueueSize  int
 	defaultQueueSize int
-	deleteQueueSize  int
 	readBufferSize   int
 	readQueueSize    int
 	writeQueueSize   int
@@ -110,7 +109,6 @@ var defaultInletConfig = inletConfig{
 	writeTimeout:     piWriteTimeoutDef,
 	acceptQueueSize:  piAcceptQueueSizeDef,
 	defaultQueueSize: piDefaultQueueSizeDef,
-	deleteQueueSize:  piDeleteQueueSizeDef,
 	readBufferSize:   piReadBufferSizeDef,
 	readQueueSize:    poReadQueueSizeDef,
 	writeQueueSize:   piWriteQueueSizeDef,
@@ -176,8 +174,9 @@ func WithReadQueueSize(value int) InletOption {
 	return inletOptionFunc(func(cfg *inletConfig) { cfg.readQueueSize = value })
 }
 
-// WithIdleTimeout sets the amount of time to wait since the last read/write
-// before closing a virtual connection (outlet).
+// WithIdleTimeout sets how long a flow may go without a packet read or written before it ends: its inlet
+// connection is closed, and its next packet starts a new flow. A zero timeout keeps every flow until its
+// inlet connection is closed, and a released flow as long as the inlet is open.
 func WithIdleTimeout(value time.Duration) InletOption {
 	if value < poIdleTimeoutMin {
 		return noOpInletOption
@@ -210,11 +209,6 @@ func WithWriteTimeout(value time.Duration) InletOption {
 		return noOpInletOption
 	}
 	return inletOptionFunc(func(cfg *inletConfig) { cfg.writeTimeout = value })
-}
-
-type inletBinding struct {
-	c *inletConn
-	d Deadline
 }
 
 type inletPacketSmall struct {
@@ -276,21 +270,34 @@ type InletListener interface {
 
 // inlet implements PacketListener for any underlying PacketConn.
 type inlet struct {
+	start time.Time // When the inlet started, for its clock
+
 	pc  FromToPacketConn // Underlying PacketConn
 	udp FromToUDPConn    // The same as pc if it's a FromToUDPConn, which reports destination addresses
 	def *inletDefault    // Default connection, if any
 
 	acChan chan *inletConn        // Accept channel
-	deChan chan *inletConn        // Delete channel
 	wrChan chan *inletPacketSmall // Write channel
 	done   chan struct{}          // Done channel
 
-	rt map[flowKey]*inletBinding // Routing table
+	rt map[flowKey]*inletConn // Routing table
+
+	closed struct { // Connections closed or expired, for the read loop to delete their flows
+		s []*inletConn
+		sync.Mutex
+	}
+
+	flows struct { // Every flow in the routing table, for the sweeper
+		m map[*inletConn]struct{}
+		sync.Mutex
+	}
 
 	remotes struct { // The latest flow of each remote address, for the writes of the default connection
 		m map[flowKey]*inletConn
 		sync.RWMutex
 	}
+
+	cfg inletConfig
 
 	drops struct {
 		connQueueFull, acceptQueueFull, tableFull, noDestination atomic.Uint64 // Reading
@@ -298,10 +305,9 @@ type inlet struct {
 		writeTimedOut, writeFailed                               atomic.Uint64 // Writing
 	}
 
-	wg   sync.WaitGroup
-	once sync.Once
-
-	cfg inletConfig
+	wg    sync.WaitGroup
+	clock atomic.Int64 // Time since start, kept by the sweeper, coarse but cheap to read
+	once  sync.Once
 }
 
 // Inlet returns an InletListener for the given PacketConn and starts its internal loops.
@@ -317,14 +323,15 @@ func Inlet(pc PacketConn, opts ...InletOption) InletListener {
 	i := &inlet{
 		pc:     PacketToFromToPacketConn(pc, cfg.tryPacketInfoUDP),
 		acChan: make(chan *inletConn, cfg.acceptQueueSize),
-		deChan: make(chan *inletConn, cfg.deleteQueueSize),
 		wrChan: make(chan *inletPacketSmall, cfg.writeQueueSize),
 		done:   make(chan struct{}),
-		rt:     make(map[flowKey]*inletBinding),
+		rt:     make(map[flowKey]*inletConn),
+		start:  time.Now(),
 		cfg:    cfg,
 	}
 	i.udp, _ = i.pc.(FromToUDPConn)
 	i.remotes.m = make(map[flowKey]*inletConn)
+	i.flows.m = make(map[*inletConn]struct{})
 	if cfg.defaultConn {
 		i.def = i.newDefault()
 	}
@@ -332,6 +339,10 @@ func Inlet(pc PacketConn, opts ...InletOption) InletListener {
 	i.wg.Add(2)
 	go i.readLoop()
 	go i.writeLoop()
+	if cfg.idleTimeout > 0 {
+		i.wg.Add(1)
+		go i.sweepLoop()
+	}
 	return i
 }
 
@@ -430,19 +441,6 @@ func (i *inlet) logError(err error) {
 	// TODO(vnxme): Log an unexpected reading/writing error
 }
 
-// newBinding returns a binding of the given inlet connection, and starts its idle timeout.
-func (i *inlet) newBinding(c *inletConn) *inletBinding {
-	bdg := &inletBinding{c: c}
-	if i.cfg.idleTimeout > 0 {
-		bdg.d = HookDeadline(func() {
-			_ = c.Close()
-			i.deleteConnection(c) // As closing a released connection leaves its flow be
-		})
-		bdg.d.Set(time.Now().Add(i.cfg.idleTimeout))
-	}
-	return bdg
-}
-
 // newConnection returns a new inlet connection for the flow of the given packet.
 func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
 	src, dst := p.src, p.dst
@@ -466,38 +464,38 @@ func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
 		key:    p.key,
 	}
 	ic.localIfIdx.Store(int64(p.idx))
+	ic.touch()
 	return ic
 }
 
-func (i *inlet) deleteConnection(conn *inletConn) {
-	i.wg.Add(1)
-	go func() {
-		select {
-		case i.deChan <- conn:
-		case <-i.done:
-		}
-		i.wg.Done()
-	}()
+// deleteConnection reports a closed or expired connection, for the read loop to delete its flow. It needs no
+// goroutine, so that it can't race with closing the inlet, which waits for the goroutines of the inlet.
+func (i *inlet) deleteConnection(c *inletConn) {
+	i.closed.Lock()
+	i.closed.s = append(i.closed.s, c)
+	i.closed.Unlock()
 }
 
 // deleteLoop deletes the flows whose connections have been closed and reported so far.
 func (i *inlet) deleteLoop() {
-	for {
-		select {
-		case c := <-i.deChan:
-			// Ignore a request for a connection that isn't closed, or no longer has a flow, e.g. as it's been
-			// deleted already, and whose flow may have a new connection.
-			if bdg, ok := i.rt[c.key]; ok && bdg.c == c && isClosedChan(c.localDone) {
-				i.deleteFlow(c)
-			}
-		default:
-			return
+	i.closed.Lock()
+	closed := i.closed.s
+	i.closed.s = nil
+	i.closed.Unlock()
+
+	for _, c := range closed {
+		// Ignore a connection that no longer has a flow, e.g. as it's been deleted already,
+		// and whose flow may have a new connection.
+		if e, ok := i.rt[c.key]; ok && e == c {
+			i.deleteFlow(c)
+		} else {
+			i.untrack(c)
 		}
 	}
 }
 
-// deleteFlow drains the read channel of a closed connection, and deletes its flow from the routing table
-// and from the index of remote addresses.
+// deleteFlow drains the read channel of a closed connection, and deletes its flow from the routing table,
+// from the flows of the sweeper and from the index of remote addresses.
 func (i *inlet) deleteFlow(c *inletConn) {
 	for {
 		select {
@@ -505,12 +503,47 @@ func (i *inlet) deleteFlow(c *inletConn) {
 			putBuf(pkt.ref)
 		default:
 			delete(i.rt, c.key)
+			i.untrack(c)
 			i.remotes.Lock()
 			if r := c.key.remote(); i.remotes.m[r] == c {
 				delete(i.remotes.m, r)
 			}
 			i.remotes.Unlock()
 			return
+		}
+	}
+}
+
+// untrack removes a connection from the flows of the sweeper.
+func (i *inlet) untrack(c *inletConn) {
+	i.flows.Lock()
+	delete(i.flows.m, c)
+	i.flows.Unlock()
+}
+
+// sweepLoop keeps the clock of the inlet, and ends the flows idle for the idle timeout, checking them every
+// quarter of it, so that a flow ends within one and a quarter idle timeouts of its last packet.
+func (i *inlet) sweepLoop() {
+	defer i.wg.Done()
+
+	ticker := time.NewTicker(max(i.cfg.idleTimeout/4, time.Millisecond))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-i.done:
+			return
+		case now := <-ticker.C:
+			clock := int64(now.Sub(i.start)) // Monotonic, unlike the wall clock
+			i.clock.Store(clock)
+
+			i.flows.Lock()
+			for c := range i.flows.m {
+				if clock-c.last.Load() >= int64(i.cfg.idleTimeout) {
+					delete(i.flows.m, c)
+					c.expire()
+				}
+			}
+			i.flows.Unlock()
 		}
 	}
 }
@@ -584,13 +617,13 @@ func (i *inlet) read(b []byte, p *inletPacketInfo) (n int, err error) {
 // or releases it straight away with WithDefaultOnly. It drops the packet rather than wait if a queue
 // is full or the table is.
 func (i *inlet) route(data []byte, p *inletPacketInfo) {
-	bdg, ok := i.rt[p.key]
-	if !ok || bdg.c.ended() {
+	c, ok := i.rt[p.key]
+	if !ok || c.ended() {
 		if !ok && len(i.rt) >= i.cfg.activeConnLimit {
 			// Delete the flows of closed connections whose closing hasn't been reported yet, then check again
-			for _, b := range i.rt {
-				if b.c.ended() {
-					i.deleteFlow(b.c)
+			for _, e := range i.rt {
+				if e.ended() {
+					i.deleteFlow(e)
 				}
 			}
 			if len(i.rt) >= i.cfg.activeConnLimit {
@@ -599,7 +632,10 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 			}
 		}
 
-		c := i.newConnection(p)
+		if ok { // An ended flow whose closing hasn't been reported yet
+			i.untrack(c)
+		}
+		c = i.newConnection(p)
 		if i.cfg.defaultOnly {
 			c.released.Store(true)
 			c.closeLocal()
@@ -612,13 +648,15 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 			}
 		}
 
-		bdg = i.newBinding(c)
-		i.rt[p.key] = bdg
+		i.rt[p.key] = c
+		i.flows.Lock()
+		i.flows.m[c] = struct{}{}
+		i.flows.Unlock()
 		i.remotes.Lock()
 		i.remotes.m[p.key.remote()] = c
 		i.remotes.Unlock()
 	}
-	c := bdg.c
+	c.touch()
 	c.localIfIdx.Store(int64(p.idx)) // The latest one is used for replies
 
 	pkt := &inletPacketSmall{c: c, n: len(data)}
@@ -727,6 +765,9 @@ func (i *inlet) send(b []byte, c *inletConn, to net.Addr, done <-chan struct{}, 
 	}
 	select {
 	case i.wrChan <- pkt:
+		if c != nil {
+			c.touch()
+		}
 		return len(b), nil
 	case <-done:
 		putBuf(pkt.ref)
@@ -814,28 +855,28 @@ func (i *inlet) drainWrites() {
 }
 
 type inletConn struct {
-	parent *inlet
-
-	localIfIdx atomic.Int64 // The latest one, used for replies
-
 	localAddr  net.Addr
 	remoteAddr net.Addr
 
-	rdRx chan *inletPacketSmall // Packets of the flow, unless it's been released
+	localDone chan struct{}
+	rdRx      chan *inletPacketSmall // Packets of the flow, unless it's been released
 
-	localDone  chan struct{}
+	parent     *inlet
 	remoteDone <-chan struct{}
+
+	key flowKey
 
 	rdDeadline deadline[noHook]
 	wrDeadline deadline[noHook]
 
-	released atomic.Bool // Set before closing localDone, if the flow goes on to the default connection
+	last       atomic.Int64 // The clock of the inlet at the latest packet read or written
+	localIfIdx atomic.Int64 // The latest one, used for replies
 
 	once sync.Once  // Protects closing localDone
 	mu   sync.Mutex // Keeps the packets of the flow in order while it's being released
 	rdMu sync.Mutex // Serialize Read operations
 
-	key flowKey
+	released atomic.Bool // Set before closing localDone, if the flow goes on to the default connection
 }
 
 func (ic *inletConn) Read(b []byte) (int, error) {
@@ -907,6 +948,16 @@ func (ic *inletConn) Release() error {
 			return nil
 		}
 	}
+}
+
+// touch records the activity of the flow of the connection, at the time of the clock of the inlet.
+func (ic *inletConn) touch() { ic.last.Store(ic.parent.clock.Load()) }
+
+// expire ends the flow of a connection that has been idle: it closes the connection, unless it's been
+// closed already, and reports the flow for deletion, even if it's been released.
+func (ic *inletConn) expire() {
+	ic.closeLocal()
+	ic.parent.deleteConnection(ic)
 }
 
 // closeLocal closes localDone, and reports whether it's done so, rather than found it closed.
@@ -1062,9 +1113,6 @@ const (
 
 	piDefaultQueueSizeDef = 1024 // As the default connection may serve many flows
 	piDefaultQueueSizeMin = 1    // As the read loop drops a packet rather than wait for a reader
-
-	piDeleteQueueSizeDef = 8
-	piDeleteQueueSizeMin = 0
 
 	piReadBufferSizeDef = math.MaxUint16 - (20 + 8) // Maximum size of an IPv4 UDP datagram is 64 KiB net of headers
 	piReadBufferSizeMax = math.MaxInt32             // The largest int on 32-bit platforms, while an IPv6 jumbogram may take 4 GiB
