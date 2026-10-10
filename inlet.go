@@ -557,10 +557,10 @@ func (i *inlet) readLoop() {
 	var p inletPacketInfo
 	buf := make([]byte, i.cfg.readBufferSize) // Read into, then copied into a buffer of the packet's size
 	for !isClosedChan(i.done) {
-		// Read from the underlying FromToPacketConn and check for errors.
-		// Note: any error is ignored, if at least one byte has been read.
+		// Read from the underlying FromToPacketConn and check for errors. Note: any error is ignored if at least
+		// one byte has been read, while a negative count, e.g. of a socket closed on Linux, reads nothing.
 		n, err := i.read(buf, &p)
-		if n == 0 && err != nil {
+		if n <= 0 && err != nil {
 			// A timeout interrupts reading when the inlet closes, so check it at the top of the loop
 			if errors.As(err, &nrr) && nrr.Timeout() {
 				continue

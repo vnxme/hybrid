@@ -749,3 +749,34 @@ func TestPacketInfoUDPConnInterfaces(t *testing.T) {
 		})
 	}
 }
+
+// negativeReadUDPConn is a UDPConn whose reads fail with a negative count, as Linux reports them for
+// a socket closed while reading.
+type negativeReadUDPConn struct {
+	*net.UDPConn
+}
+
+func (c negativeReadUDPConn) ReadMsgUDPAddrPort(_, _ []byte) (int, int, int, netip.AddrPort, error) {
+	return -1, 0, 0, netip.AddrPort{}, net.ErrClosed
+}
+
+// TestPacketInfoUDPConnNegativeRead ensures a failed read never reports a negative count.
+func TestPacketInfoUDPConnNegativeRead(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pc.Close() }()
+	c, err := PacketInfoUDPConn(negativeReadUDPConn{pc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _, _, _, err := c.ReadFromToUDPAddrPort(make([]byte, 8)); n != 0 || !errors.Is(err, net.ErrClosed) {
+		t.Errorf("ReadFromToUDPAddrPort() = %d, %v, want 0, net.ErrClosed", n, err)
+	}
+}

@@ -1115,3 +1115,42 @@ func TestInletUDPLoopback(t *testing.T) {
 		})
 	}
 }
+
+// negativeReads is a FromToPacketConn whose failed reads report a negative count, as Linux does
+// for a socket closed while reading.
+type negativeReads struct {
+	FromToPacketConn
+}
+
+func (c negativeReads) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
+	n, src, dst, idx, err := c.FromToPacketConn.ReadFromTo(b)
+	if err != nil {
+		return -1, src, dst, idx, err
+	}
+	return n, src, dst, idx, nil
+}
+
+// TestInletNegativeRead ensures the read loop takes a failed read with a negative count for an error,
+// rather than for a packet, so that the inlet closes once its underlying connection does.
+func TestInletNegativeRead(t *testing.T) {
+	client, server := BufferedTrunk(16, nil, nil)
+	defer func() { _ = client.Close() }()
+	ln := Inlet(negativeReads{server})
+	defer func() { _ = ln.Close() }()
+
+	_ = server.Close() // Under the inlet, which notices it by reading
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := ln.Accept()
+		accepted <- err
+	}()
+	select {
+	case err := <-accepted:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Errorf("Accept() = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("Accept() hasn't returned, as the inlet hasn't closed")
+	}
+	waitInletStats(t, ln, InletStats{})
+}

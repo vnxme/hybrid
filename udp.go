@@ -160,8 +160,9 @@ func (u *packetInfoUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort
 		// Windows reports the size control messages take, while other platforms report the size read
 		u.rdOOBSize.CompareAndSwap(stored, int32(min(max(2*size, oobN), 1<<bufPoolMaxBits))) //nolint:gosec // G115
 	}
-	if err != nil { // Like [net.UDPConn.ReadFrom], return no addresses, as src is made of an empty sockaddr
-		return n, netip.AddrPort{}, netip.AddrPort{}, 0, err
+	if err != nil { // Like [net.UDPConn.ReadFrom], return no addresses, as src is made of an empty sockaddr,
+		// and no negative count, which Linux gives for a socket closed while reading
+		return max(n, 0), netip.AddrPort{}, netip.AddrPort{}, 0, err
 	}
 	src = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
 	if dst, idx, ok := pktinfo.Parse(oob[:min(oobN, len(oob))]); ok {
