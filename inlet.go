@@ -87,128 +87,113 @@ import (
 // destination address while the inlet uses destination addresses. The write loop drops a packet whose write
 // times out or fails. Every drop is counted by its reason, and the counters can be read with Stats.
 
+// InletConfig configures an inlet. The zero value of a field gives its default, as does a nil *InletConfig.
+type InletConfig struct {
+	// AcceptQueueSize is the maximum number of inlet connections waiting for Accept,
+	// [DefaultInletAcceptQueueSize] by default. The first packet of a new flow is dropped
+	// if the accept queue is full.
+	AcceptQueueSize int
+
+	// ReadQueueSize is the maximum number of packets waiting to be read from each inlet connection,
+	// [DefaultInletReadQueueSize] by default. A packet is dropped if the queue of its inlet connection is full.
+	ReadQueueSize int
+
+	// DefaultQueueSize is the maximum number of packets waiting to be read from the default connection,
+	// [DefaultInletDefaultQueueSize] by default. A packet is dropped if the queue of the default connection
+	// is full.
+	DefaultQueueSize int
+
+	// IdleTimeout is how long a flow may go without a packet read or written before it ends,
+	// [DefaultInletIdleTimeout] by default: its inlet connection is closed, and its next packet starts
+	// a new flow. A negative timeout keeps every flow until its inlet connection is closed, and a released
+	// flow as long as the inlet is open.
+	IdleTimeout time.Duration
+
+	// MaxFlows is the maximum number of flows, [DefaultInletMaxFlows] by default.
+	// The first packet of a new flow is dropped if there are as many flows already.
+	MaxFlows int
+
+	// ReadBufferSize is the maximum number of bytes read as a single packet from the underlying PacketConn,
+	// [DefaultInletReadBufferSize] by default, and at least 512.
+	ReadBufferSize int
+
+	// WriteQueueSize is the maximum number of packets waiting to be written to the underlying PacketConn,
+	// [DefaultInletWriteQueueSize] by default. A write waits for room until the write deadline of its
+	// connection if the queue is full.
+	WriteQueueSize int
+
+	// WriteTimeout is how long the write loop waits for the underlying PacketConn to write a packet before
+	// dropping it, [DefaultInletWriteTimeout] by default. A negative timeout makes it wait as long as it takes.
+	WriteTimeout time.Duration
+
+	// DefaultConn gives the inlet a default connection, which serves the flows released by their handlers.
+	// Without one, the packets of a released flow are dropped.
+	DefaultConn bool
+
+	// DefaultOnly sends every new flow to the default connection straight away rather than to Accept,
+	// e.g. for an inlet nobody accepts connections from. It implies DefaultConn.
+	DefaultOnly bool
+
+	// PacketInfo makes the inlet enable packet info with [PacketInfoUDPConn] if the underlying PacketConn
+	// satisfies UDPConn, so that flows are told apart by their destination addresses as well, and replies
+	// are sent from the address each flow came to, e.g. for a UDPConn listening on an unspecified address.
+	// Without it, flows are told apart by their source addresses alone.
+	PacketInfo bool
+}
+
+// inletConfig is an InletConfig with its defaults filled in, and with a zero timeout meaning none.
 type inletConfig struct {
 	idleTimeout  time.Duration
 	writeTimeout time.Duration
 
 	acceptQueueSize  int
 	defaultQueueSize int
+	maxFlows         int
 	readBufferSize   int
 	readQueueSize    int
 	writeQueueSize   int
 
-	activeConnLimit int
-
-	defaultConn      bool
-	defaultOnly      bool
-	tryPacketInfoUDP bool
+	defaultConn bool
+	defaultOnly bool
+	packetInfo  bool
 }
 
-var defaultInletConfig = inletConfig{
-	idleTimeout:      poIdleTimeoutDef,
-	writeTimeout:     piWriteTimeoutDef,
-	acceptQueueSize:  piAcceptQueueSizeDef,
-	defaultQueueSize: piDefaultQueueSizeDef,
-	readBufferSize:   piReadBufferSizeDef,
-	readQueueSize:    poReadQueueSizeDef,
-	writeQueueSize:   piWriteQueueSizeDef,
-	activeConnLimit:  piActiveConnLimitDef,
-	tryPacketInfoUDP: piTryPacketInfoUDPDef,
-}
-
-type InletOption interface {
-	apply(*inletConfig)
-}
-
-type inletOptionFunc func(*inletConfig)
-
-func (f inletOptionFunc) apply(cfg *inletConfig) { f(cfg) }
-
-var noOpInletOption = inletOptionFunc(func(p *inletConfig) {})
-
-// WithAcceptQueueSize sets the maximum number of inlet connections waiting to be accepted.
-// The first packet of a new flow is dropped if the accept queue is full.
-func WithAcceptQueueSize(value int) InletOption {
-	if value < piAcceptQueueSizeMin {
-		return noOpInletOption
+// resolve returns the configuration of an inlet, with the defaults of the fields not set.
+func (c *InletConfig) resolve() inletConfig {
+	if c == nil {
+		c = &InletConfig{}
 	}
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.acceptQueueSize = value })
-}
-
-// WithDefaultConn sets whether the inlet has a default connection, which serves the flows
-// released by their handlers. Without one, the packets of a released flow are dropped.
-func WithDefaultConn(value bool) InletOption {
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.defaultConn = value })
-}
-
-// WithDefaultOnly sets whether every new flow goes to the default connection straight away rather than
-// to Accept, e.g. for an inlet nobody accepts connections from. It implies WithDefaultConn(true).
-func WithDefaultOnly(value bool) InletOption {
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.defaultOnly = value })
-}
-
-// WithDefaultQueueSize sets the maximum number of packets waiting to be read from the default connection.
-// A packet is dropped if the queue of the default connection is full.
-func WithDefaultQueueSize(value int) InletOption {
-	if value < piDefaultQueueSizeMin {
-		return noOpInletOption
+	orDefault := func(v, def int) int {
+		if v > 0 {
+			return v
+		}
+		return def
 	}
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.defaultQueueSize = value })
-}
-
-// WithReadBufferSize sets the maximum number of bytes read as a single packet
-// from the underlying connection.
-func WithReadBufferSize(value int) InletOption {
-	if value < piReadBufferSizeMin || value > piReadBufferSizeMax {
-		return noOpInletOption
+	timeout := func(v, def time.Duration) time.Duration {
+		switch {
+		case v < 0:
+			return 0
+		case v == 0:
+			return def
+		}
+		return v
 	}
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.readBufferSize = value })
-}
 
-// WithReadQueueSize sets the maximum number of packets waiting to be read from each inlet connection.
-// A packet is dropped if the queue of its inlet connection is full.
-func WithReadQueueSize(value int) InletOption {
-	if value < poReadQueueSizeMin {
-		return noOpInletOption
+	cfg := inletConfig{
+		idleTimeout:      timeout(c.IdleTimeout, DefaultInletIdleTimeout),
+		writeTimeout:     timeout(c.WriteTimeout, DefaultInletWriteTimeout),
+		acceptQueueSize:  orDefault(c.AcceptQueueSize, DefaultInletAcceptQueueSize),
+		defaultQueueSize: orDefault(c.DefaultQueueSize, DefaultInletDefaultQueueSize),
+		maxFlows:         orDefault(c.MaxFlows, DefaultInletMaxFlows),
+		readBufferSize:   orDefault(c.ReadBufferSize, DefaultInletReadBufferSize),
+		readQueueSize:    orDefault(c.ReadQueueSize, DefaultInletReadQueueSize),
+		writeQueueSize:   orDefault(c.WriteQueueSize, DefaultInletWriteQueueSize),
+		defaultConn:      c.DefaultConn || c.DefaultOnly,
+		defaultOnly:      c.DefaultOnly,
+		packetInfo:       c.PacketInfo,
 	}
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.readQueueSize = value })
-}
-
-// WithIdleTimeout sets how long a flow may go without a packet read or written before it ends: its inlet
-// connection is closed, and its next packet starts a new flow. A zero timeout keeps every flow until its
-// inlet connection is closed, and a released flow as long as the inlet is open.
-func WithIdleTimeout(value time.Duration) InletOption {
-	if value < poIdleTimeoutMin {
-		return noOpInletOption
-	}
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.idleTimeout = value })
-}
-
-// WithTryPacketInfoUDP sets whether to try enabling packet info with [PacketInfoUDPConn]
-// if the underlying PacketConn satisfies UDPConn.
-func WithTryPacketInfoUDP(value bool) InletOption {
-	if value == piTryPacketInfoUDPDef {
-		return noOpInletOption
-	}
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.tryPacketInfoUDP = value })
-}
-
-// WithWriteQueueSize sets the maximum number of packets waiting to be written to the underlying PacketConn.
-// A write waits for room until the write deadline of its connection if the write queue is full.
-func WithWriteQueueSize(value int) InletOption {
-	if value < piWriteQueueSizeMin {
-		return noOpInletOption
-	}
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.writeQueueSize = value })
-}
-
-// WithWriteTimeout sets how long the write loop waits for the underlying PacketConn to write a packet,
-// before dropping the packet. A zero timeout makes it wait as long as it takes.
-func WithWriteTimeout(value time.Duration) InletOption {
-	if value < 0 {
-		return noOpInletOption
-	}
-	return inletOptionFunc(func(cfg *inletConfig) { cfg.writeTimeout = value })
+	cfg.readBufferSize = max(cfg.readBufferSize, minInletReadBufferSize)
+	return cfg
 }
 
 type inletPacketSmall struct {
@@ -310,18 +295,13 @@ type inlet struct {
 	once  sync.Once
 }
 
-// Inlet returns an InletListener for the given PacketConn and starts its internal loops.
-func Inlet(pc PacketConn, opts ...InletOption) InletListener {
-	cfg := defaultInletConfig
-	for _, opt := range opts {
-		opt.apply(&cfg)
-	}
-	if cfg.defaultOnly {
-		cfg.defaultConn = true
-	}
+// Inlet returns an InletListener for the given PacketConn, configured by config, which may be nil for the defaults,
+// and starts its internal loops.
+func Inlet(pc PacketConn, config *InletConfig) InletListener {
+	cfg := config.resolve()
 
 	i := &inlet{
-		pc:     PacketToFromToPacketConn(pc, cfg.tryPacketInfoUDP),
+		pc:     PacketToFromToPacketConn(pc, cfg.packetInfo),
 		acChan: make(chan *inletConn, cfg.acceptQueueSize),
 		wrChan: make(chan *inletPacketSmall, cfg.writeQueueSize),
 		done:   make(chan struct{}),
@@ -619,14 +599,14 @@ func (i *inlet) read(b []byte, p *inletPacketInfo) (n int, err error) {
 func (i *inlet) route(data []byte, p *inletPacketInfo) {
 	c, ok := i.rt[p.key]
 	if !ok || c.ended() {
-		if !ok && len(i.rt) >= i.cfg.activeConnLimit {
+		if !ok && len(i.rt) >= i.cfg.maxFlows {
 			// Delete the flows of closed connections whose closing hasn't been reported yet, then check again
 			for _, e := range i.rt {
 				if e.ended() {
 					i.deleteFlow(e)
 				}
 			}
-			if len(i.rt) >= i.cfg.activeConnLimit {
+			if len(i.rt) >= i.cfg.maxFlows {
 				i.drops.tableFull.Add(1)
 				return
 			}
@@ -1100,33 +1080,18 @@ func (d *inletDefault) opError(op string, addr net.Addr, err error) error {
 
 var errMissingAddress = errors.New("hybrid: missing address")
 
-// Defaults
+// Defaults of the fields of InletConfig, which apply when a field isn't set
 const (
-	poIdleTimeoutDef = 30 * time.Second
-	poIdleTimeoutMin = 0 * time.Second
+	DefaultInletAcceptQueueSize  = 8
+	DefaultInletDefaultQueueSize = 1024 // As the default connection may serve many flows
+	DefaultInletIdleTimeout      = 30 * time.Second
+	DefaultInletMaxFlows         = 8192
+	DefaultInletReadBufferSize   = math.MaxUint16 - (20 + 8) // The largest IPv4 UDP datagram is 64 KiB net of headers
+	DefaultInletReadQueueSize    = 32
+	DefaultInletWriteQueueSize   = 64
+	DefaultInletWriteTimeout     = 500 * time.Millisecond
 
-	poReadQueueSizeDef = 32
-	poReadQueueSizeMin = 1 // As the read loop drops a packet rather than wait for a reader
-
-	piAcceptQueueSizeDef = 8
-	piAcceptQueueSizeMin = 1 // As the read loop drops a new flow rather than wait for Accept
-
-	piDefaultQueueSizeDef = 1024 // As the default connection may serve many flows
-	piDefaultQueueSizeMin = 1    // As the read loop drops a packet rather than wait for a reader
-
-	piReadBufferSizeDef = math.MaxUint16 - (20 + 8) // Maximum size of an IPv4 UDP datagram is 64 KiB net of headers
-	piReadBufferSizeMax = math.MaxInt32             // The largest int on 32-bit platforms, while an IPv6 jumbogram may take 4 GiB
-	piReadBufferSizeMin = 512                       // A read buffer of less than 512 bytes seems impractical
-
-	piWriteTimeoutDef = 500 * time.Millisecond
-
-	piTryPacketInfoUDPDef = true
-
-	piActiveConnLimitDef = 8192
-	piActiveConnLimitMin = 64
-
-	piWriteQueueSizeDef = 64
-	piWriteQueueSizeMin = 1 // As a write returns once its packet is queued
+	minInletReadBufferSize = 512 // A read buffer of less than 512 bytes seems impractical
 )
 
 // Interface guards

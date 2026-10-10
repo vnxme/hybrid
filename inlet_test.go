@@ -65,7 +65,7 @@ func TestInletPairedConns(t *testing.T) {
 	}
 
 	testFunc := func(t *testing.T, ctor packetConnPairCtor, writeBufferSize int) {
-		testInletPairedConns(t, ctor, piAcceptQueueSizeDef, poReadQueueSizeDef, packetSizeMax, writeBufferSize, packetCount)
+		testInletPairedConns(t, ctor, DefaultInletAcceptQueueSize, DefaultInletReadQueueSize, packetSizeMax, writeBufferSize, packetCount)
 	}
 
 	for _, item := range pairs {
@@ -144,10 +144,12 @@ func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize
 		me := fmt.Sprintf("inlet %v", lAddr)
 		logfIf(t, testPacketInletDebug, "%v: started", me)
 
-		ln := Inlet(pc,
-			WithAcceptQueueSize(acceptQueueSize),
-			WithReadQueueSize(readQueueSize),
-			WithReadBufferSize(readBufferSize))
+		ln := Inlet(pc, &InletConfig{
+			AcceptQueueSize: acceptQueueSize,
+			ReadQueueSize:   readQueueSize,
+			ReadBufferSize:  readBufferSize,
+			PacketInfo:      true,
+		})
 		defer func() {
 			_ = ln.Close()
 			stats = ln.(interface{ Stats() InletStats }).Stats()
@@ -259,10 +261,6 @@ func (a testAddr) Network() string { return "test" }
 
 func (a testAddr) String() string { return string(a) }
 
-// withInletConfig returns an option that changes the configuration of an inlet directly,
-// e.g. to set a limit there is no option for.
-func withInletConfig(f func(*inletConfig)) InletOption { return inletOptionFunc(f) }
-
 // waitInletStats waits until the inlet has dropped the given numbers of packets, or fails.
 func waitInletStats(t *testing.T, ln PacketListener, want InletStats) {
 	t.Helper()
@@ -320,7 +318,7 @@ func readInletConn(t *testing.T, c MixedConn) []string {
 func TestInletTrunkFlows(t *testing.T) {
 	client, server := BufferedTrunk(16, nil, nil)
 	defer func() { _ = client.Close() }()
-	ln := Inlet(server)
+	ln := Inlet(server, nil)
 	defer func() { _ = ln.Close() }()
 
 	a, b, c := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}, testAddr("c")
@@ -404,7 +402,7 @@ func TestInletUDPFlows(t *testing.T) {
 		scriptedPacket{s1, netip.AddrPort{}, "z"},
 		scriptedPacket{s2, d1, "w"},
 		scriptedPacket{s1, d1, "v"},
-	))
+	), nil)
 	defer func() { _ = ln.Close() }()
 
 	want := map[string]string{s1.String() + ">" + d1.String(): "x v", s1.String() + ">" + d2.String(): "y", s2.String() + ">" + d1.String(): "w"}
@@ -422,10 +420,10 @@ func TestInletUDPFlows(t *testing.T) {
 // or a full table, and that a dropped first packet doesn't create a flow.
 func TestInletDrops(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	setup := func(t *testing.T, opts ...InletOption) (write func(src net.Addr, data string), ln PacketListener) {
+	setup := func(t *testing.T, config *InletConfig) (write func(src net.Addr, data string), ln PacketListener) {
 		client, server := BufferedTrunk(16, nil, nil)
 		t.Cleanup(func() { _ = client.Close() })
-		ln = Inlet(server, opts...)
+		ln = Inlet(server, config)
 		t.Cleanup(func() { _ = ln.Close() })
 		return func(src net.Addr, data string) {
 			t.Helper()
@@ -436,7 +434,7 @@ func TestInletDrops(t *testing.T) {
 	}
 
 	t.Run("ConnQueueFull", func(t *testing.T) {
-		write, ln := setup(t, WithReadQueueSize(1))
+		write, ln := setup(t, &InletConfig{ReadQueueSize: 1})
 		for _, data := range []string{"a1", "a2", "a3"} {
 			write(a, data)
 		}
@@ -447,7 +445,7 @@ func TestInletDrops(t *testing.T) {
 	})
 
 	t.Run("AcceptQueueFull", func(t *testing.T) {
-		write, ln := setup(t, WithAcceptQueueSize(1))
+		write, ln := setup(t, &InletConfig{AcceptQueueSize: 1})
 		write(a, "a1")
 		write(b, "b1")
 		write(b, "b2") // Still a new flow, as the first packet of b hasn't created one
@@ -464,7 +462,7 @@ func TestInletDrops(t *testing.T) {
 	})
 
 	t.Run("TableFull", func(t *testing.T) {
-		write, ln := setup(t, withInletConfig(func(cfg *inletConfig) { cfg.activeConnLimit = 1 }))
+		write, ln := setup(t, &InletConfig{MaxFlows: 1})
 		write(a, "a1")
 		write(b, "b1")
 		waitInletStats(t, ln, InletStats{TableFull: 1})
@@ -479,11 +477,11 @@ func TestInletDrops(t *testing.T) {
 }
 
 // inletTrunk returns a trunk end to write to an inlet over the other end from, and the inlet.
-func inletTrunk(t *testing.T, opts ...InletOption) (FromToPacketConn, InletListener) {
+func inletTrunk(t *testing.T, config *InletConfig) (FromToPacketConn, InletListener) {
 	t.Helper()
 	client, server := BufferedTrunk(16, nil, nil)
 	t.Cleanup(func() { _ = client.Close() })
-	ln := Inlet(server, opts...)
+	ln := Inlet(server, config)
 	t.Cleanup(func() { _ = ln.Close() })
 	return client, ln
 }
@@ -516,7 +514,7 @@ func readDefault(t *testing.T, d PacketConn) []string {
 // of its flow over to the default connection, in order, while the other flows go on as they were.
 func TestInletRelease(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	client, ln := inletTrunk(t, WithDefaultConn(true))
+	client, ln := inletTrunk(t, &InletConfig{DefaultConn: true})
 	writeFrom(t, client, a, "a1")
 	writeFrom(t, client, a, "a2")
 	conn := acceptInletConn(t, ln)
@@ -548,7 +546,7 @@ func TestInletRelease(t *testing.T) {
 // the packets of its flow, without starting a new flow.
 func TestInletReleaseWithoutDefault(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	client, ln := inletTrunk(t)
+	client, ln := inletTrunk(t, nil)
 	if ln.Default() != nil {
 		t.Fatalf("Default() = %v, want nil", ln.Default())
 	}
@@ -570,7 +568,7 @@ func TestInletDefaultOnly(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
 	t.Run("Flows", func(t *testing.T) {
-		client, ln := inletTrunk(t, WithDefaultOnly(true))
+		client, ln := inletTrunk(t, &InletConfig{DefaultOnly: true})
 		accepted := make(chan error, 1)
 		go func() {
 			_, err := ln.Accept()
@@ -589,7 +587,7 @@ func TestInletDefaultOnly(t *testing.T) {
 	})
 
 	t.Run("QueueFull", func(t *testing.T) {
-		client, ln := inletTrunk(t, WithDefaultOnly(true), WithDefaultQueueSize(1))
+		client, ln := inletTrunk(t, &InletConfig{DefaultOnly: true, DefaultQueueSize: 1})
 		writeFrom(t, client, a, "a1")
 		writeFrom(t, client, a, "a2")
 		writeFrom(t, client, b, "b1")
@@ -600,7 +598,7 @@ func TestInletDefaultOnly(t *testing.T) {
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, ln := inletTrunk(t, WithDefaultOnly(true))
+		client, ln := inletTrunk(t, &InletConfig{DefaultOnly: true})
 		if err := ln.Default().Close(); err != nil {
 			t.Fatalf("Close() = %v, want nil", err)
 		}
@@ -614,7 +612,7 @@ func TestInletDefaultOnly(t *testing.T) {
 func TestInletDefaultWrite(t *testing.T) {
 	a, u := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 9), Port: 9}
 	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
-	client, ln := inletTrunk(t, WithDefaultOnly(true))
+	client, ln := inletTrunk(t, &InletConfig{DefaultOnly: true})
 	if _, err := client.WriteToFrom([]byte("a1"), local, a, 3); err != nil {
 		t.Fatal(err)
 	}
@@ -657,7 +655,7 @@ func TestInletDefaultWrite(t *testing.T) {
 // TestInletWriteCopies ensures a write returns once its packet is queued, with a copy of the bytes given.
 func TestInletWriteCopies(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t)
+	client, ln := inletTrunk(t, nil)
 	writeFrom(t, client, a, "a1")
 	conn := acceptInletConn(t, ln)
 
@@ -679,7 +677,7 @@ func TestInletWriteQueueFull(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, server := BufferedTrunk(1, nil, nil) // Holds one packet, the next one blocks the write loop
 	t.Cleanup(func() { _ = client.Close() })
-	ln := Inlet(server, WithWriteQueueSize(1), WithWriteTimeout(0))
+	ln := Inlet(server, &InletConfig{WriteQueueSize: 1, WriteTimeout: -1})
 	t.Cleanup(func() { _ = ln.Close() })
 	writeFrom(t, client, a, "a1")
 	conn := acceptInletConn(t, ln)
@@ -715,7 +713,7 @@ func TestInletWriteTimeout(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, server := BufferedTrunk(1, nil, nil)
 	t.Cleanup(func() { _ = client.Close() })
-	ln := Inlet(server, WithWriteTimeout(20*time.Millisecond))
+	ln := Inlet(server, &InletConfig{WriteTimeout: 20 * time.Millisecond})
 	t.Cleanup(func() { _ = ln.Close() })
 	writeFrom(t, client, a, "a1")
 	conn := acceptInletConn(t, ln)
@@ -766,7 +764,7 @@ func TestInletWriteFailed(t *testing.T) {
 	setup := func(t *testing.T, err error) (FromToPacketConn, InletListener) {
 		client, server := BufferedTrunk(16, nil, nil)
 		t.Cleanup(func() { _ = client.Close() })
-		ln := Inlet(&failingWrites{server, bad, err}, WithDefaultOnly(true))
+		ln := Inlet(&failingWrites{server, bad, err}, &InletConfig{DefaultOnly: true})
 		t.Cleanup(func() { _ = ln.Close() })
 		return client, ln
 	}
@@ -819,7 +817,7 @@ func TestInletIdleTimeout(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 
 	t.Run("Expired", func(t *testing.T) {
-		client, ln := inletTrunk(t, WithIdleTimeout(idle))
+		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: idle})
 		writeFrom(t, client, a, "a1")
 		conn := acceptInletConn(t, ln)
 		time.Sleep(2 * idle) // Over one and a quarter idle timeouts
@@ -834,7 +832,7 @@ func TestInletIdleTimeout(t *testing.T) {
 	})
 
 	t.Run("KeptByReads", func(t *testing.T) {
-		client, ln := inletTrunk(t, WithIdleTimeout(idle))
+		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: idle})
 		writeFrom(t, client, a, "a0")
 		conn := acceptInletConn(t, ln)
 		for i := range 12 { // Three idle timeouts in all
@@ -850,7 +848,7 @@ func TestInletIdleTimeout(t *testing.T) {
 	})
 
 	t.Run("KeptByWrites", func(t *testing.T) {
-		client, ln := inletTrunk(t, WithIdleTimeout(idle))
+		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: idle})
 		writeFrom(t, client, a, "a0")
 		conn := acceptInletConn(t, ln)
 		go func() { // Drain the trunk, so that writes never wait
@@ -873,7 +871,7 @@ func TestInletIdleTimeout(t *testing.T) {
 	})
 
 	t.Run("Released", func(t *testing.T) {
-		client, ln := inletTrunk(t, WithIdleTimeout(idle), WithDefaultConn(true))
+		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: idle, DefaultConn: true})
 		writeFrom(t, client, a, "a1")
 		if err := acceptInletConn(t, ln).(interface{ Release() error }).Release(); err != nil {
 			t.Fatal(err)
@@ -890,7 +888,7 @@ func TestInletIdleTimeout(t *testing.T) {
 	})
 
 	t.Run("Disabled", func(t *testing.T) {
-		client, ln := inletTrunk(t, WithIdleTimeout(0))
+		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: -1})
 		writeFrom(t, client, a, "a1")
 		conn := acceptInletConn(t, ln)
 		time.Sleep(2 * idle)
@@ -900,28 +898,61 @@ func TestInletIdleTimeout(t *testing.T) {
 	})
 }
 
-// TestInletOptions ensures invalid option values are ignored, and valid ones applied.
-func TestInletOptions(t *testing.T) {
+// TestInletConfig ensures the fields of an InletConfig not set give their defaults, and the others are applied.
+func TestInletConfig(t *testing.T) {
+	def := inletConfig{
+		idleTimeout:      DefaultInletIdleTimeout,
+		writeTimeout:     DefaultInletWriteTimeout,
+		acceptQueueSize:  DefaultInletAcceptQueueSize,
+		defaultQueueSize: DefaultInletDefaultQueueSize,
+		maxFlows:         DefaultInletMaxFlows,
+		readBufferSize:   DefaultInletReadBufferSize,
+		readQueueSize:    DefaultInletReadQueueSize,
+		writeQueueSize:   DefaultInletWriteQueueSize,
+	}
+	with := func(f func(*inletConfig)) inletConfig {
+		cfg := def
+		f(&cfg)
+		return cfg
+	}
+
 	for _, test := range []struct {
-		name  string
-		opt   InletOption
-		check func(cfg inletConfig) bool
+		name   string
+		config *InletConfig
+		want   inletConfig
 	}{
-		{"AcceptQueueSize", WithAcceptQueueSize(0), func(cfg inletConfig) bool { return cfg.acceptQueueSize == piAcceptQueueSizeDef }},
-		{"DefaultQueueSize", WithDefaultQueueSize(0), func(cfg inletConfig) bool { return cfg.defaultQueueSize == piDefaultQueueSizeDef }},
-		{"ReadBufferSize", WithReadBufferSize(piReadBufferSizeMin - 1), func(cfg inletConfig) bool { return cfg.readBufferSize == piReadBufferSizeDef }},
-		{"ReadQueueSize", WithReadQueueSize(0), func(cfg inletConfig) bool { return cfg.readQueueSize == poReadQueueSizeDef }},
-		{"IdleTimeout", WithIdleTimeout(-time.Second), func(cfg inletConfig) bool { return cfg.idleTimeout == poIdleTimeoutDef }},
-		{"WriteQueueSize", WithWriteQueueSize(0), func(cfg inletConfig) bool { return cfg.writeQueueSize == piWriteQueueSizeDef }},
-		{"WriteTimeout", WithWriteTimeout(-time.Second), func(cfg inletConfig) bool { return cfg.writeTimeout == piWriteTimeoutDef }},
-		{"TryPacketInfoUDPDefault", WithTryPacketInfoUDP(piTryPacketInfoUDPDef), func(cfg inletConfig) bool { return cfg.tryPacketInfoUDP == piTryPacketInfoUDPDef }},
-		{"TryPacketInfoUDP", WithTryPacketInfoUDP(!piTryPacketInfoUDPDef), func(cfg inletConfig) bool { return cfg.tryPacketInfoUDP != piTryPacketInfoUDPDef }},
-		{"DefaultOnly", WithDefaultOnly(true), func(cfg inletConfig) bool { return cfg.defaultOnly && cfg.defaultConn }},
+		{"Nil", nil, def},
+		{"Zero", &InletConfig{}, def},
+		{"Negative", &InletConfig{AcceptQueueSize: -1, DefaultQueueSize: -1, MaxFlows: -1, ReadBufferSize: -1, ReadQueueSize: -1, WriteQueueSize: -1}, def},
+		{"NoTimeouts", &InletConfig{IdleTimeout: -1, WriteTimeout: -1}, with(func(cfg *inletConfig) { cfg.idleTimeout, cfg.writeTimeout = 0, 0 })},
+		{"ReadBufferSizeMin", &InletConfig{ReadBufferSize: minInletReadBufferSize - 1}, with(func(cfg *inletConfig) { cfg.readBufferSize = minInletReadBufferSize })},
+		{"DefaultConn", &InletConfig{DefaultConn: true}, with(func(cfg *inletConfig) { cfg.defaultConn = true })},
+		{"DefaultOnly", &InletConfig{DefaultOnly: true}, with(func(cfg *inletConfig) { cfg.defaultConn, cfg.defaultOnly = true, true })},
+		{"Set", &InletConfig{
+			AcceptQueueSize:  1,
+			ReadQueueSize:    2,
+			DefaultQueueSize: 3,
+			IdleTimeout:      4,
+			MaxFlows:         5,
+			ReadBufferSize:   minInletReadBufferSize + 6,
+			WriteQueueSize:   7,
+			WriteTimeout:     8,
+			PacketInfo:       true,
+		}, inletConfig{
+			idleTimeout:      4,
+			writeTimeout:     8,
+			acceptQueueSize:  1,
+			defaultQueueSize: 3,
+			maxFlows:         5,
+			readBufferSize:   minInletReadBufferSize + 6,
+			readQueueSize:    2,
+			writeQueueSize:   7,
+			packetInfo:       true,
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, ln := inletTrunk(t, test.opt)
-			if cfg := ln.(*inlet).cfg; !test.check(cfg) {
-				t.Errorf("configuration = %+v, not as expected", cfg)
+			if got := test.config.resolve(); got != test.want {
+				t.Errorf("resolve() = %+v, want %+v", got, test.want)
 			}
 		})
 	}
@@ -931,7 +962,7 @@ func TestInletOptions(t *testing.T) {
 // queued and then io.EOF, writes fail, and the default connection fails too.
 func TestInletClose(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, WithDefaultConn(true))
+	client, ln := inletTrunk(t, &InletConfig{DefaultConn: true})
 	writeFrom(t, client, a, "a1")
 	writeFrom(t, client, a, "a2")
 	conn := acceptInletConn(t, ln)
@@ -975,7 +1006,7 @@ func TestInletClose(t *testing.T) {
 // TestInletUnwrap ensures Unwrap stops the inlet, but leaves the underlying connection open.
 func TestInletUnwrap(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t)
+	client, ln := inletTrunk(t, nil)
 	pc := ln.(PacketConnWrapper).Unwrap()
 	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("Accept() = %v, want net.ErrClosed", err)
@@ -992,7 +1023,7 @@ func TestInletUnwrap(t *testing.T) {
 // TestInletDeadlines ensures the read and write deadlines of inlet connections and of the default connection.
 func TestInletDeadlines(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, WithDefaultConn(true))
+	client, ln := inletTrunk(t, &InletConfig{DefaultConn: true})
 	writeFrom(t, client, a, "a1")
 	conn := acceptInletConn(t, ln)
 	_ = readInletConn(t, conn)
@@ -1034,7 +1065,7 @@ func TestInletDeadlines(t *testing.T) {
 // other than UDP, and writes from its local address.
 func TestInletDefaultWriteOther(t *testing.T) {
 	c, local := testAddr("c"), testAddr("local")
-	client, ln := inletTrunk(t, WithDefaultOnly(true))
+	client, ln := inletTrunk(t, &InletConfig{DefaultOnly: true})
 	if _, err := client.WriteToFrom([]byte("c1"), local, c, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -1059,19 +1090,19 @@ func TestInletUDPLoopback(t *testing.T) {
 	}
 
 	for _, test := range []struct {
-		name string
-		opts []InletOption
-		info bool
+		name   string
+		config *InletConfig
+		info   bool
 	}{
-		{"PacketInfo", nil, true},
-		{"NoPacketInfo", []InletOption{WithTryPacketInfoUDP(false)}, false},
+		{"PacketInfo", &InletConfig{PacketInfo: true}, true},
+		{"NoPacketInfo", nil, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6unspecified})
 			if err != nil {
 				t.Skipf("ListenUDP() = %v", err) // E.g. no IPv6 support
 			}
-			ln := Inlet(pc, test.opts...)
+			ln := Inlet(pc, test.config)
 			defer func() { _ = ln.Close() }()
 			if ln.Addr() != pc.LocalAddr() {
 				t.Errorf("Addr() = %v, want %v", ln.Addr(), pc.LocalAddr())
@@ -1135,7 +1166,7 @@ func (c negativeReads) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error
 func TestInletNegativeRead(t *testing.T) {
 	client, server := BufferedTrunk(16, nil, nil)
 	defer func() { _ = client.Close() }()
-	ln := Inlet(negativeReads{server})
+	ln := Inlet(negativeReads{server}, nil)
 	defer func() { _ = ln.Close() }()
 
 	_ = server.Close() // Under the inlet, which notices it by reading
