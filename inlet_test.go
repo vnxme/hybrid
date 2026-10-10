@@ -23,67 +23,14 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-func TestPacketInletAccept(t *testing.T) {
-	pc1, pc2 := newLocalPacketListeners("udp4")
-	defer func() { _ = pc1.Close() }()
-
-	pi2 := Inlet(pc2)
-	defer func() { _ = pi2.Close() }()
-
-	handle := func(mc MixedConn) {
-		if addr := mc.LocalAddr(); addr == nil {
-			t.Errorf("mc.LocalAddr() = %v, want non-nil", addr)
-		}
-		if addr := mc.RemoteAddr(); addr == nil {
-			t.Errorf("mc.RemoteAddr() = %v, want non-nil", addr)
-		}
-
-		b := make([]byte, 32)
-		for {
-			n, err := mc.Read(b)
-			if n == 0 && err != nil {
-				break
-			}
-			n, err = mc.Write(b[:n])
-			if n == 0 && err != nil {
-				break
-			}
-		}
-	}
-
-	serve := func(l PacketListener, handle func(mc MixedConn)) {
-		for {
-			mc, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go handle(mc)
-		}
-	}
-
-	go serve(pi2, handle)
-
-	timeout := 50 * time.Millisecond
-
-	if err := pc1.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-		t.Fatalf("pc1.SetWriteDeadline() = %v, want nil", err)
-	}
-
-	wb := make([]byte, 1<<10)
-	_, _ = io.ReadFull(rand.Reader, wb)
-
-	if n, err := pc1.WriteTo(wb, pi2.Addr()); n == 0 && err != nil {
-		t.Fatalf("pc1.WriteTo() = %v, want nil", err)
-	}
-}
-
-func TestPacketInletWithPairedConns(t *testing.T) {
+func TestInletPairedConns(t *testing.T) {
 	packetCount := 1 << 13
 
 	type pair struct {
@@ -118,7 +65,7 @@ func TestPacketInletWithPairedConns(t *testing.T) {
 	}
 
 	testFunc := func(t *testing.T, ctor packetConnPairCtor, writeBufferSize int) {
-		testPacketInletWithPairedConns(t, ctor, piAcceptQueueSizeDef, poReadQueueSizeDef, packetSizeMax, writeBufferSize, packetCount)
+		testInletPairedConns(t, ctor, piAcceptQueueSizeDef, poReadQueueSizeDef, packetSizeMax, writeBufferSize, packetCount)
 	}
 
 	for _, item := range pairs {
@@ -143,7 +90,7 @@ func TestPacketInletWithPairedConns(t *testing.T) {
 	}
 }
 
-func testPacketInletWithPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
+func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
 	t.Helper()
 	pc1, pc2 := ctor()
 
@@ -165,8 +112,10 @@ func testPacketInletWithPairedConns(t *testing.T, ctor packetConnPairCtor, accep
 		var err error
 		var n int
 		for {
+			// Once the inlet has closed, setting a deadline fails, but the packets queued are still read,
+			// without waiting, then io.EOF
 			err = mc.SetReadDeadline(time.Now().Add(2 * timeout))
-			if err != nil {
+			if err != nil && !errors.Is(err, io.ErrClosedPipe) {
 				t.Errorf("%v: pc.SetReadDeadline() = %v, want nil", me, err)
 				break
 			}
@@ -282,16 +231,19 @@ loop:
 
 	// The inlet drops a packet rather than wait for a slow reader, and counts it
 	dropped := int(stats.ConnQueueFull + stats.AcceptQueueFull + stats.TableFull + stats.NoDestination)
-	if acr+dropped != acw || anr+dropped*writeBufferSize != anw {
-		message := fmt.Sprintf("r/w statistics: count %d+%d/%d, bytes %d+%d/%d", acr, dropped, acw, anr, dropped*writeBufferSize, anw)
-		if pc2.LocalAddr().Network() == "udp" {
-			// UDP doesn't guarantee that all packets sent will be received,
-			// so we can't consider this test as failing if anything is lost.
-			t.Skip(message)
+	message := fmt.Sprintf("r/w statistics: count %d+%d/%d, bytes %d+%d/%d", acr, dropped, acw, anr, dropped*writeBufferSize, anw)
+	if pc2.LocalAddr().Network() == "udp" {
+		// The system may drop datagrams the inlet never sees, e.g. as the receive buffer of the socket overflows,
+		// so fewer packets may be read and counted than written, but never more, and not none at all.
+		t.Log(message)
+		if acr+dropped > acw || anr+dropped*writeBufferSize > anw || acr == 0 {
+			t.Error(message + ", want no more than written, and some read")
 		}
+		return
+	}
 
-		// However, pipes do guarantee that all packets are delivered,
-		// so any loss the inlet doesn't count represents a failure of this test.
+	// Pipes deliver every packet, so the inlet reads or counts each one
+	if acr+dropped != acw || anr+dropped*writeBufferSize != anw {
 		t.Error(message)
 	}
 }
@@ -946,4 +898,220 @@ func TestInletIdleTimeout(t *testing.T) {
 			t.Errorf("the connection of a flow is closed without an idle timeout, want open")
 		}
 	})
+}
+
+// TestInletOptions ensures invalid option values are ignored, and valid ones applied.
+func TestInletOptions(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		opt   InletOption
+		check func(cfg inletConfig) bool
+	}{
+		{"AcceptQueueSize", WithAcceptQueueSize(0), func(cfg inletConfig) bool { return cfg.acceptQueueSize == piAcceptQueueSizeDef }},
+		{"DefaultQueueSize", WithDefaultQueueSize(0), func(cfg inletConfig) bool { return cfg.defaultQueueSize == piDefaultQueueSizeDef }},
+		{"ReadBufferSize", WithReadBufferSize(piReadBufferSizeMin - 1), func(cfg inletConfig) bool { return cfg.readBufferSize == piReadBufferSizeDef }},
+		{"ReadQueueSize", WithReadQueueSize(0), func(cfg inletConfig) bool { return cfg.readQueueSize == poReadQueueSizeDef }},
+		{"IdleTimeout", WithIdleTimeout(-time.Second), func(cfg inletConfig) bool { return cfg.idleTimeout == poIdleTimeoutDef }},
+		{"WriteQueueSize", WithWriteQueueSize(0), func(cfg inletConfig) bool { return cfg.writeQueueSize == piWriteQueueSizeDef }},
+		{"WriteTimeout", WithWriteTimeout(-time.Second), func(cfg inletConfig) bool { return cfg.writeTimeout == piWriteTimeoutDef }},
+		{"TryPacketInfoUDPDefault", WithTryPacketInfoUDP(piTryPacketInfoUDPDef), func(cfg inletConfig) bool { return cfg.tryPacketInfoUDP == piTryPacketInfoUDPDef }},
+		{"TryPacketInfoUDP", WithTryPacketInfoUDP(!piTryPacketInfoUDPDef), func(cfg inletConfig) bool { return cfg.tryPacketInfoUDP != piTryPacketInfoUDPDef }},
+		{"DefaultOnly", WithDefaultOnly(true), func(cfg inletConfig) bool { return cfg.defaultOnly && cfg.defaultConn }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, ln := inletTrunk(t, test.opt)
+			if cfg := ln.(*inlet).cfg; !test.check(cfg) {
+				t.Errorf("configuration = %+v, not as expected", cfg)
+			}
+		})
+	}
+}
+
+// TestInletClose ensures that once an inlet is closed, Accept fails, an inlet connection returns the packets
+// queued and then io.EOF, writes fail, and the default connection fails too.
+func TestInletClose(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, ln := inletTrunk(t, WithDefaultConn(true))
+	writeFrom(t, client, a, "a1")
+	writeFrom(t, client, a, "a2")
+	conn := acceptInletConn(t, ln)
+	time.Sleep(10 * time.Millisecond) // Let the read loop queue a2 too
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close() = %v, want nil", err)
+	}
+	if err := ln.Close(); err == nil {
+		t.Errorf("Close() again = nil, want an error")
+	}
+
+	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("Accept() = %v, want net.ErrClosed", err)
+	}
+	b := make([]byte, 8)
+	for _, want := range []string{"a1", "a2"} {
+		if n, err := conn.Read(b); err != nil || string(b[:n]) != want {
+			t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, want)
+		}
+	}
+	if _, err := conn.Read(b); !errors.Is(err, io.EOF) {
+		t.Errorf("Read() = %v, want io.EOF", err)
+	}
+	if _, err := conn.Write([]byte("x")); err == nil {
+		t.Errorf("Write() = nil, want an error")
+	}
+	if _, _, err := ln.Default().ReadFrom(b); !errors.Is(err, io.EOF) {
+		t.Errorf("ReadFrom() of the default connection = %v, want io.EOF", err)
+	}
+	if _, err := ln.Default().WriteTo([]byte("x"), a); err == nil {
+		t.Errorf("WriteTo() of the default connection = nil, want an error")
+	}
+	for _, set := range []func(time.Time) error{conn.SetDeadline, conn.SetReadDeadline, conn.SetWriteDeadline,
+		ln.Default().SetDeadline, ln.Default().SetReadDeadline, ln.Default().SetWriteDeadline} {
+		if err := set(time.Time{}); err == nil {
+			t.Errorf("setting a deadline = nil, want an error")
+		}
+	}
+}
+
+// TestInletUnwrap ensures Unwrap stops the inlet, but leaves the underlying connection open.
+func TestInletUnwrap(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, ln := inletTrunk(t)
+	pc := ln.(PacketConnWrapper).Unwrap()
+	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("Accept() = %v, want net.ErrClosed", err)
+	}
+
+	writeFrom(t, client, a, "a1") // Read by nothing but the caller of Unwrap
+	_ = pc.SetDeadline(time.Now().Add(time.Second))
+	b := make([]byte, 8)
+	if n, addr, err := pc.ReadFrom(b); err != nil || string(b[:n]) != "a1" || addr.String() != a.String() {
+		t.Errorf("ReadFrom() of the unwrapped connection = %q, %v, %v, want %q, %s, nil", b[:n], addr, err, "a1", a)
+	}
+}
+
+// TestInletDeadlines ensures the read and write deadlines of inlet connections and of the default connection.
+func TestInletDeadlines(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, ln := inletTrunk(t, WithDefaultConn(true))
+	writeFrom(t, client, a, "a1")
+	conn := acceptInletConn(t, ln)
+	_ = readInletConn(t, conn)
+
+	past := time.Now().Add(-time.Second)
+	b := make([]byte, 8)
+	for name, err := range map[string]error{
+		"Read":            func() error { _ = conn.SetDeadline(past); _, err := conn.Read(b); return err }(),
+		"Write":           func() error { _, err := conn.Write(b); return err }(),
+		"DefaultReadFrom": func() error { _ = ln.Default().SetDeadline(past); _, _, err := ln.Default().ReadFrom(b); return err }(),
+		"DefaultWriteTo": func() error {
+			_ = ln.Default().SetWriteDeadline(past)
+			_, err := ln.Default().WriteTo(b, a)
+			return err
+		}(),
+	} {
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("%s() after the deadline = %v, want os.ErrDeadlineExceeded", name, err)
+		}
+	}
+
+	// A deadline in the future lets a waiting read time out
+	_ = ln.Default().SetDeadline(time.Now().Add(20 * time.Millisecond))
+	if _, _, err := ln.Default().ReadFrom(b); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("ReadFrom() of the default connection = %v, want os.ErrDeadlineExceeded", err)
+	}
+	if err := ln.Default().Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ln.Default().Close(); err == nil {
+		t.Errorf("Close() of the default connection again = nil, want an error")
+	}
+	if _, _, err := ln.Default().ReadFrom(b); err == nil {
+		t.Errorf("ReadFrom() of the closed default connection = nil, want an error")
+	}
+}
+
+// TestInletDefaultWriteOther ensures the default connection finds the flow of a remote address of a network
+// other than UDP, and writes from its local address.
+func TestInletDefaultWriteOther(t *testing.T) {
+	c, local := testAddr("c"), testAddr("local")
+	client, ln := inletTrunk(t, WithDefaultOnly(true))
+	if _, err := client.WriteToFrom([]byte("c1"), local, c, 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = readDefault(t, ln.Default())
+	if _, err := ln.Default().WriteTo([]byte("x"), c); err != nil {
+		t.Fatal(err)
+	}
+	b := make([]byte, 8)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	if _, src, dst, _, err := client.ReadFromTo(b); err != nil || src != local || dst != c {
+		t.Errorf("ReadFromTo() = from %v to %v, %v, want from %s to %s, nil", src, dst, err, local, c)
+	}
+}
+
+// TestInletUDPLoopback ensures an inlet over a dual-stack UDP socket tells flows apart by their destination
+// addresses too, and replies from the address each flow came to, while an inlet without packet info
+// tells them apart by their source addresses alone.
+func TestInletUDPLoopback(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	for _, test := range []struct {
+		name string
+		opts []InletOption
+		info bool
+	}{
+		{"PacketInfo", nil, true},
+		{"NoPacketInfo", []InletOption{WithTryPacketInfoUDP(false)}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6unspecified})
+			if err != nil {
+				t.Skipf("ListenUDP() = %v", err) // E.g. no IPv6 support
+			}
+			ln := Inlet(pc, test.opts...)
+			defer func() { _ = ln.Close() }()
+			if ln.Addr() != pc.LocalAddr() {
+				t.Errorf("Addr() = %v, want %v", ln.Addr(), pc.LocalAddr())
+			}
+			port := pc.LocalAddr().(*net.UDPAddr).AddrPort().Port()
+
+			for _, to := range []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.IPv6Loopback()} {
+				network := map[bool]string{true: "udp4", false: "udp6"}[to.Is4()]
+				client, err := net.ListenUDP(network, nil)
+				if err != nil {
+					t.Skipf("ListenUDP(%s) = %v", network, err)
+				}
+				defer func() { _ = client.Close() }()
+				dst := netip.AddrPortFrom(to, port)
+				if _, err = client.WriteToUDPAddrPort([]byte("ping"), dst); err != nil {
+					t.Fatal(err)
+				}
+
+				conn := acceptInletConn(t, ln)
+				wantLocal := pc.LocalAddr().String()
+				if test.info {
+					wantLocal = dst.String()
+				}
+				if local := conn.LocalAddr().String(); local != wantLocal {
+					t.Errorf("LocalAddr() = %s, want %s", local, wantLocal)
+				}
+				if got := readInletConn(t, conn); strings.Join(got, " ") != "ping" {
+					t.Errorf("packets of the flow = %q, want %q", got, "ping")
+				}
+
+				if _, err = conn.Write([]byte("pong")); err != nil {
+					t.Fatal(err)
+				}
+				b := make([]byte, 8)
+				_ = client.SetReadDeadline(time.Now().Add(time.Second))
+				n, from, err := client.ReadFromUDPAddrPort(b)
+				if err != nil || string(b[:n]) != "pong" || from.Addr().Unmap() != to {
+					t.Errorf("client.ReadFromUDPAddrPort() = %q from %s, %v, want %q from %s, nil", b[:n], from, err, "pong", to)
+				}
+			}
+		})
+	}
 }
