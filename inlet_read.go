@@ -162,10 +162,14 @@ func (i *inlet) readLoop() {
 
 	var nrr net.Error
 	var p inletPacketInfo
-	buf := make([]byte, i.cfg.readBufferSize) // Read into, then copied into a buffer of the packet's size
+	// Read into, then copied into a buffer of the packet's size. A byte more than the maximum size of a packet
+	// tells a larger packet, as filling the buffer is the only sign of truncation every connection gives:
+	// Linux only flags it, Windows and trunks report errors, and a net.PacketConn reports nothing at all.
+	buf := make([]byte, i.cfg.readBufferSize+1)
 	for !isClosedChan(i.done) {
 		// Read from the underlying FromToPacketConn and check for errors. Note: any error is ignored if at least
-		// one byte has been read, while a negative count, e.g. of a socket closed on Linux, reads nothing.
+		// one byte has been read, e.g. of a truncated packet, while a negative count, e.g. of a socket closed
+		// on Linux, reads nothing.
 		n, err := i.read(buf, &p)
 		if n <= 0 && err != nil {
 			// A timeout interrupts reading when the inlet closes, so check it at the top of the loop
@@ -193,6 +197,10 @@ func (i *inlet) readLoop() {
 		// and delete them from the routing table, so that their flows end before routing.
 		i.deleteLoop()
 
+		if n > i.cfg.readBufferSize { // Checked first, as the addresses of a truncated packet may be missing
+			i.drops.truncated.Add(1)
+			continue
+		}
 		if i.udp != nil && !p.key.dst.IsValid() { // Packet info is missing, e.g. as it has been truncated
 			i.drops.noDestination.Add(1)
 			continue

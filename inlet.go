@@ -108,8 +108,8 @@ type InletConfig struct {
 	// The first packet of a new flow is dropped if there are as many flows already.
 	MaxFlows int
 
-	// ReadBufferSize is the maximum number of bytes read as a single packet from the underlying PacketConn,
-	// [DefaultInletReadBufferSize] by default, and at least 512.
+	// ReadBufferSize is the maximum size of a packet read from the underlying PacketConn,
+	// [DefaultInletReadBufferSize] by default, and at least 512. A larger packet is dropped.
 	ReadBufferSize int
 
 	// WriteQueueSize is the maximum number of packets waiting to be written to the underlying PacketConn,
@@ -196,6 +196,7 @@ type inletPacket struct {
 
 // InletStats counts the packets an inlet has dropped, by reason.
 type InletStats struct {
+	Truncated         uint64 // The packet was larger than ReadBufferSize
 	ConnQueueFull     uint64 // The queue of the inlet connection of the packet was full
 	AcceptQueueFull   uint64 // The accept queue was full when the packet started a new flow
 	TableFull         uint64 // The flow table was full when the packet started a new flow
@@ -249,9 +250,9 @@ type inlet struct {
 	cfg inletConfig
 
 	drops struct {
-		connQueueFull, acceptQueueFull, tableFull, noDestination atomic.Uint64 // Reading
-		fallbackQueueFull, noFallback                            atomic.Uint64 // Releasing
-		writeTimedOut, writeFailed                               atomic.Uint64 // Writing
+		truncated, connQueueFull, acceptQueueFull, tableFull, noDestination atomic.Uint64 // Reading
+		fallbackQueueFull, noFallback                                       atomic.Uint64 // Releasing
+		writeTimedOut, writeFailed                                          atomic.Uint64 // Writing
 	}
 
 	wg    sync.WaitGroup
@@ -318,6 +319,7 @@ func (i *inlet) Fallback() PacketConn {
 // Stats returns the numbers of packets dropped so far, by reason.
 func (i *inlet) Stats() InletStats {
 	return InletStats{
+		Truncated:         i.drops.truncated.Load(),
 		ConnQueueFull:     i.drops.connQueueFull.Load(),
 		AcceptQueueFull:   i.drops.acceptQueueFull.Load(),
 		TableFull:         i.drops.tableFull.Load(),

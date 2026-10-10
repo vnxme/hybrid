@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -144,6 +145,16 @@ func TestInletDrops(t *testing.T) {
 			}
 		}, ln
 	}
+
+	t.Run("Truncated", func(t *testing.T) {
+		const size = minInletReadBufferSize
+		write, ln := setup(t, &InletConfig{ReadBufferSize: size})
+		write(a, strings.Repeat("x", size+1)) // Fits the read buffer, but is larger than the maximum
+		write(a, strings.Repeat("y", 2*size))
+		write(a, strings.Repeat("z", size))
+		waitInletStats(t, ln, InletStats{Truncated: 2})
+		checkInletPacket(t, acceptInletConn(t, ln), strings.Repeat("z", size)) // The first flow, as truncated packets make none
+	})
 
 	t.Run("ConnQueueFull", func(t *testing.T) {
 		write, ln := setup(t, &InletConfig{ReadQueueSize: 1})
@@ -316,4 +327,48 @@ func TestInletNegativeRead(t *testing.T) {
 		t.Fatalf("Accept() hasn't returned, as the inlet hasn't closed")
 	}
 	waitInletStats(t, ln, InletStats{})
+}
+
+// checkInletPacket reads a packet from an inlet connection, and fails unless it's the one wanted.
+func checkInletPacket(t *testing.T, c MixedConn, want string) {
+	t.Helper()
+	b := make([]byte, len(want)+1)
+	_ = c.SetReadDeadline(time.Now().Add(time.Second))
+	if n, err := c.Read(b); err != nil || string(b[:n]) != want {
+		t.Errorf("Read() = %d bytes, %v, want %d bytes, nil", n, err, len(want))
+	}
+}
+
+// TestInletUDPTruncated ensures an inlet drops and counts a UDP datagram larger than its read buffer,
+// whether the system flags truncation, as Linux does, or reports an error, as Windows does.
+func TestInletUDPTruncated(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	const size = minInletReadBufferSize
+	for _, info := range []bool{true, false} {
+		t.Run(map[bool]string{true: "PacketInfo", false: "NoPacketInfo"}[info], func(t *testing.T) {
+			pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ln := Inlet(pc, &InletConfig{ReadBufferSize: size, PacketInfo: info})
+			defer func() { _ = ln.Close() }()
+			client, err := net.DialUDP("udp4", nil, pc.LocalAddr().(*net.UDPAddr))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = client.Close() }()
+
+			for _, data := range []string{strings.Repeat("x", size+1), strings.Repeat("y", 2*size), strings.Repeat("z", size)} {
+				if _, err := client.Write([]byte(data)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitInletStats(t, ln, InletStats{Truncated: 2})
+			checkInletPacket(t, acceptInletConn(t, ln), strings.Repeat("z", size))
+		})
+	}
 }
