@@ -79,21 +79,21 @@ func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
 // goroutine, so that it can't race with closing the inlet, which waits for the goroutines of the inlet.
 func (i *inlet) deleteConnection(c *inletConn) {
 	i.closed.Lock()
-	i.closed.s = append(i.closed.s, c)
+	i.closed.conns = append(i.closed.conns, c)
 	i.closed.Unlock()
 }
 
 // deleteLoop deletes the flows whose connections have been closed and reported so far.
 func (i *inlet) deleteLoop() {
 	i.closed.Lock()
-	closed := i.closed.s
-	i.closed.s = nil
+	closed := i.closed.conns
+	i.closed.conns = nil
 	i.closed.Unlock()
 
 	for _, c := range closed {
 		// Ignore a connection that no longer has a flow, e.g. as it's been deleted already,
 		// and whose flow may have a new connection.
-		if e, ok := i.rt[c.key]; ok && e == c {
+		if e, ok := i.flows[c.key]; ok && e == c {
 			i.deleteFlow(c)
 		} else {
 			i.discard(c)
@@ -101,11 +101,11 @@ func (i *inlet) deleteLoop() {
 	}
 }
 
-// deleteFlow discards a closed connection, and deletes its flow from the routing table
+// deleteFlow discards a closed connection, and deletes its flow from the flow table
 // and from the index of remote addresses.
 func (i *inlet) deleteFlow(c *inletConn) {
 	i.discard(c)
-	delete(i.rt, c.key)
+	delete(i.flows, c.key)
 	i.remotes.Lock()
 	if r := c.key.remote(); i.remotes.m[r] == c {
 		delete(i.remotes.m, r)
@@ -114,7 +114,7 @@ func (i *inlet) deleteFlow(c *inletConn) {
 }
 
 // discard drops and counts the packets left unread on a closed connection, and removes the connection
-// from the flows of the sweeper.
+// from those the sweeper checks.
 func (i *inlet) discard(c *inletConn) {
 	for {
 		select {
@@ -122,9 +122,9 @@ func (i *inlet) discard(c *inletConn) {
 			putBuf(pkt.ref)
 			i.drops.connClosed.Add(1)
 		default:
-			i.flows.Lock()
-			delete(i.flows.m, c)
-			i.flows.Unlock()
+			i.swept.Lock()
+			delete(i.swept.m, c)
+			i.swept.Unlock()
 			return
 		}
 	}
@@ -135,6 +135,7 @@ func (i *inlet) discard(c *inletConn) {
 func (i *inlet) sweepLoop() {
 	defer i.wg.Done()
 
+	start := time.Now() // The clock is zero until the first tick, as is the last packet time of a new flow
 	ticker := time.NewTicker(max(i.cfg.idleTimeout/4, time.Millisecond))
 	defer ticker.Stop()
 	for {
@@ -142,17 +143,17 @@ func (i *inlet) sweepLoop() {
 		case <-i.done:
 			return
 		case now := <-ticker.C:
-			clock := int64(now.Sub(i.start)) // Monotonic, unlike the wall clock
+			clock := int64(now.Sub(start)) // Monotonic, unlike the wall clock
 			i.clock.Store(clock)
 
-			i.flows.Lock()
-			for c := range i.flows.m {
+			i.swept.Lock()
+			for c := range i.swept.m {
 				if clock-c.last.Load() >= int64(i.cfg.idleTimeout) {
-					delete(i.flows.m, c)
+					delete(i.swept.m, c)
 					c.expire()
 				}
 			}
-			i.flows.Unlock()
+			i.swept.Unlock()
 		}
 	}
 }
@@ -196,7 +197,7 @@ func (i *inlet) readLoop() {
 		}
 
 		// Drain the read channels of the connections closed so far, e.g. while reading,
-		// and delete them from the routing table, so that their flows end before routing.
+		// and delete them from the flow table, so that their flows end before routing.
 		i.deleteLoop()
 
 		if n > i.cfg.readBufferSize { // Checked first, as the addresses of a truncated packet may be missing
@@ -233,16 +234,16 @@ func (i *inlet) read(b []byte, p *inletPacketInfo) (n int, err error) {
 // has been released. The first packet of a flow creates its inlet connection, and queues it for Accept.
 // It drops the packet rather than wait if a queue is full or the table is.
 func (i *inlet) route(data []byte, p *inletPacketInfo) {
-	c, ok := i.rt[p.key]
+	c, ok := i.flows[p.key]
 	if !ok || c.ended() {
-		if !ok && len(i.rt) >= i.cfg.maxFlows {
+		if !ok && len(i.flows) >= i.cfg.maxFlows {
 			// Delete the flows of closed connections whose closing hasn't been reported yet, then check again
-			for _, e := range i.rt {
+			for _, e := range i.flows {
 				if e.ended() {
 					i.deleteFlow(e)
 				}
 			}
-			if len(i.rt) >= i.cfg.maxFlows {
+			if len(i.flows) >= i.cfg.maxFlows {
 				i.drops.tableFull.Add(1)
 				return
 			}
@@ -253,16 +254,16 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 		}
 		c = i.newConnection(p)
 		select {
-		case i.acChan <- c:
+		case i.acceptQueue <- c:
 		default: // Don't create a flow, so that a retry of the packet is a new flow
 			i.drops.acceptQueueFull.Add(1)
 			return
 		}
 
-		i.rt[p.key] = c
-		i.flows.Lock()
-		i.flows.m[c] = struct{}{}
-		i.flows.Unlock()
+		i.flows[p.key] = c
+		i.swept.Lock()
+		i.swept.m[c] = struct{}{}
+		i.swept.Unlock()
 		i.remotes.Lock()
 		i.remotes.m[p.key.remote()] = c
 		i.remotes.Unlock()
@@ -292,15 +293,15 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 
 // toFallback passes a packet of a released flow to the fallback connection, or drops it if there is none.
 func (i *inlet) toFallback(pkt *inletPacket) {
-	if i.fb == nil || isClosedChan(i.fb.localDone) {
+	if i.fallback == nil || isClosedChan(i.fallback.localDone) {
 		putBuf(pkt.ref)
 		i.drops.noFallback.Add(1)
 		return
 	}
 	select {
-	case i.fb.rdRx <- pkt:
-		if isClosedChan(i.fb.localDone) { // Closed while queuing, maybe after Close has drained the queue
-			i.fb.discard()
+	case i.fallback.rdRx <- pkt:
+		if isClosedChan(i.fallback.localDone) { // Closed while queuing, maybe after Close has drained the queue
+			i.fallback.discard()
 		}
 	default:
 		putBuf(pkt.ref)

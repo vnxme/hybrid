@@ -232,45 +232,44 @@ type InletListener interface {
 
 // inlet implements PacketListener for any underlying PacketConn.
 type inlet struct {
-	start time.Time // When the inlet started, for its clock
+	// Set by Inlet, and read-only afterwards, as is cfg
+	orig        PacketConn        // Underlying PacketConn, as given to Inlet
+	pc          FromToPacketConn  // The same, wrapped as a FromToPacketConn if it isn't one
+	udp         FromToUDPConn     // The same as pc if it's a FromToUDPConn, which reports destination addresses
+	fallback    *inletFallback    // Fallback connection, if any
+	acceptQueue chan *inletConn   // Inlet connections of new flows, for Accept
+	writeQueue  chan *inletPacket // Packets of every connection, for the write loop
+	done        chan struct{}     // Closed once the inlet stops
 
-	raw PacketConn       // Underlying PacketConn, as given to Inlet
-	pc  FromToPacketConn // The same, wrapped as a FromToPacketConn if it isn't one
-	udp FromToUDPConn    // The same as pc if it's a FromToUDPConn, which reports destination addresses
-	fb  *inletFallback   // Fallback connection, if any
+	// Owned by the read loop
+	flows map[flowKey]*inletConn // Flow table
 
-	acChan chan *inletConn   // Accept channel
-	wrChan chan *inletPacket // Write channel
-	done   chan struct{}     // Done channel
-
-	rt map[flowKey]*inletConn // Routing table
-
+	// Shared under locks
 	closed struct { // Connections closed or expired, for the read loop to delete their flows
-		s []*inletConn
+		conns []*inletConn
 		sync.Mutex
 	}
-
-	flows struct { // Every flow in the routing table, for the sweeper
+	swept struct { // Every connection in the flow table, for the sweeper to check
 		m map[*inletConn]struct{}
 		sync.Mutex
 	}
-
 	remotes struct { // The latest flow of each remote address, for the writes of the fallback connection
 		m map[flowKey]*inletConn
 		sync.RWMutex
 	}
 
-	cfg inletConfig
-
+	// Free of pointers, so placed after the fields holding them, for the garbage collector to scan less
+	cfg   inletConfig
+	clock atomic.Int64 // Time since the sweeper started, kept by it, coarse but cheap to read
 	drops struct {
 		truncated, noDestination, tableFull, acceptQueueFull, connQueueFull, connClosed atomic.Uint64 // Reading
 		noFallback, fallbackQueueFull, fallbackClosed                                   atomic.Uint64 // Releasing
 		writeTimedOut, writeFailed, writeUnsent                                         atomic.Uint64 // Writing
 	}
 
-	wg    sync.WaitGroup
-	clock atomic.Int64 // Time since start, kept by the sweeper, coarse but cheap to read
-	once  sync.Once
+	// Stopping
+	wg   sync.WaitGroup
+	once sync.Once
 }
 
 // Inlet returns an InletListener for the given PacketConn, configured by config, which may be nil for the defaults,
@@ -279,20 +278,19 @@ func Inlet(pc PacketConn, config *InletConfig) InletListener {
 	cfg := config.resolve()
 
 	i := &inlet{
-		raw:    pc,
-		pc:     PacketToFromToPacketConn(pc, cfg.packetInfo),
-		acChan: make(chan *inletConn, cfg.acceptQueueSize),
-		wrChan: make(chan *inletPacket, cfg.writeQueueSize),
-		done:   make(chan struct{}),
-		rt:     make(map[flowKey]*inletConn),
-		start:  time.Now(),
-		cfg:    cfg,
+		cfg:         cfg,
+		orig:        pc,
+		pc:          PacketToFromToPacketConn(pc, cfg.packetInfo),
+		acceptQueue: make(chan *inletConn, cfg.acceptQueueSize),
+		writeQueue:  make(chan *inletPacket, cfg.writeQueueSize),
+		done:        make(chan struct{}),
+		flows:       make(map[flowKey]*inletConn),
 	}
 	i.udp, _ = i.pc.(FromToUDPConn)
 	i.remotes.m = make(map[flowKey]*inletConn)
-	i.flows.m = make(map[*inletConn]struct{})
+	i.swept.m = make(map[*inletConn]struct{})
 	if cfg.fallbackConn {
-		i.fb = i.newFallback()
+		i.fallback = i.newFallback()
 	}
 
 	i.wg.Add(2)
@@ -312,7 +310,7 @@ func (i *inlet) Accept() (MixedConn, error) {
 	}
 
 	select {
-	case conn := <-i.acChan:
+	case conn := <-i.acceptQueue:
 		return conn, nil
 	case <-i.done:
 		return nil, net.ErrClosed
@@ -324,10 +322,10 @@ func (i *inlet) Addr() net.Addr { return i.pc.LocalAddr() }
 
 // Fallback returns the fallback connection of the inlet, or nil if it has none.
 func (i *inlet) Fallback() PacketConn {
-	if i.fb == nil {
+	if i.fallback == nil {
 		return nil // Not a nil *inletFallback, which wouldn't compare equal to nil
 	}
-	return i.fb
+	return i.fallback
 }
 
 // Stats returns the numbers of packets dropped so far, by reason.
@@ -362,8 +360,8 @@ func (i *inlet) Unwrap() PacketConn {
 	_ = i.stop(func() error { return i.pc.SetDeadline(time.Unix(1, 0)) })
 
 	// Clear the deadlines that have interrupted the loops, which have returned by now
-	_ = i.raw.SetDeadline(time.Time{})
-	return i.raw
+	_ = i.orig.SetDeadline(time.Time{})
+	return i.orig
 }
 
 // stop stops the inlet once: it closes the done channel, interrupts the loops with interrupt, waits for them

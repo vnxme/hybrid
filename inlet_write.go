@@ -49,7 +49,7 @@ func (i *inlet) send(b []byte, c *inletConn, to net.Addr, done <-chan struct{}, 
 		copy(pkt.buf, b)
 	}
 	select {
-	case i.wrChan <- pkt:
+	case i.writeQueue <- pkt:
 		if isClosedChan(i.done) { // Closed while queuing, maybe after the write loop has drained the queue
 			i.drainWrites()
 		}
@@ -79,7 +79,7 @@ func (i *inlet) writeLoop() {
 		case <-i.done:
 			i.drainWrites()
 			return
-		case pkt := <-i.wrChan:
+		case pkt := <-i.writeQueue:
 			if isClosedChan(i.done) { // Picked at random, as the inlet has closed meanwhile
 				putBuf(pkt.ref)
 				i.drops.writeUnsent.Add(1)
@@ -141,7 +141,7 @@ func (i *inlet) write(pkt *inletPacket) bool {
 func (i *inlet) drainWrites() {
 	for {
 		select {
-		case pkt := <-i.wrChan:
+		case pkt := <-i.writeQueue:
 			putBuf(pkt.ref)
 			i.drops.writeUnsent.Add(1)
 		default:
