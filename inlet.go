@@ -348,62 +348,48 @@ func (i *inlet) Stats() InletStats {
 	}
 }
 
-// Close closes the underlying PacketConn, the outlets and terminates the internal goroutines.
-// Any operations blocked by Accept will be unblocked and return errors.
-func (i *inlet) Close() (err error) {
-	return i.closeWith(true)
+// Close closes the underlying PacketConn and stops the internal goroutines. Accept returns an error,
+// while the inlet connections and the fallback connection return the packets queued, then io.EOF.
+// It returns the error of closing the underlying PacketConn, or net.ErrClosed if the inlet has stopped.
+func (i *inlet) Close() error {
+	return i.stop(i.pc.Close)
 }
 
 // Unwrap stops the inlet and returns the underlying PacketConn, as given to Inlet.
 func (i *inlet) Unwrap() PacketConn {
-	// Stop all internal loops, but keep the underlying PacketConn open,
-	// unless it has been closed otherwise. Ignore errors if any.
-	_ = i.closeWith(false)
+	// Interrupt the read and write in progress with deadlines rather than by closing, so that the underlying
+	// PacketConn stays open, unless it has been closed otherwise. Ignore errors if any.
+	_ = i.stop(func() error { return i.pc.SetDeadline(time.Unix(1, 0)) })
 
 	// Clear the deadlines that have interrupted the loops, which have returned by now
 	_ = i.raw.SetDeadline(time.Time{})
 	return i.raw
 }
 
-func (i *inlet) closeWith(closeUnderlying bool) (err error) {
-	err = net.ErrClosed
+// stop stops the inlet once: it closes the done channel, interrupts the loops with interrupt, waits for them
+// to return, and drops the writes left. It returns the error of interrupt, or net.ErrClosed if the inlet
+// has been stopped already.
+func (i *inlet) stop(interrupt func() error) error {
+	err := net.ErrClosed
 	i.once.Do(func() {
 		// Close the done channel in order to:
-		// - unblock Accept and let the listener return;
-		// - unblock Read and Write operations in the outlets;
-		// - let the readLoop goroutine return
-		//   (a) before blocking at PacketConn.ReadFrom, or
-		//   (b) on sending a MixedConn to the accept channel, or
-		//   (c) on sending a packet to an outlet;
-		// - let the writeLoop goroutine return
-		//   on receiving a packet from an outlet.
+		// - unblock Accept and make it return an error;
+		// - make reads of the inlet connections and of the fallback connection return
+		//   the packets queued, then io.EOF, and make their writes fail;
+		// - let the readLoop goroutine return before it reads again;
+		// - let the writeLoop goroutine return before it writes again.
 		close(i.done)
 
-		// Unless this function is called by Unwrap(), it should be true.
-		if closeUnderlying {
-			// Close the underlying PacketConn in order to:
-			// - let the readLoop goroutine return
-			//   by unblocking PacketConn.ReadFrom operations;
-			// - let the writeLoop goroutine return
-			//   by unblocking PacketConn.WriteTo operations.
-			if err = i.pc.Close(); err != nil {
-				// TODO(vnxme): log an unexpected closing error
-			}
-		} else {
-			// Interrupt the reading and writing of the loops, keeping the underlying PacketConn open
-			_ = i.pc.SetDeadline(time.Unix(1, 0))
-		}
+		// Interrupt the read and write in progress, if any, so that the loops return.
+		err = interrupt()
 
 		// Wait until the internal goroutines return.
 		i.wg.Wait()
 
 		// Drop the packets queued once the write loop has returned, e.g. as the underlying connection has closed.
 		i.drainWrites()
-
-		// Return nil to report a successful closing.
-		err = nil
 	})
-	return
+	return err
 }
 
 func (i *inlet) logError(err error) {

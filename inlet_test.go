@@ -101,7 +101,7 @@ func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize
 		defer wg.Done()
 
 		lAddr, rAddr := mc.LocalAddr(), mc.RemoteAddr()
-		me := fmt.Sprintf("outlet %v <- %v", lAddr, rAddr)
+		me := fmt.Sprintf("inlet connection %v <- %v", lAddr, rAddr)
 		logfIf(t, testPacketInletDebug, "%v: started", me)
 
 		defer func() { _ = mc.Close() }()
@@ -456,6 +456,32 @@ func TestInletClose(t *testing.T) {
 		if err := set(time.Time{}); err == nil {
 			t.Errorf("setting a deadline = nil, want an error")
 		}
+	}
+}
+
+// failingClose is a FromToPacketConn that closes, but reports an error doing so.
+type failingClose struct {
+	FromToPacketConn
+	err error
+}
+
+func (c failingClose) Close() error {
+	_ = c.FromToPacketConn.Close()
+	return c.err
+}
+
+// TestInletCloseError ensures Close returns the error of closing the underlying connection,
+// and net.ErrClosed once the inlet has stopped.
+func TestInletCloseError(t *testing.T) {
+	client, server := BufferedTrunk(16, nil, nil)
+	defer func() { _ = client.Close() }()
+	errClose := errors.New("close failed")
+	ln := Inlet(failingClose{server, errClose}, nil)
+	if err := ln.Close(); !errors.Is(err, errClose) {
+		t.Errorf("Close() = %v, want %v", err, errClose)
+	}
+	if err := ln.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("Close() again = %v, want net.ErrClosed", err)
 	}
 }
 
