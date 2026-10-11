@@ -196,15 +196,23 @@ type inletPacket struct {
 
 // InletStats counts the packets an inlet has dropped, by reason.
 type InletStats struct {
-	Truncated         uint64 // The packet was larger than ReadBufferSize
-	ConnQueueFull     uint64 // The queue of the inlet connection of the packet was full
-	AcceptQueueFull   uint64 // The accept queue was full when the packet started a new flow
-	TableFull         uint64 // The flow table was full when the packet started a new flow
-	NoDestination     uint64 // The packet had no destination address, while the inlet uses them
-	FallbackQueueFull uint64 // The queue of the fallback connection was full
+	// Reading, in the order a packet meets the checks
+	Truncated       uint64 // The packet was larger than ReadBufferSize
+	NoDestination   uint64 // The packet had no destination address, while the inlet uses them
+	TableFull       uint64 // The flow table was full when the packet started a new flow
+	AcceptQueueFull uint64 // The accept queue was full when the packet started a new flow
+	ConnQueueFull   uint64 // The queue of the inlet connection of the packet was full
+	ConnClosed      uint64 // The inlet connection of the packet was closed before reading it
+
+	// Releasing
 	NoFallback        uint64 // The packet of a released flow had no open fallback connection to go to
-	WriteTimedOut     uint64 // The write loop timed out writing the packet
-	WriteFailed       uint64 // The write loop failed to write the packet, e.g. to an unreachable address
+	FallbackQueueFull uint64 // The queue of the fallback connection was full
+	FallbackClosed    uint64 // The fallback connection was closed before reading the packet
+
+	// Writing
+	WriteTimedOut uint64 // The write loop timed out writing the packet
+	WriteFailed   uint64 // The write loop failed to write the packet, e.g. to an unreachable address
+	WriteUnsent   uint64 // The inlet closed, or its underlying connection did, before writing the packet
 }
 
 // InletListener is a PacketListener of an inlet, with its fallback connection and statistics.
@@ -250,9 +258,9 @@ type inlet struct {
 	cfg inletConfig
 
 	drops struct {
-		truncated, connQueueFull, acceptQueueFull, tableFull, noDestination atomic.Uint64 // Reading
-		fallbackQueueFull, noFallback                                       atomic.Uint64 // Releasing
-		writeTimedOut, writeFailed                                          atomic.Uint64 // Writing
+		truncated, noDestination, tableFull, acceptQueueFull, connQueueFull, connClosed atomic.Uint64 // Reading
+		noFallback, fallbackQueueFull, fallbackClosed                                   atomic.Uint64 // Releasing
+		writeTimedOut, writeFailed, writeUnsent                                         atomic.Uint64 // Writing
 	}
 
 	wg    sync.WaitGroup
@@ -320,14 +328,17 @@ func (i *inlet) Fallback() PacketConn {
 func (i *inlet) Stats() InletStats {
 	return InletStats{
 		Truncated:         i.drops.truncated.Load(),
-		ConnQueueFull:     i.drops.connQueueFull.Load(),
-		AcceptQueueFull:   i.drops.acceptQueueFull.Load(),
-		TableFull:         i.drops.tableFull.Load(),
 		NoDestination:     i.drops.noDestination.Load(),
-		FallbackQueueFull: i.drops.fallbackQueueFull.Load(),
+		TableFull:         i.drops.tableFull.Load(),
+		AcceptQueueFull:   i.drops.acceptQueueFull.Load(),
+		ConnQueueFull:     i.drops.connQueueFull.Load(),
+		ConnClosed:        i.drops.connClosed.Load(),
 		NoFallback:        i.drops.noFallback.Load(),
+		FallbackQueueFull: i.drops.fallbackQueueFull.Load(),
+		FallbackClosed:    i.drops.fallbackClosed.Load(),
 		WriteTimedOut:     i.drops.writeTimedOut.Load(),
 		WriteFailed:       i.drops.writeFailed.Load(),
+		WriteUnsent:       i.drops.writeUnsent.Load(),
 	}
 }
 
@@ -376,6 +387,9 @@ func (i *inlet) closeWith(closeUnderlying bool) (err error) {
 
 		// Wait until the internal goroutines return.
 		i.wg.Wait()
+
+		// Drop the packets queued once the write loop has returned, e.g. as the underlying connection has closed.
+		i.drainWrites()
 
 		// Return nil to report a successful closing.
 		err = nil

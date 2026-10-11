@@ -96,36 +96,38 @@ func (i *inlet) deleteLoop() {
 		if e, ok := i.rt[c.key]; ok && e == c {
 			i.deleteFlow(c)
 		} else {
-			i.untrack(c)
+			i.discard(c)
 		}
 	}
 }
 
-// deleteFlow drains the read channel of a closed connection, and deletes its flow from the routing table,
-// from the flows of the sweeper and from the index of remote addresses.
+// deleteFlow discards a closed connection, and deletes its flow from the routing table
+// and from the index of remote addresses.
 func (i *inlet) deleteFlow(c *inletConn) {
+	i.discard(c)
+	delete(i.rt, c.key)
+	i.remotes.Lock()
+	if r := c.key.remote(); i.remotes.m[r] == c {
+		delete(i.remotes.m, r)
+	}
+	i.remotes.Unlock()
+}
+
+// discard drops and counts the packets left unread on a closed connection, and removes the connection
+// from the flows of the sweeper.
+func (i *inlet) discard(c *inletConn) {
 	for {
 		select {
 		case pkt := <-c.rdRx:
 			putBuf(pkt.ref)
+			i.drops.connClosed.Add(1)
 		default:
-			delete(i.rt, c.key)
-			i.untrack(c)
-			i.remotes.Lock()
-			if r := c.key.remote(); i.remotes.m[r] == c {
-				delete(i.remotes.m, r)
-			}
-			i.remotes.Unlock()
+			i.flows.Lock()
+			delete(i.flows.m, c)
+			i.flows.Unlock()
 			return
 		}
 	}
-}
-
-// untrack removes a connection from the flows of the sweeper.
-func (i *inlet) untrack(c *inletConn) {
-	i.flows.Lock()
-	delete(i.flows.m, c)
-	i.flows.Unlock()
 }
 
 // sweepLoop keeps the clock of the inlet, and ends the flows idle for the idle timeout, checking them every
@@ -247,7 +249,7 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 		}
 
 		if ok { // An ended flow whose closing hasn't been reported yet
-			i.untrack(c)
+			i.discard(c)
 		}
 		c = i.newConnection(p)
 		select {
@@ -297,6 +299,9 @@ func (i *inlet) toFallback(pkt *inletPacket) {
 	}
 	select {
 	case i.fb.rdRx <- pkt:
+		if isClosedChan(i.fb.localDone) { // Closed while queuing, maybe after Close has drained the queue
+			i.fb.discard()
+		}
 	default:
 		putBuf(pkt.ref)
 		i.drops.fallbackQueueFull.Add(1)

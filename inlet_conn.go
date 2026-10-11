@@ -266,14 +266,29 @@ func (d *inletFallback) WriteTo(b []byte, addr net.Addr) (int, error) {
 	return n, d.opError("write", addr, err)
 }
 
-// Close closes the fallback connection, so that the packets of released flows are dropped from now on.
+// Close closes the fallback connection, so that the packets queued and those of released flows are dropped
+// from now on.
 func (d *inletFallback) Close() error {
 	err := net.ErrClosed
 	d.once.Do(func() {
 		close(d.localDone)
 		err = nil
 	})
+	d.discard()
 	return err
+}
+
+// discard drops and counts the packets left unread on the closed fallback connection.
+func (d *inletFallback) discard() {
+	for {
+		select {
+		case pkt := <-d.rdRx:
+			putBuf(pkt.ref)
+			d.parent.drops.fallbackClosed.Add(1)
+		default:
+			return
+		}
+	}
 }
 
 func (d *inletFallback) LocalAddr() net.Addr { return d.parent.pc.LocalAddr() }

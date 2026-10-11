@@ -76,7 +76,7 @@ func TestInletReleaseWithoutFallback(t *testing.T) {
 // TestInletReleaseDrops ensures the packets of a released flow are dropped if the queue of the fallback
 // connection is full, or if the fallback connection is closed.
 func TestInletReleaseDrops(t *testing.T) {
-	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
 	t.Run("QueueFull", func(t *testing.T) {
 		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true, FallbackQueueSize: 1})
@@ -93,12 +93,51 @@ func TestInletReleaseDrops(t *testing.T) {
 	t.Run("Closed", func(t *testing.T) {
 		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 		writeFrom(t, client, a, "a1")
+		writeFrom(t, client, b, "b1") // Read after a1, as there is a single read loop
 		releaseInletConn(t, ln)
+		_ = acceptInletConn(t, ln) // So a1 has reached the fallback connection
 		if err := ln.Fallback().Close(); err != nil {
 			t.Fatalf("Close() = %v, want nil", err)
 		}
 		writeFrom(t, client, a, "a2")
-		waitInletStats(t, ln, InletStats{NoFallback: 1})
+		waitInletStats(t, ln, InletStats{NoFallback: 1, FallbackClosed: 1}) // a1 left unread, and a2
+	})
+}
+
+// TestInletConnClosed ensures the packets left unread on an inlet connection are dropped and counted
+// once it's closed by its handler or expires.
+func TestInletConnClosed(t *testing.T) {
+	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+
+	// queue writes packets of a and accepts the connection of a, then of b, once the packets of a are queued
+	queue := func(t *testing.T, client FromToPacketConn, ln PacketListener) MixedConn {
+		for _, data := range []string{"a1", "a2", "a3"} {
+			writeFrom(t, client, a, data)
+		}
+		writeFrom(t, client, b, "b1") // Read after those of a, as there is a single read loop
+		conn := acceptInletConn(t, ln)
+		_ = acceptInletConn(t, ln)
+		return conn
+	}
+
+	t.Run("Closed", func(t *testing.T) {
+		client, ln := inletTrunk(t, nil)
+		conn := queue(t, client, ln)
+		_ = conn.Close()
+		writeFrom(t, client, b, "b2") // The read loop deletes closed connections after reading
+		waitInletStats(t, ln, InletStats{ConnClosed: 3})
+	})
+
+	t.Run("Expired", func(t *testing.T) {
+		const idle = 50 * time.Millisecond
+		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: idle})
+		conn := queue(t, client, ln)
+		time.Sleep(2 * idle)
+		if !isClosedInletConn(conn) {
+			t.Fatalf("connection open after the idle timeout, want closed")
+		}
+		writeFrom(t, client, b, "b2")
+		waitInletStats(t, ln, InletStats{ConnClosed: 4}) // b1 too, as the connection of b has expired as well
 	})
 }
 

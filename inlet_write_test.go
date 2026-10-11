@@ -243,3 +243,26 @@ func TestInletFallbackWriteOther(t *testing.T) {
 		t.Errorf("ReadFromTo() = from %v to %v, %v, want from %s to %s, nil", src, dst, err, local, c)
 	}
 }
+
+// TestInletWriteUnsent ensures the packets an inlet has taken for writing, but hasn't written when it closes,
+// are dropped and counted, whether they're being written or queued.
+func TestInletWriteUnsent(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, server := BufferedTrunk(1, nil, nil) // Holds one packet, the next one blocks the write loop
+	t.Cleanup(func() { _ = client.Close() })
+	ln := Inlet(server, &InletConfig{WriteQueueSize: 1, WriteTimeout: -1})
+	writeFrom(t, client, a, "a1")
+	conn := acceptInletConn(t, ln)
+
+	for _, data := range []string{"w1", "w2", "w3"} { // Into the trunk, then blocking the write loop, then queued
+		if _, err := conn.Write([]byte(data)); err != nil {
+			t.Fatalf("Write(%q) = %v, want nil", data, err)
+		}
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close() = %v, want nil", err)
+	}
+	if got, want := ln.Stats(), (InletStats{WriteUnsent: 2}); got != want {
+		t.Errorf("Stats() = %+v, want %+v", got, want)
+	}
+}

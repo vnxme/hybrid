@@ -50,6 +50,9 @@ func (i *inlet) send(b []byte, c *inletConn, to net.Addr, done <-chan struct{}, 
 	}
 	select {
 	case i.wrChan <- pkt:
+		if isClosedChan(i.done) { // Closed while queuing, maybe after the write loop has drained the queue
+			i.drainWrites()
+		}
 		if c != nil {
 			c.touch()
 		}
@@ -77,6 +80,12 @@ func (i *inlet) writeLoop() {
 			i.drainWrites()
 			return
 		case pkt := <-i.wrChan:
+			if isClosedChan(i.done) { // Picked at random, as the inlet has closed meanwhile
+				putBuf(pkt.ref)
+				i.drops.writeUnsent.Add(1)
+				i.drainWrites()
+				return
+			}
 			if !i.write(pkt) {
 				i.drainWrites()
 				return
@@ -117,6 +126,7 @@ func (i *inlet) write(pkt *inletPacket) bool {
 				_ = i.Close()
 			}()
 		}
+		i.drops.writeUnsent.Add(1)
 		return false
 	case errors.As(err, &nrr) && nrr.Timeout():
 		i.drops.writeTimedOut.Add(1)
@@ -127,12 +137,13 @@ func (i *inlet) write(pkt *inletPacket) bool {
 	return true
 }
 
-// drainWrites releases the buffers of the packets left in the write queue.
+// drainWrites drops and counts the packets left in the write queue, which their writers took for written.
 func (i *inlet) drainWrites() {
 	for {
 		select {
 		case pkt := <-i.wrChan:
 			putBuf(pkt.ref)
+			i.drops.writeUnsent.Add(1)
 		default:
 			return
 		}
