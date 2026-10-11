@@ -162,7 +162,8 @@ func TestNeedPacketInfoUDPConn(t *testing.T) {
 	})
 }
 
-// TestPacketInfoUDPConn ensures nil is rejected, and a FromToUDPConn is returned as is.
+// TestPacketInfoUDPConn ensures nil is rejected, a FromToUDPConn is returned as is, and unwrapping gives
+// the UDPConn wrapped.
 func TestPacketInfoUDPConn(t *testing.T) {
 	t.Run("Nil", func(t *testing.T) {
 		for _, conn := range []UDPConn{nil, (*net.UDPConn)(nil)} {
@@ -189,6 +190,9 @@ func TestPacketInfoUDPConn(t *testing.T) {
 		}
 		if got, err := PacketInfoUDPConn(c); got != c || err != nil {
 			t.Errorf("PacketInfoUDPConn() of a wrapped conn = %v, %v, want %v, nil", got, err, c)
+		}
+		if got := c.(PacketConnWrapper).Unwrap(); got != pc {
+			t.Errorf("Unwrap() = %T, want the %T given", got, pc)
 		}
 	})
 }

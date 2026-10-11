@@ -116,6 +116,10 @@ func PacketInfoUDPConn(conn UDPConn) (FromToUDPConn, error) {
 	}, nil
 }
 
+// Unwrap returns the UDPConn given to PacketInfoUDPConn. Packet info stays enabled on its socket,
+// while reads that don't ask for control messages ignore it.
+func (u *packetInfoUDPConn) Unwrap() PacketConn { return u.UDPConn }
+
 // network returns udp4 or udp6 for an IPv4-only or IPv6-only connection, or udp for a dual-stack one.
 func (u *packetInfoUDPConn) network() string {
 	switch {
@@ -252,7 +256,8 @@ func isNilUDPConn(conn UDPConn) bool {
 
 // Interface guards
 var (
-	_ FromToUDPConn = (*packetInfoUDPConn)(nil)
+	_ FromToUDPConn     = (*packetInfoUDPConn)(nil)
+	_ PacketConnWrapper = (*packetInfoUDPConn)(nil)
 
 	_ UDPConn = (*net.UDPConn)(nil)
 )
