@@ -219,6 +219,10 @@ type InletStats struct {
 type InletListener interface {
 	PacketListener
 
+	// Unwrap stops the inlet like Close does, but leaves the underlying PacketConn open, and returns it
+	// as given to Inlet, with no deadlines.
+	PacketConnWrapper
+
 	// Fallback returns the fallback connection of the inlet, or nil if it has none.
 	Fallback() PacketConn
 
@@ -230,7 +234,8 @@ type InletListener interface {
 type inlet struct {
 	start time.Time // When the inlet started, for its clock
 
-	pc  FromToPacketConn // Underlying PacketConn
+	raw PacketConn       // Underlying PacketConn, as given to Inlet
+	pc  FromToPacketConn // The same, wrapped as a FromToPacketConn if it isn't one
 	udp FromToUDPConn    // The same as pc if it's a FromToUDPConn, which reports destination addresses
 	fb  *inletFallback   // Fallback connection, if any
 
@@ -274,6 +279,7 @@ func Inlet(pc PacketConn, config *InletConfig) InletListener {
 	cfg := config.resolve()
 
 	i := &inlet{
+		raw:    pc,
 		pc:     PacketToFromToPacketConn(pc, cfg.packetInfo),
 		acChan: make(chan *inletConn, cfg.acceptQueueSize),
 		wrChan: make(chan *inletPacket, cfg.writeQueueSize),
@@ -348,12 +354,15 @@ func (i *inlet) Close() (err error) {
 	return i.closeWith(true)
 }
 
-// Unwrap returns the underlying PacketConn.
+// Unwrap stops the inlet and returns the underlying PacketConn, as given to Inlet.
 func (i *inlet) Unwrap() PacketConn {
 	// Stop all internal loops, but keep the underlying PacketConn open,
 	// unless it has been closed otherwise. Ignore errors if any.
 	_ = i.closeWith(false)
-	return i.pc
+
+	// Clear the deadlines that have interrupted the loops, which have returned by now
+	_ = i.raw.SetDeadline(time.Time{})
+	return i.raw
 }
 
 func (i *inlet) closeWith(closeUnderlying bool) (err error) {
@@ -417,7 +426,6 @@ const (
 
 // Interface guards
 var (
-	_ PacketConnWrapper = (*inlet)(nil)
-	_ InletListener     = (*inlet)(nil)
-	_ PacketConn        = (*inletFallback)(nil)
+	_ InletListener = (*inlet)(nil)
+	_ PacketConn    = (*inletFallback)(nil)
 )

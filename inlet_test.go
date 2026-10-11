@@ -463,16 +463,46 @@ func TestInletClose(t *testing.T) {
 func TestInletUnwrap(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := inletTrunk(t, nil)
-	pc := ln.(PacketConnWrapper).Unwrap()
+	pc := ln.Unwrap()
 	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("Accept() = %v, want net.ErrClosed", err)
 	}
 
 	writeFrom(t, client, a, "a1") // Read by nothing but the caller of Unwrap
-	_ = pc.SetDeadline(time.Now().Add(time.Second))
-	b := make([]byte, 8)
+	b := make([]byte, 8)          // Read with no deadline set, which a deadline in the past would fail
 	if n, addr, err := pc.ReadFrom(b); err != nil || string(b[:n]) != "a1" || addr.String() != a.String() {
 		t.Errorf("ReadFrom() of the unwrapped connection = %q, %v, %v, want %q, %s, nil", b[:n], addr, err, "a1", a)
+	}
+}
+
+// TestInletUnwrapUDP ensures Unwrap returns the UDP connection given to Inlet, rather than the wrapper
+// the inlet reads and writes through, with packet info or without.
+func TestInletUnwrapUDP(t *testing.T) {
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		t.Skipf("not supported on %s", runtime.GOOS)
+	}
+
+	for _, info := range []bool{true, false} {
+		t.Run(map[bool]string{true: "PacketInfo", false: "NoPacketInfo"}[info], func(t *testing.T) {
+			pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = pc.Close() }()
+			if got := Inlet(pc, &InletConfig{PacketInfo: info}).Unwrap(); got != pc {
+				t.Errorf("Unwrap() = %T, want the %T given", got, pc)
+			}
+
+			// Write to itself and read back with no deadlines set, which deadlines in the past would fail
+			if _, err := pc.WriteTo([]byte("x"), pc.LocalAddr()); err != nil {
+				t.Fatalf("WriteTo() = %v, want nil", err)
+			}
+			b := make([]byte, 8)
+			if n, _, err := pc.ReadFrom(b); err != nil || string(b[:n]) != "x" {
+				t.Errorf("ReadFrom() = %q, %v, want %q, nil", b[:n], err, "x")
+			}
+		})
 	}
 }
 
