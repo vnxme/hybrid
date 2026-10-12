@@ -140,7 +140,7 @@ func (i *inlet) sweepLoop() {
 
 			i.swept.Lock()
 			for c := range i.swept.m {
-				if clock-c.last.Load() >= int64(i.cfg.idleTimeout) {
+				if clock-c.touched.Load() >= int64(i.cfg.idleTimeout) {
 					delete(i.swept.m, c)
 					c.expire()
 				}
@@ -269,7 +269,7 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 		copy(pkt.buf, data)
 	}
 
-	c.mu.Lock() // Keeps the packets of a flow in order while it's being released
+	c.releaseMu.Lock() // Keeps the packets of a flow in order while it's being released
 	if c.released.Load() {
 		i.toFallback(pkt)
 	} else {
@@ -280,7 +280,7 @@ func (i *inlet) route(data []byte, p *inletPacketInfo) {
 			i.drops.connQueueFull.Add(1)
 		}
 	}
-	c.mu.Unlock()
+	c.releaseMu.Unlock()
 }
 
 // toFallback passes a packet of a released flow to the fallback connection, or drops it if there is none.
@@ -308,7 +308,7 @@ func (ic *inletConnBase) receive(b []byte) (int, *inletConn, error) {
 	switch {
 	case isClosedChan(ic.localDone):
 		return 0, nil, io.ErrClosedPipe
-	case isClosedChan(ic.parent.done) && len(ic.rdRx) == 0:
+	case isClosedChan(ic.inlet.done) && len(ic.rdRx) == 0:
 		return 0, nil, io.EOF
 	case isClosedChan(ic.rdDeadline.Wait()):
 		return 0, nil, os.ErrDeadlineExceeded
@@ -319,7 +319,7 @@ func (ic *inletConnBase) receive(b []byte) (int, *inletConn, error) {
 	switch {
 	case isClosedChan(ic.localDone):
 		return 0, nil, io.ErrClosedPipe
-	case isClosedChan(ic.parent.done) && len(ic.rdRx) == 0:
+	case isClosedChan(ic.inlet.done) && len(ic.rdRx) == 0:
 		return 0, nil, io.EOF
 	case isClosedChan(ic.rdDeadline.Wait()):
 		return 0, nil, os.ErrDeadlineExceeded
@@ -330,7 +330,7 @@ func (ic *inletConnBase) receive(b []byte) (int, *inletConn, error) {
 	case pkt = <-ic.rdRx:
 	case <-ic.localDone:
 		return 0, nil, io.ErrClosedPipe
-	case <-ic.parent.done:
+	case <-ic.inlet.done:
 		select {
 		case pkt = <-ic.rdRx:
 		default:

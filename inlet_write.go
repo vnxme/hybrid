@@ -38,7 +38,7 @@ func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int
 	switch {
 	case isClosedChan(ic.localDone):
 		return 0, io.ErrClosedPipe
-	case isClosedChan(ic.parent.done):
+	case isClosedChan(ic.inlet.done):
 		return 0, io.ErrClosedPipe
 	case isClosedChan(ic.wrDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
@@ -50,9 +50,9 @@ func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int
 		copy(pkt.buf, b)
 	}
 	select {
-	case ic.parent.writeQueue <- pkt:
-		if isClosedChan(ic.parent.done) { // Closed while queuing, maybe after the write loop has drained the queue
-			ic.parent.drainWrites()
+	case ic.inlet.writeQueue <- pkt:
+		if isClosedChan(ic.inlet.done) { // Closed while queuing, maybe after the write loop has drained the queue
+			ic.inlet.drainWrites()
 		}
 		if c != nil {
 			c.touch()
@@ -61,7 +61,7 @@ func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int
 	case <-ic.localDone:
 		putBuf(pkt.ref)
 		return 0, io.ErrClosedPipe
-	case <-ic.parent.done:
+	case <-ic.inlet.done:
 		putBuf(pkt.ref)
 		return 0, io.ErrClosedPipe
 	case <-ic.wrDeadline.Wait():

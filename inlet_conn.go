@@ -26,7 +26,7 @@ import (
 // inletConnBase is what reading and writing a connection of an inlet needs, embedded in inletConn
 // and inletFallback.
 type inletConnBase struct {
-	parent    *inlet
+	inlet     *inlet
 	rdRx      chan *inletPacket // Packets waiting to be read
 	localDone chan struct{}     // Closed once the connection is closed
 
@@ -54,10 +54,10 @@ type inletConn struct {
 
 	inletConnBase // With the packets of the flow in rdRx, unless it's been released
 
-	last       atomic.Int64 // The clock of the inlet at the latest packet read or written
+	touched    atomic.Int64 // The clock of the inlet at the latest packet read or written
 	localIfIdx atomic.Int64 // The latest one, used for replies
 
-	mu sync.Mutex // Keeps the packets of the flow in order while it's being released
+	releaseMu sync.Mutex // Keeps the packets of the flow in order while it's being released
 
 	released atomic.Bool // Set before closing localDone, if the flow goes on to the fallback connection
 }
@@ -70,7 +70,7 @@ func (ic *inletConn) ReadFrom(b []byte) (int, net.Addr, error) {
 func (ic *inletConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, src, dst, idx, err := ic.readFromTo(b)
 	if err != nil && err != io.EOF && !errors.Is(err, io.ErrClosedPipe) {
-		err = &net.OpError{Op: "read", Net: ic.parent.pc.LocalAddr().Network(), Err: err, Source: ic.LocalAddr(), Addr: ic.remoteAddr}
+		err = &net.OpError{Op: "read", Net: ic.inlet.pc.LocalAddr().Network(), Err: err, Source: ic.LocalAddr(), Addr: ic.remoteAddr}
 	}
 	return n, src, dst, idx, err
 }
@@ -90,7 +90,7 @@ func (ic *inletConn) WriteTo(b []byte, _ net.Addr) (int, error) {
 func (ic *inletConn) WriteToFrom(b []byte, _, _ net.Addr, _ int) (int, error) {
 	n, err := ic.send(b, ic, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx())
 	if err != nil && !errors.Is(err, io.ErrClosedPipe) {
-		err = &net.OpError{Op: "write", Net: ic.parent.pc.LocalAddr().Network(), Err: err, Source: ic.LocalAddr(), Addr: ic.remoteAddr}
+		err = &net.OpError{Op: "write", Net: ic.inlet.pc.LocalAddr().Network(), Err: err, Source: ic.LocalAddr(), Addr: ic.remoteAddr}
 	}
 	return n, err
 }
@@ -100,7 +100,7 @@ func (ic *inletConn) Close() error {
 	if !ic.closeLocal() {
 		return net.ErrClosed
 	}
-	ic.parent.deleteConnection(ic)
+	ic.inlet.deleteConnection(ic)
 	return nil
 }
 
@@ -108,8 +108,8 @@ func (ic *inletConn) Close() error {
 // queued and all the later packets of the flow go there, or are dropped if the inlet has no fallback
 // connection. The connection is closed, but its flow goes on until it's idle.
 func (ic *inletConn) Release() error {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
+	ic.releaseMu.Lock()
+	defer ic.releaseMu.Unlock()
 	if isClosedChan(ic.localDone) {
 		return net.ErrClosed
 	}
@@ -118,7 +118,7 @@ func (ic *inletConn) Release() error {
 	for {
 		select {
 		case pkt := <-ic.rdRx:
-			ic.parent.toFallback(pkt)
+			ic.inlet.toFallback(pkt)
 		default:
 			ic.closeLocal()
 			return nil
@@ -127,13 +127,13 @@ func (ic *inletConn) Release() error {
 }
 
 // touch records the activity of the flow of the connection, at the time of the clock of the inlet.
-func (ic *inletConn) touch() { ic.last.Store(ic.parent.clock.Load()) }
+func (ic *inletConn) touch() { ic.touched.Store(ic.inlet.clock.Load()) }
 
 // expire ends the flow of a connection that has been idle: it closes the connection, unless it's been
 // closed already, and reports the flow for deletion, even if it's been released.
 func (ic *inletConn) expire() {
 	ic.closeLocal()
-	ic.parent.deleteConnection(ic)
+	ic.inlet.deleteConnection(ic)
 }
 
 // ended reports whether the flow of the connection has ended, i.e. it's been closed without being released.
@@ -143,7 +143,7 @@ func (ic *inletConn) LocalIfIdx() int { return int(ic.localIfIdx.Load()) }
 
 func (ic *inletConn) LocalAddr() net.Addr {
 	if ic.localAddr == nil {
-		return ic.parent.pc.LocalAddr()
+		return ic.inlet.pc.LocalAddr()
 	}
 	return ic.localAddr
 }
@@ -151,7 +151,7 @@ func (ic *inletConn) LocalAddr() net.Addr {
 func (ic *inletConn) RemoteAddr() net.Addr { return ic.remoteAddr }
 
 func (ic *inletConn) SetDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
 		return io.ErrClosedPipe
 	}
 	ic.rdDeadline.Set(t)
@@ -160,7 +160,7 @@ func (ic *inletConn) SetDeadline(t time.Time) error {
 }
 
 func (ic *inletConn) SetReadDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
 		return io.ErrClosedPipe
 	}
 	ic.rdDeadline.Set(t)
@@ -168,7 +168,7 @@ func (ic *inletConn) SetReadDeadline(t time.Time) error {
 }
 
 func (ic *inletConn) SetWriteDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
 		return io.ErrClosedPipe
 	}
 	ic.wrDeadline.Set(t)
@@ -188,7 +188,7 @@ func (i *inlet) newFallback() *inletFallback {
 // newConnBase returns the base of a connection of the inlet, with a read queue of the given size.
 func (i *inlet) newConnBase(queueSize int) inletConnBase {
 	return inletConnBase{
-		parent:     i,
+		inlet:      i,
 		rdRx:       make(chan *inletPacket, queueSize),
 		localDone:  make(chan struct{}),
 		rdDeadline: makeDeadline(noHook{}),
@@ -225,7 +225,7 @@ func (ic *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int,
 	if dst == nil {
 		return 0, ic.opError("write", nil, errMissingAddress)
 	}
-	c := ic.parent.lookupRemote(dst)
+	c := ic.inlet.lookupRemote(dst)
 	if src == nil && c != nil {
 		src, idx = c.localAddr, c.LocalIfIdx()
 	}
@@ -250,17 +250,17 @@ func (ic *inletFallback) discard() {
 		select {
 		case pkt := <-ic.rdRx:
 			putBuf(pkt.ref)
-			ic.parent.drops.fallbackClosed.Add(1)
+			ic.inlet.drops.fallbackClosed.Add(1)
 		default:
 			return
 		}
 	}
 }
 
-func (ic *inletFallback) LocalAddr() net.Addr { return ic.parent.pc.LocalAddr() }
+func (ic *inletFallback) LocalAddr() net.Addr { return ic.inlet.pc.LocalAddr() }
 
 func (ic *inletFallback) SetDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
 		return io.ErrClosedPipe
 	}
 	ic.rdDeadline.Set(t)
@@ -269,7 +269,7 @@ func (ic *inletFallback) SetDeadline(t time.Time) error {
 }
 
 func (ic *inletFallback) SetReadDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
 		return io.ErrClosedPipe
 	}
 	ic.rdDeadline.Set(t)
@@ -277,7 +277,7 @@ func (ic *inletFallback) SetReadDeadline(t time.Time) error {
 }
 
 func (ic *inletFallback) SetWriteDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
 		return io.ErrClosedPipe
 	}
 	ic.wrDeadline.Set(t)
