@@ -29,11 +29,12 @@ func (i *inlet) lookupRemote(addr net.Addr) *inletConn {
 	return i.remotes.m[remoteKey(addr)]
 }
 
-// send copies b into a packet for the write loop to write for the flow of c, or to the address to if c
-// is nil, and returns once the packet is queued. If the write queue is full, it waits for room, and fails
-// if done is closed, the inlet closes or the deadline d passes first. As the packet is written later,
-// an error of the underlying connection can't be returned: the write loop counts it.
-func (i *inlet) send(b []byte, c *inletConn, to net.Addr, done <-chan struct{}, d *deadline[noHook]) (int, error) {
+// send copies b into a packet for the write loop to write to dst, from src and through idx if given,
+// and returns once the packet is queued, keeping the flow of c going if c isn't nil. If the write queue
+// is full, it waits for room, and fails if done is closed, the inlet closes or the deadline d passes first.
+// As the packet is written later, an error of the underlying connection can't be returned: the write loop
+// counts it.
+func (i *inlet) send(b []byte, c *inletConn, dst, src net.Addr, idx int, done <-chan struct{}, d *deadline[noHook]) (int, error) {
 	switch {
 	case isClosedChan(done):
 		return 0, io.ErrClosedPipe
@@ -43,7 +44,7 @@ func (i *inlet) send(b []byte, c *inletConn, to net.Addr, done <-chan struct{}, 
 		return 0, os.ErrDeadlineExceeded
 	}
 
-	pkt := &inletPacket{conn: c, dst: to}
+	pkt := &inletPacket{dst: dst, src: src, idx: idx}
 	if len(b) > 0 {
 		pkt.buf, pkt.ref = getBuf(len(b))
 		copy(pkt.buf, b)
@@ -94,23 +95,18 @@ func (i *inlet) writeLoop() {
 	}
 }
 
-// write writes a packet to the underlying connection, with the addresses of its flow if it has one,
+// write writes a packet to the underlying connection, with the addresses it has been queued with,
 // and drops it if the write times out or fails. It reports false if the underlying connection is closed,
 // and closes the inlet then.
 func (i *inlet) write(pkt *inletPacket) bool {
 	defer putBuf(pkt.ref)
-
-	remote, local, idx := pkt.dst, net.Addr(nil), 0
-	if pkt.conn != nil {
-		remote, local, idx = pkt.conn.remoteAddr, pkt.conn.localAddr, pkt.conn.LocalIfIdx()
-	}
 
 	var err error
 	if i.cfg.writeTimeout > 0 { // The write loop is the only user of the write deadline of the underlying connection
 		err = i.pc.SetWriteDeadline(time.Now().Add(i.cfg.writeTimeout))
 	}
 	if err == nil {
-		_, err = i.pc.WriteToFrom(pkt.buf, remote, local, idx)
+		_, err = i.pc.WriteToFrom(pkt.buf, pkt.dst, pkt.src, pkt.idx)
 	}
 
 	var nrr net.Error

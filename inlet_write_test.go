@@ -69,6 +69,53 @@ func TestInletFallbackWrite(t *testing.T) {
 	}
 }
 
+// TestInletFallbackFromTo ensures the fallback connection reads the local address and interface index
+// of the flow of each packet, and writes from a local address and through an interface given,
+// or from those of the latest flow of the remote address if none is given.
+func TestInletFallbackFromTo(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
+	other := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 2), Port: 53}
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	if _, err := client.WriteToFrom([]byte("a1"), local, a, 3); err != nil {
+		t.Fatal(err)
+	}
+	releaseInletConn(t, ln)
+	fb := ln.Fallback().(FromToPacketConn)
+	_ = fb.SetReadDeadline(time.Now().Add(time.Second))
+	b := make([]byte, 8)
+	if n, src, dst, idx, err := fb.ReadFromTo(b); err != nil || string(b[:n]) != "a1" ||
+		src.String() != a.String() || dst.String() != local.String() || idx != 3 {
+		t.Fatalf("ReadFromTo() = %q from %v to %v through %d, %v, want %q from %s to %s through 3, nil",
+			b[:n], src, dst, idx, err, "a1", a, local)
+	}
+
+	for _, test := range []struct {
+		data string
+		src  net.Addr
+		idx  int
+		want net.Addr // Local address the client sees the packet from
+		wIdx int
+	}{
+		{"x", nil, 0, local, 3}, // From the flow of a
+		{"y", other, 7, other, 7},
+	} {
+		if _, err := fb.WriteToFrom([]byte(test.data), a, test.src, test.idx); err != nil {
+			t.Fatalf("WriteToFrom(%q) = %v, want nil", test.data, err)
+		}
+		_ = client.SetReadDeadline(time.Now().Add(time.Second))
+		n, src, dst, idx, err := client.ReadFromTo(b)
+		if err != nil || string(b[:n]) != test.data || src.String() != test.want.String() || dst.String() != a.String() || idx != test.wIdx {
+			t.Errorf("ReadFromTo() = %q from %v to %v through %d, %v, want %q from %s to %s through %d, nil",
+				b[:n], src, dst, idx, err, test.data, test.want, a, test.wIdx)
+		}
+	}
+
+	if _, err := fb.WriteToFrom([]byte("z"), nil, local, 0); err == nil {
+		t.Errorf("WriteToFrom() to nil = nil, want an error")
+	}
+}
+
 // TestInletWriteCopies ensures a write returns once its packet is queued, with a copy of the bytes given.
 func TestInletWriteCopies(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}

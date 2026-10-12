@@ -125,7 +125,7 @@ func (ic *inletConn) WriteTo(b []byte, _ net.Addr) (int, error) {
 }
 
 func (ic *inletConn) WriteToFrom(b []byte, _, _ net.Addr, _ int) (int, error) {
-	n, err := ic.parent.send(b, ic, nil, ic.localDone, &ic.wrDeadline)
+	n, err := ic.parent.send(b, ic, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), ic.localDone, &ic.wrDeadline)
 	if err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		err = &net.OpError{Op: "write", Net: ic.parent.pc.LocalAddr().Network(), Err: err, Source: ic.LocalAddr(), Addr: ic.remoteAddr}
 	}
@@ -249,21 +249,39 @@ func (i *inlet) newFallback() *inletFallback {
 
 // ReadFrom reads a packet of a released flow, and returns the remote address of the flow.
 func (d *inletFallback) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, c, err := receive(b, d.rdRx, d.localDone, d.parent.done, &d.rdMu, &d.rdDeadline)
-	if err != nil {
-		return 0, nil, d.opError("read", nil, err)
-	}
-	return n, c.remoteAddr, nil
+	n, src, _, _, err := d.ReadFromTo(b)
+	return n, src, err
 }
 
-// WriteTo writes a packet to addr, from the local address and through the interface of the latest flow
-// of addr, or from those the system chooses if the inlet hasn't seen addr.
+// ReadFromTo reads a packet of a released flow, and returns its remote address, the local address
+// it came to, and the latest interface index of its flow.
+func (d *inletFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
+	n, c, err := receive(b, d.rdRx, d.localDone, d.parent.done, &d.rdMu, &d.rdDeadline)
+	if err != nil {
+		return 0, nil, nil, 0, d.opError("read", nil, err)
+	}
+	return n, c.remoteAddr, c.localAddr, c.LocalIfIdx(), nil
+}
+
+// WriteTo writes a packet to addr, as WriteToFrom does with no local address.
 func (d *inletFallback) WriteTo(b []byte, addr net.Addr) (int, error) {
-	if addr == nil {
+	return d.WriteToFrom(b, addr, nil, 0)
+}
+
+// WriteToFrom writes a packet to dst from src and through the interface idx. If src is nil, it writes
+// from the local address and through the interface of the latest flow of dst, or from those the system
+// chooses if the inlet hasn't seen dst. A write keeps the flow of dst going, but doesn't start one,
+// so a reply from a dst without a flow is queued for Accept, rather than read by the fallback connection.
+func (d *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
+	if dst == nil {
 		return 0, d.opError("write", nil, errMissingAddress)
 	}
-	n, err := d.parent.send(b, d.parent.lookupRemote(addr), addr, d.localDone, &d.wrDeadline)
-	return n, d.opError("write", addr, err)
+	c := d.parent.lookupRemote(dst)
+	if src == nil && c != nil {
+		src, idx = c.localAddr, c.LocalIfIdx()
+	}
+	n, err := d.parent.send(b, c, dst, src, idx, d.localDone, &d.wrDeadline)
+	return n, d.opError("write", dst, err)
 }
 
 // Close closes the fallback connection, so that the packets queued and those of released flows are dropped
@@ -327,3 +345,10 @@ func (d *inletFallback) opError(op string, addr net.Addr, err error) error {
 }
 
 var errMissingAddress = errors.New("hybrid: missing address")
+
+// Interface guards
+var (
+	_ FromToPacketConn = (*inletConn)(nil)
+	_ FromToPacketConn = (*inletFallback)(nil)
+	_ MixedConn        = (*inletConn)(nil)
+)

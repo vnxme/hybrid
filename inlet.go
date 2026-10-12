@@ -49,7 +49,9 @@ import (
 // packets of the flow go to the fallback connection if there is one, or are dropped if there isn't.
 // A flow ends when its connection is closed, by its handler or by its idle timeout, and its next
 // packet starts a new flow straight away: UDP has nothing like TCP's TIME_WAIT and RST to tell a late
-// packet of an old flow from the first packet of a new one.
+// packet of an old flow from the first packet of a new one. Only packets read start flows: a write
+// keeps the flow of its remote address going, but a reply to a remote address without one, e.g. written
+// by the fallback connection, starts a new flow, queued for Accept like any other.
 //
 // Deadlines. Inlet connections and the fallback connection have read and write deadlines of their own,
 // like any net.Conn or net.PacketConn. Each flow has an idle timeout, which every packet read or written
@@ -101,7 +103,8 @@ type InletConfig struct {
 	// IdleTimeout is how long a flow may go without a packet read or written before it ends,
 	// [DefaultInletIdleTimeout] by default: its inlet connection is closed, and its next packet starts
 	// a new flow. A negative timeout keeps every flow until its inlet connection is closed, and a released
-	// flow as long as the inlet is open.
+	// flow as long as the inlet is open. As the next packet of an expired released flow goes to Accept
+	// again, the timeout should be no shorter than that of the application serving the fallback connection.
 	IdleTimeout time.Duration
 
 	// MaxFlows is the maximum number of flows, [DefaultInletMaxFlows] by default.
@@ -188,10 +191,12 @@ func (c *InletConfig) resolve() inletConfig {
 // inletPacket is a packet queued for reading from an inlet connection or from the fallback connection,
 // or for writing by the write loop.
 type inletPacket struct {
-	conn *inletConn // The inlet connection of the flow of the packet, if any
-	dst  net.Addr   // The address to write to, if there is no conn
+	conn *inletConn // The inlet connection of the flow of a packet read
+	dst  net.Addr   // The remote address to write a packet to
+	src  net.Addr   // The local address to write a packet from, if any
 	ref  *[]byte    // Reference to the pooled buffer of buf, if any
 	buf  []byte
+	idx  int // The interface index to write a packet through, if any
 }
 
 // InletStats counts the packets an inlet has dropped, by reason.
@@ -411,5 +416,4 @@ const (
 // Interface guards
 var (
 	_ InletListener = (*inlet)(nil)
-	_ PacketConn    = (*inletFallback)(nil)
 )
