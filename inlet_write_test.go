@@ -124,7 +124,7 @@ func TestInletWriteCopies(t *testing.T) {
 	conn := acceptInletConn(t, ln)
 
 	b := []byte("abc")
-	if n, err := conn.Write(b); n != len(b) || err != nil {
+	if n, err := conn.WriteTo(b, conn.RemoteAddr()); n != len(b) || err != nil {
 		t.Fatalf("Write() = %d, %v, want %d, nil", n, err, len(b))
 	}
 	copy(b, "xyz") // As the caller may reuse the buffer once Write returns
@@ -147,12 +147,12 @@ func TestInletWriteQueueFull(t *testing.T) {
 	conn := acceptInletConn(t, ln)
 
 	for _, data := range []string{"w1", "w2", "w3"} { // Into the trunk, then blocking the write loop, then queued
-		if _, err := conn.Write([]byte(data)); err != nil {
+		if _, err := conn.WriteTo([]byte(data), conn.RemoteAddr()); err != nil {
 			t.Fatalf("Write(%q) = %v, want nil", data, err)
 		}
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(50 * time.Millisecond))
-	if _, err := conn.Write([]byte("w4")); !errors.Is(err, os.ErrDeadlineExceeded) {
+	if _, err := conn.WriteTo([]byte("w4"), conn.RemoteAddr()); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("Write() to a full queue = %v, want os.ErrDeadlineExceeded", err)
 	}
 
@@ -183,13 +183,13 @@ func TestInletWriteTimeout(t *testing.T) {
 	conn := acceptInletConn(t, ln)
 
 	for _, data := range []string{"w1", "w2", "w3"} { // Only the first one fits into the trunk
-		if _, err := conn.Write([]byte(data)); err != nil {
+		if _, err := conn.WriteTo([]byte(data), conn.RemoteAddr()); err != nil {
 			t.Fatalf("Write(%q) = %v, want nil", data, err)
 		}
 	}
 	waitInletStats(t, ln, InletStats{WriteTimedOut: 2})
 
-	if _, err := conn.Write([]byte("w4")); err != nil {
+	if _, err := conn.WriteTo([]byte("w4"), conn.RemoteAddr()); err != nil {
 		t.Fatal(err)
 	}
 	var got []string
@@ -302,7 +302,7 @@ func TestInletWriteUnsent(t *testing.T) {
 	conn := acceptInletConn(t, ln)
 
 	for _, data := range []string{"w1", "w2", "w3"} { // Into the trunk, then blocking the write loop, then queued
-		if _, err := conn.Write([]byte(data)); err != nil {
+		if _, err := conn.WriteTo([]byte(data), conn.RemoteAddr()); err != nil {
 			t.Fatalf("Write(%q) = %v, want nil", data, err)
 		}
 	}

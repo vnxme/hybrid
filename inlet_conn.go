@@ -92,11 +92,6 @@ type inletConn struct {
 	released atomic.Bool // Set before closing localDone, if the flow goes on to the fallback connection
 }
 
-func (ic *inletConn) Read(b []byte) (int, error) {
-	n, _, err := ic.ReadFrom(b)
-	return n, err
-}
-
 func (ic *inletConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	n, addr, _, _, err := ic.ReadFromTo(b)
 	return n, addr, err
@@ -117,8 +112,6 @@ func (ic *inletConn) readFromTo(b []byte) (int, net.Addr, net.Addr, int, error) 
 	}
 	return n, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), nil
 }
-
-func (ic *inletConn) Write(b []byte) (int, error) { return ic.WriteTo(b, ic.remoteAddr) }
 
 func (ic *inletConn) WriteTo(b []byte, _ net.Addr) (int, error) {
 	return ic.WriteToFrom(b, nil, nil, 0)
@@ -348,7 +341,6 @@ var errMissingAddress = errors.New("hybrid: missing address")
 
 // Interface guards
 var (
-	_ FromToPacketConn = (*inletConn)(nil)
 	_ FromToPacketConn = (*inletFallback)(nil)
-	_ MixedConn        = (*inletConn)(nil)
+	_ InletConn        = (*inletConn)(nil)
 )

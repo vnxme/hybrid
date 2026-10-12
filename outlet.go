@@ -429,5 +429,4 @@ const (
 // Interface guards
 var (
 	_ StreamConn = (*streamOutlet)(nil)
-	_ MixedConn  = (*inletConn)(nil)
 )

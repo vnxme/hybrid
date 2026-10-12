@@ -31,7 +31,7 @@ func TestInletRelease(t *testing.T) {
 	writeFrom(t, client, a, "a1")
 	writeFrom(t, client, a, "a2")
 	conn := acceptInletConn(t, ln)
-	if err := conn.(interface{ Release() error }).Release(); err != nil {
+	if err := conn.Release(); err != nil {
 		t.Fatalf("Release() = %v, want nil", err)
 	}
 	writeFrom(t, client, a, "a3")
@@ -43,10 +43,10 @@ func TestInletRelease(t *testing.T) {
 	if other := acceptInletConn(t, ln); other.RemoteAddr().String() != b.String() {
 		t.Errorf("RemoteAddr() = %s, want %s", other.RemoteAddr(), b)
 	}
-	if _, err := conn.Read(make([]byte, 8)); err == nil {
+	if _, _, err := conn.ReadFrom(make([]byte, 8)); err == nil {
 		t.Errorf("Read() after Release() = nil, want an error")
 	}
-	if err := conn.(interface{ Release() error }).Release(); err == nil {
+	if err := conn.Release(); err == nil {
 		t.Errorf("Release() again = nil, want an error")
 	}
 	if err := conn.Close(); err == nil {
@@ -110,7 +110,7 @@ func TestInletConnClosed(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
 	// queue writes packets of a and accepts the connection of a, then of b, once the packets of a are queued
-	queue := func(t *testing.T, client FromToPacketConn, ln PacketListener) MixedConn {
+	queue := func(t *testing.T, client FromToPacketConn, ln InletListener) InletConn {
 		for _, data := range []string{"a1", "a2", "a3"} {
 			writeFrom(t, client, a, data)
 		}
@@ -152,8 +152,8 @@ func TestInletDeadlines(t *testing.T) {
 	past := time.Now().Add(-time.Second)
 	b := make([]byte, 8)
 	for name, err := range map[string]error{
-		"Read":             func() error { _ = conn.SetDeadline(past); _, err := conn.Read(b); return err }(),
-		"Write":            func() error { _, err := conn.Write(b); return err }(),
+		"ReadFrom":         func() error { _ = conn.SetDeadline(past); _, _, err := conn.ReadFrom(b); return err }(),
+		"WriteTo":          func() error { _, err := conn.WriteTo(b, conn.RemoteAddr()); return err }(),
 		"FallbackReadFrom": func() error { _ = ln.Fallback().SetDeadline(past); _, _, err := ln.Fallback().ReadFrom(b); return err }(),
 		"FallbackWriteTo": func() error {
 			_ = ln.Fallback().SetWriteDeadline(past)

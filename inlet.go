@@ -220,22 +220,43 @@ type InletStats struct {
 	WriteUnsent   uint64 // The inlet closed, or its underlying connection did, before writing the packet
 }
 
-// InletListener is a PacketListener of an inlet, with its fallback connection and statistics.
+// InletConn is an inlet connection: a FromToPacketConn serving the packets of a single flow,
+// which it reads from and writes to its remote address.
+type InletConn interface {
+	FromToPacketConn
+
+	// RemoteAddr returns the remote address of the flow.
+	RemoteAddr() net.Addr
+
+	// Release hands the flow over to the fallback connection, e.g. as no handler recognizes it,
+	// and closes the inlet connection.
+	Release() error
+}
+
+// InletListener is a listener of an inlet, accepting inlet connections, with its fallback connection
+// and statistics.
 type InletListener interface {
-	PacketListener
+	// Accept waits for and returns the inlet connection of the next new flow.
+	Accept() (InletConn, error)
+
+	// Addr returns the local address of the underlying PacketConn.
+	Addr() net.Addr
+
+	// Close closes the underlying PacketConn and stops the inlet.
+	Close() error
 
 	// Unwrap stops the inlet like Close does, but leaves the underlying PacketConn open, and returns it
 	// as given to Inlet, with no deadlines.
 	PacketConnWrapper
 
 	// Fallback returns the fallback connection of the inlet, or nil if it has none.
-	Fallback() PacketConn
+	Fallback() FromToPacketConn
 
 	// Stats returns the numbers of packets dropped so far, by reason.
 	Stats() InletStats
 }
 
-// inlet implements PacketListener for any underlying PacketConn.
+// inlet implements InletListener for any underlying PacketConn.
 type inlet struct {
 	// Set by Inlet, and read-only afterwards, as is cfg
 	orig        PacketConn        // Underlying PacketConn, as given to Inlet
@@ -309,7 +330,7 @@ func Inlet(pc PacketConn, config *InletConfig) InletListener {
 }
 
 // Accept waits for and returns the next connection to the listener.
-func (i *inlet) Accept() (MixedConn, error) {
+func (i *inlet) Accept() (InletConn, error) {
 	if isClosedChan(i.done) {
 		return nil, net.ErrClosed
 	}
@@ -326,7 +347,7 @@ func (i *inlet) Accept() (MixedConn, error) {
 func (i *inlet) Addr() net.Addr { return i.pc.LocalAddr() }
 
 // Fallback returns the fallback connection of the inlet, or nil if it has none.
-func (i *inlet) Fallback() PacketConn {
+func (i *inlet) Fallback() FromToPacketConn {
 	if i.fallback == nil {
 		return nil // Not a nil *inletFallback, which wouldn't compare equal to nil
 	}

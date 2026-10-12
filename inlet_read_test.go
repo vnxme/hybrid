@@ -133,7 +133,7 @@ func TestInletUDPFlows(t *testing.T) {
 // or a full table, and that a dropped first packet doesn't create a flow.
 func TestInletDrops(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	setup := func(t *testing.T, config *InletConfig) (write func(src net.Addr, data string), ln PacketListener) {
+	setup := func(t *testing.T, config *InletConfig) (write func(src net.Addr, data string), ln InletListener) {
 		client, server := BufferedTrunk(16, nil, nil)
 		t.Cleanup(func() { _ = client.Close() })
 		ln = Inlet(server, config)
@@ -200,7 +200,7 @@ func TestInletDrops(t *testing.T) {
 }
 
 // isClosedInletConn reports whether an inlet connection has been closed, e.g. as its flow has expired.
-func isClosedInletConn(c MixedConn) bool { return c.SetDeadline(time.Time{}) != nil }
+func isClosedInletConn(c InletConn) bool { return c.SetDeadline(time.Time{}) != nil }
 
 // TestInletIdleTimeout ensures a flow ends once it's been idle for the idle timeout, released or not,
 // so that its next packet starts a new flow, while packets read or written keep it going.
@@ -253,7 +253,7 @@ func TestInletIdleTimeout(t *testing.T) {
 		}()
 		for range 12 {
 			time.Sleep(idle / 4)
-			if _, err := conn.Write([]byte("w")); err != nil {
+			if _, err := conn.WriteTo([]byte("w"), conn.RemoteAddr()); err != nil {
 				t.Fatalf("Write() = %v, want nil", err)
 			}
 		}
@@ -265,7 +265,7 @@ func TestInletIdleTimeout(t *testing.T) {
 	t.Run("Released", func(t *testing.T) {
 		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: idle, FallbackConn: true})
 		writeFrom(t, client, a, "a1")
-		if err := acceptInletConn(t, ln).(interface{ Release() error }).Release(); err != nil {
+		if err := acceptInletConn(t, ln).Release(); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(2 * idle)
@@ -330,11 +330,11 @@ func TestInletNegativeRead(t *testing.T) {
 }
 
 // checkInletPacket reads a packet from an inlet connection, and fails unless it's the one wanted.
-func checkInletPacket(t *testing.T, c MixedConn, want string) {
+func checkInletPacket(t *testing.T, c InletConn, want string) {
 	t.Helper()
 	b := make([]byte, len(want)+1)
 	_ = c.SetReadDeadline(time.Now().Add(time.Second))
-	if n, err := c.Read(b); err != nil || string(b[:n]) != want {
+	if n, _, err := c.ReadFrom(b); err != nil || string(b[:n]) != want {
 		t.Errorf("Read() = %d bytes, %v, want %d bytes, nil", n, err, len(want))
 	}
 }

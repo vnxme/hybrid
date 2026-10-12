@@ -97,7 +97,7 @@ func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize
 	chr, chw, done := make(chan int), make(chan int), make(chan struct{})
 	var stats InletStats // Of the inlet, once closed
 
-	connHandler := func(mc MixedConn, ln PacketListener, wg *sync.WaitGroup) {
+	connHandler := func(mc InletConn, ln InletListener, wg *sync.WaitGroup) {
 		defer wg.Done()
 
 		lAddr, rAddr := mc.LocalAddr(), mc.RemoteAddr()
@@ -261,9 +261,9 @@ func (a testAddr) Network() string { return "test" }
 func (a testAddr) String() string { return string(a) }
 
 // waitInletStats waits until the inlet has dropped the given numbers of packets, or fails.
-func waitInletStats(t *testing.T, ln PacketListener, want InletStats) {
+func waitInletStats(t *testing.T, ln InletListener, want InletStats) {
 	t.Helper()
-	s := ln.(interface{ Stats() InletStats })
+	s := ln
 	deadline := time.Now().Add(time.Second)
 	for got := s.Stats(); got != want; got = s.Stats() {
 		if time.Now().After(deadline) {
@@ -274,10 +274,10 @@ func waitInletStats(t *testing.T, ln PacketListener, want InletStats) {
 }
 
 // acceptInletConn accepts an inlet connection, or fails if there is none within a second.
-func acceptInletConn(t *testing.T, ln PacketListener) MixedConn {
+func acceptInletConn(t *testing.T, ln InletListener) InletConn {
 	t.Helper()
 	type result struct {
-		c   MixedConn
+		c   InletConn
 		err error
 	}
 	ch := make(chan result, 1)
@@ -299,21 +299,21 @@ func acceptInletConn(t *testing.T, ln PacketListener) MixedConn {
 
 // releaseInletConn accepts the next inlet connection and releases it, handing its flow over to the fallback
 // connection.
-func releaseInletConn(t *testing.T, ln PacketListener) {
+func releaseInletConn(t *testing.T, ln InletListener) {
 	t.Helper()
-	if err := acceptInletConn(t, ln).(interface{ Release() error }).Release(); err != nil {
+	if err := acceptInletConn(t, ln).Release(); err != nil {
 		t.Fatalf("Release() = %v, want nil", err)
 	}
 }
 
 // readInletConn returns the packets read from an inlet connection until none comes for a while.
-func readInletConn(t *testing.T, c MixedConn) []string {
+func readInletConn(t *testing.T, c InletConn) []string {
 	t.Helper()
 	var pkts []string
 	b := make([]byte, 64)
 	for {
 		_ = c.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
-		n, err := c.Read(b)
+		n, _, err := c.ReadFrom(b)
 		if err != nil {
 			return pkts
 		}
@@ -435,14 +435,14 @@ func TestInletClose(t *testing.T) {
 	}
 	b := make([]byte, 8)
 	for _, want := range []string{"a1", "a2"} {
-		if n, err := conn.Read(b); err != nil || string(b[:n]) != want {
+		if n, _, err := conn.ReadFrom(b); err != nil || string(b[:n]) != want {
 			t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, want)
 		}
 	}
-	if _, err := conn.Read(b); !errors.Is(err, io.EOF) {
+	if _, _, err := conn.ReadFrom(b); !errors.Is(err, io.EOF) {
 		t.Errorf("Read() = %v, want io.EOF", err)
 	}
-	if _, err := conn.Write([]byte("x")); err == nil {
+	if _, err := conn.WriteTo([]byte("x"), conn.RemoteAddr()); err == nil {
 		t.Errorf("Write() = nil, want an error")
 	}
 	if _, _, err := ln.Fallback().ReadFrom(b); !errors.Is(err, io.EOF) {
@@ -585,7 +585,7 @@ func TestInletUDPLoopback(t *testing.T) {
 					t.Errorf("packets of the flow = %q, want %q", got, "ping")
 				}
 
-				if _, err = conn.Write([]byte("pong")); err != nil {
+				if _, err = conn.WriteTo([]byte("pong"), conn.RemoteAddr()); err != nil {
 					t.Fatal(err)
 				}
 				b := make([]byte, 8)
