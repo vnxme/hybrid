@@ -31,16 +31,16 @@ func (i *inlet) lookupRemote(addr net.Addr) *inletConn {
 
 // send copies b into a packet for the write loop to write to dst, from src and through idx if given,
 // and returns once the packet is queued, keeping the flow of c going if c isn't nil. If the write queue
-// is full, it waits for room, and fails if done is closed, the inlet closes or the deadline d passes first.
-// As the packet is written later, an error of the underlying connection can't be returned: the write loop
-// counts it.
-func (i *inlet) send(b []byte, c *inletConn, dst, src net.Addr, idx int, done <-chan struct{}, d *deadline[noHook]) (int, error) {
+// is full, it waits for room, and fails if the connection is closed, the inlet stops or the write deadline
+// passes first. As the packet is written later, an error of the underlying connection can't be returned:
+// the write loop counts it.
+func (cb *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int) (int, error) {
 	switch {
-	case isClosedChan(done):
+	case isClosedChan(cb.localDone):
 		return 0, io.ErrClosedPipe
-	case isClosedChan(i.done):
+	case isClosedChan(cb.parent.done):
 		return 0, io.ErrClosedPipe
-	case isClosedChan(d.Wait()):
+	case isClosedChan(cb.wrDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
 	}
 
@@ -50,21 +50,21 @@ func (i *inlet) send(b []byte, c *inletConn, dst, src net.Addr, idx int, done <-
 		copy(pkt.buf, b)
 	}
 	select {
-	case i.writeQueue <- pkt:
-		if isClosedChan(i.done) { // Closed while queuing, maybe after the write loop has drained the queue
-			i.drainWrites()
+	case cb.parent.writeQueue <- pkt:
+		if isClosedChan(cb.parent.done) { // Closed while queuing, maybe after the write loop has drained the queue
+			cb.parent.drainWrites()
 		}
 		if c != nil {
 			c.touch()
 		}
 		return len(b), nil
-	case <-done:
+	case <-cb.localDone:
 		putBuf(pkt.ref)
 		return 0, io.ErrClosedPipe
-	case <-i.done:
+	case <-cb.parent.done:
 		putBuf(pkt.ref)
 		return 0, io.ErrClosedPipe
-	case <-d.Wait():
+	case <-cb.wrDeadline.Wait():
 		putBuf(pkt.ref)
 		return 0, os.ErrDeadlineExceeded
 	}

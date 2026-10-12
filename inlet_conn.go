@@ -23,26 +23,41 @@ import (
 	"time"
 )
 
-type inletConn struct {
-	localAddr  net.Addr
-	remoteAddr net.Addr
-
-	localDone chan struct{}
-	rdRx      chan *inletPacket // Packets of the flow, unless it's been released
-
-	parent *inlet
-
-	key flowKey
+// inletConnBase is what reading and writing a connection of an inlet needs, embedded in inletConn
+// and inletFallback.
+type inletConnBase struct {
+	parent    *inlet
+	rdRx      chan *inletPacket // Packets waiting to be read
+	localDone chan struct{}     // Closed once the connection is closed
 
 	rdDeadline deadline[noHook]
 	wrDeadline deadline[noHook]
 
+	once sync.Once  // Protects closing localDone
+	rdMu sync.Mutex // Serializes reads
+}
+
+// closeLocal closes localDone, and reports whether it's done so, rather than found it closed.
+func (cb *inletConnBase) closeLocal() (closed bool) {
+	cb.once.Do(func() {
+		close(cb.localDone)
+		closed = true
+	})
+	return closed
+}
+
+type inletConn struct {
+	localAddr  net.Addr
+	remoteAddr net.Addr
+
+	key flowKey
+
+	inletConnBase // With the packets of the flow in rdRx, unless it's been released
+
 	last       atomic.Int64 // The clock of the inlet at the latest packet read or written
 	localIfIdx atomic.Int64 // The latest one, used for replies
 
-	once sync.Once  // Protects closing localDone
-	mu   sync.Mutex // Keeps the packets of the flow in order while it's being released
-	rdMu sync.Mutex // Serialize Read operations
+	mu sync.Mutex // Keeps the packets of the flow in order while it's being released
 
 	released atomic.Bool // Set before closing localDone, if the flow goes on to the fallback connection
 }
@@ -61,7 +76,7 @@ func (ic *inletConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) 
 }
 
 func (ic *inletConn) readFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	n, _, err := ic.parent.receive(b, ic.rdRx, ic.localDone, &ic.rdMu, &ic.rdDeadline)
+	n, _, err := ic.receive(b)
 	if err != nil {
 		return 0, nil, nil, 0, err
 	}
@@ -73,7 +88,7 @@ func (ic *inletConn) WriteTo(b []byte, _ net.Addr) (int, error) {
 }
 
 func (ic *inletConn) WriteToFrom(b []byte, _, _ net.Addr, _ int) (int, error) {
-	n, err := ic.parent.send(b, ic, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), ic.localDone, &ic.wrDeadline)
+	n, err := ic.send(b, ic, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx())
 	if err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		err = &net.OpError{Op: "write", Net: ic.parent.pc.LocalAddr().Network(), Err: err, Source: ic.LocalAddr(), Addr: ic.remoteAddr}
 	}
@@ -121,15 +136,6 @@ func (ic *inletConn) expire() {
 	ic.parent.deleteConnection(ic)
 }
 
-// closeLocal closes localDone, and reports whether it's done so, rather than found it closed.
-func (ic *inletConn) closeLocal() (closed bool) {
-	ic.once.Do(func() {
-		close(ic.localDone)
-		closed = true
-	})
-	return closed
-}
-
 // ended reports whether the flow of the connection has ended, i.e. it's been closed without being released.
 func (ic *inletConn) ended() bool { return isClosedChan(ic.localDone) && !ic.released.Load() }
 
@@ -172,23 +178,18 @@ func (ic *inletConn) SetWriteDeadline(t time.Time) error {
 // inletFallback is the fallback connection of an inlet: a plain PacketConn serving the flows released by
 // their handlers. It deliberately gives no access to the socket.
 type inletFallback struct {
-	parent *inlet
-
-	rdRx chan *inletPacket // Packets of released flows
-
-	localDone chan struct{}
-
-	rdDeadline deadline[noHook]
-	wrDeadline deadline[noHook]
-
-	once sync.Once  // Protects closing localDone
-	rdMu sync.Mutex // Serialize Read operations
+	inletConnBase // With the packets of released flows in rdRx
 }
 
 func (i *inlet) newFallback() *inletFallback {
-	return &inletFallback{
+	return &inletFallback{i.newConnBase(i.cfg.fallbackQueueSize)}
+}
+
+// newConnBase returns the base of a connection of the inlet, with a read queue of the given size.
+func (i *inlet) newConnBase(queueSize int) inletConnBase {
+	return inletConnBase{
 		parent:     i,
-		rdRx:       make(chan *inletPacket, i.cfg.fallbackQueueSize),
+		rdRx:       make(chan *inletPacket, queueSize),
 		localDone:  make(chan struct{}),
 		rdDeadline: makeDeadline(noHook{}),
 		wrDeadline: makeDeadline(noHook{}),
@@ -204,7 +205,7 @@ func (d *inletFallback) ReadFrom(b []byte) (int, net.Addr, error) {
 // ReadFromTo reads a packet of a released flow, and returns its remote address, the local address
 // it came to, and the latest interface index of its flow.
 func (d *inletFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	n, c, err := d.parent.receive(b, d.rdRx, d.localDone, &d.rdMu, &d.rdDeadline)
+	n, c, err := d.receive(b)
 	if err != nil {
 		return 0, nil, nil, 0, d.opError("read", nil, err)
 	}
@@ -228,18 +229,17 @@ func (d *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, 
 	if src == nil && c != nil {
 		src, idx = c.localAddr, c.LocalIfIdx()
 	}
-	n, err := d.parent.send(b, c, dst, src, idx, d.localDone, &d.wrDeadline)
+	n, err := d.send(b, c, dst, src, idx)
 	return n, d.opError("write", dst, err)
 }
 
 // Close closes the fallback connection, so that the packets queued and those of released flows are dropped
 // from now on.
 func (d *inletFallback) Close() error {
-	err := net.ErrClosed
-	d.once.Do(func() {
-		close(d.localDone)
-		err = nil
-	})
+	var err error
+	if !d.closeLocal() {
+		err = net.ErrClosed
+	}
 	d.discard()
 	return err
 }

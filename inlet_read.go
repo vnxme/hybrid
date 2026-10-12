@@ -20,7 +20,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -58,18 +57,10 @@ func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
 	}
 
 	ic := &inletConn{
-		rdRx: make(chan *inletPacket, i.cfg.readQueueSize),
-
-		localDone: make(chan struct{}),
-
-		rdDeadline: makeDeadline(noHook{}),
-		wrDeadline: makeDeadline(noHook{}),
-
-		localAddr:  dst,
-		remoteAddr: src,
-
-		parent: i,
-		key:    p.key,
+		inletConnBase: i.newConnBase(i.cfg.readQueueSize),
+		localAddr:     dst,
+		remoteAddr:    src,
+		key:           p.key,
 	}
 	ic.localIfIdx.Store(int64(p.idx))
 	ic.touch()
@@ -310,42 +301,42 @@ func (i *inlet) toFallback(pkt *inletPacket) {
 	}
 }
 
-// receive copies the next packet of q into b, waiting until one comes, until done is closed, or until
-// the deadline d passes, and returns the inlet connection of its flow. Once the inlet stops, it still
-// returns the packets queued, then io.EOF.
-func (i *inlet) receive(b []byte, q chan *inletPacket, done <-chan struct{}, mu *sync.Mutex, d *deadline[noHook]) (int, *inletConn, error) {
+// receive copies the next packet of the read queue into b, waiting until one comes, until the connection
+// is closed, or until its read deadline passes, and returns the inlet connection of its flow. Once the inlet
+// stops, it still returns the packets queued, then io.EOF.
+func (cb *inletConnBase) receive(b []byte) (int, *inletConn, error) {
 	switch {
-	case isClosedChan(done):
+	case isClosedChan(cb.localDone):
 		return 0, nil, io.ErrClosedPipe
-	case isClosedChan(i.done) && len(q) == 0:
+	case isClosedChan(cb.parent.done) && len(cb.rdRx) == 0:
 		return 0, nil, io.EOF
-	case isClosedChan(d.Wait()):
+	case isClosedChan(cb.rdDeadline.Wait()):
 		return 0, nil, os.ErrDeadlineExceeded
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
+	cb.rdMu.Lock()
+	defer cb.rdMu.Unlock()
 	switch {
-	case isClosedChan(done):
+	case isClosedChan(cb.localDone):
 		return 0, nil, io.ErrClosedPipe
-	case isClosedChan(i.done) && len(q) == 0:
+	case isClosedChan(cb.parent.done) && len(cb.rdRx) == 0:
 		return 0, nil, io.EOF
-	case isClosedChan(d.Wait()):
+	case isClosedChan(cb.rdDeadline.Wait()):
 		return 0, nil, os.ErrDeadlineExceeded
 	}
 
 	var pkt *inletPacket
 	select {
-	case pkt = <-q:
-	case <-done:
+	case pkt = <-cb.rdRx:
+	case <-cb.localDone:
 		return 0, nil, io.ErrClosedPipe
-	case <-i.done:
+	case <-cb.parent.done:
 		select {
-		case pkt = <-q:
+		case pkt = <-cb.rdRx:
 		default:
 			return 0, nil, io.EOF
 		}
-	case <-d.Wait():
+	case <-cb.rdDeadline.Wait():
 		return 0, nil, os.ErrDeadlineExceeded
 	}
 	n := copy(b, pkt.buf)
