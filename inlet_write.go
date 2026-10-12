@@ -34,13 +34,13 @@ func (i *inlet) lookupRemote(addr net.Addr) *inletConn {
 // is full, it waits for room, and fails if the connection is closed, the inlet stops or the write deadline
 // passes first. As the packet is written later, an error of the underlying connection can't be returned:
 // the write loop counts it.
-func (cb *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int) (int, error) {
+func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int) (int, error) {
 	switch {
-	case isClosedChan(cb.localDone):
+	case isClosedChan(ic.localDone):
 		return 0, io.ErrClosedPipe
-	case isClosedChan(cb.parent.done):
+	case isClosedChan(ic.parent.done):
 		return 0, io.ErrClosedPipe
-	case isClosedChan(cb.wrDeadline.Wait()):
+	case isClosedChan(ic.wrDeadline.Wait()):
 		return 0, os.ErrDeadlineExceeded
 	}
 
@@ -50,21 +50,21 @@ func (cb *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int
 		copy(pkt.buf, b)
 	}
 	select {
-	case cb.parent.writeQueue <- pkt:
-		if isClosedChan(cb.parent.done) { // Closed while queuing, maybe after the write loop has drained the queue
-			cb.parent.drainWrites()
+	case ic.parent.writeQueue <- pkt:
+		if isClosedChan(ic.parent.done) { // Closed while queuing, maybe after the write loop has drained the queue
+			ic.parent.drainWrites()
 		}
 		if c != nil {
 			c.touch()
 		}
 		return len(b), nil
-	case <-cb.localDone:
+	case <-ic.localDone:
 		putBuf(pkt.ref)
 		return 0, io.ErrClosedPipe
-	case <-cb.parent.done:
+	case <-ic.parent.done:
 		putBuf(pkt.ref)
 		return 0, io.ErrClosedPipe
-	case <-cb.wrDeadline.Wait():
+	case <-ic.wrDeadline.Wait():
 		putBuf(pkt.ref)
 		return 0, os.ErrDeadlineExceeded
 	}

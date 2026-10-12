@@ -38,9 +38,9 @@ type inletConnBase struct {
 }
 
 // closeLocal closes localDone, and reports whether it's done so, rather than found it closed.
-func (cb *inletConnBase) closeLocal() (closed bool) {
-	cb.once.Do(func() {
-		close(cb.localDone)
+func (ic *inletConnBase) closeLocal() (closed bool) {
+	ic.once.Do(func() {
+		close(ic.localDone)
 		closed = true
 	})
 	return closed
@@ -197,99 +197,99 @@ func (i *inlet) newConnBase(queueSize int) inletConnBase {
 }
 
 // ReadFrom reads a packet of a released flow, and returns the remote address of the flow.
-func (d *inletFallback) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, src, _, _, err := d.ReadFromTo(b)
+func (ic *inletFallback) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, src, _, _, err := ic.ReadFromTo(b)
 	return n, src, err
 }
 
 // ReadFromTo reads a packet of a released flow, and returns its remote address, the local address
 // it came to, and the latest interface index of its flow.
-func (d *inletFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	n, c, err := d.receive(b)
+func (ic *inletFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
+	n, c, err := ic.receive(b)
 	if err != nil {
-		return 0, nil, nil, 0, d.opError("read", nil, err)
+		return 0, nil, nil, 0, ic.opError("read", nil, err)
 	}
 	return n, c.remoteAddr, c.localAddr, c.LocalIfIdx(), nil
 }
 
 // WriteTo writes a packet to addr, as WriteToFrom does with no local address.
-func (d *inletFallback) WriteTo(b []byte, addr net.Addr) (int, error) {
-	return d.WriteToFrom(b, addr, nil, 0)
+func (ic *inletFallback) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return ic.WriteToFrom(b, addr, nil, 0)
 }
 
 // WriteToFrom writes a packet to dst from src and through the interface idx. If src is nil, it writes
 // from the local address and through the interface of the latest flow of dst, or from those the system
 // chooses if the inlet hasn't seen dst. A write keeps the flow of dst going, but doesn't start one,
 // so a reply from a dst without a flow is queued for Accept, rather than read by the fallback connection.
-func (d *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
+func (ic *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	if dst == nil {
-		return 0, d.opError("write", nil, errMissingAddress)
+		return 0, ic.opError("write", nil, errMissingAddress)
 	}
-	c := d.parent.lookupRemote(dst)
+	c := ic.parent.lookupRemote(dst)
 	if src == nil && c != nil {
 		src, idx = c.localAddr, c.LocalIfIdx()
 	}
-	n, err := d.send(b, c, dst, src, idx)
-	return n, d.opError("write", dst, err)
+	n, err := ic.send(b, c, dst, src, idx)
+	return n, ic.opError("write", dst, err)
 }
 
 // Close closes the fallback connection, so that the packets queued and those of released flows are dropped
 // from now on.
-func (d *inletFallback) Close() error {
+func (ic *inletFallback) Close() error {
 	var err error
-	if !d.closeLocal() {
+	if !ic.closeLocal() {
 		err = net.ErrClosed
 	}
-	d.discard()
+	ic.discard()
 	return err
 }
 
 // discard drops and counts the packets left unread on the closed fallback connection.
-func (d *inletFallback) discard() {
+func (ic *inletFallback) discard() {
 	for {
 		select {
-		case pkt := <-d.rdRx:
+		case pkt := <-ic.rdRx:
 			putBuf(pkt.ref)
-			d.parent.drops.fallbackClosed.Add(1)
+			ic.parent.drops.fallbackClosed.Add(1)
 		default:
 			return
 		}
 	}
 }
 
-func (d *inletFallback) LocalAddr() net.Addr { return d.parent.pc.LocalAddr() }
+func (ic *inletFallback) LocalAddr() net.Addr { return ic.parent.pc.LocalAddr() }
 
-func (d *inletFallback) SetDeadline(t time.Time) error {
-	if isClosedChan(d.localDone) || isClosedChan(d.parent.done) {
+func (ic *inletFallback) SetDeadline(t time.Time) error {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
 		return io.ErrClosedPipe
 	}
-	d.rdDeadline.Set(t)
-	d.wrDeadline.Set(t)
+	ic.rdDeadline.Set(t)
+	ic.wrDeadline.Set(t)
 	return nil
 }
 
-func (d *inletFallback) SetReadDeadline(t time.Time) error {
-	if isClosedChan(d.localDone) || isClosedChan(d.parent.done) {
+func (ic *inletFallback) SetReadDeadline(t time.Time) error {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
 		return io.ErrClosedPipe
 	}
-	d.rdDeadline.Set(t)
+	ic.rdDeadline.Set(t)
 	return nil
 }
 
-func (d *inletFallback) SetWriteDeadline(t time.Time) error {
-	if isClosedChan(d.localDone) || isClosedChan(d.parent.done) {
+func (ic *inletFallback) SetWriteDeadline(t time.Time) error {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
 		return io.ErrClosedPipe
 	}
-	d.wrDeadline.Set(t)
+	ic.wrDeadline.Set(t)
 	return nil
 }
 
 // opError wraps an error of an operation on the fallback connection, except for the end of reading.
-func (d *inletFallback) opError(op string, addr net.Addr, err error) error {
+func (ic *inletFallback) opError(op string, addr net.Addr, err error) error {
 	if err == nil || err == io.EOF || errors.Is(err, io.ErrClosedPipe) {
 		return err
 	}
-	return &net.OpError{Op: op, Net: d.LocalAddr().Network(), Source: d.LocalAddr(), Addr: addr, Err: err}
+	return &net.OpError{Op: op, Net: ic.LocalAddr().Network(), Source: ic.LocalAddr(), Addr: addr, Err: err}
 }
 
 var errMissingAddress = errors.New("hybrid: missing address")

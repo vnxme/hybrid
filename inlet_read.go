@@ -304,39 +304,39 @@ func (i *inlet) toFallback(pkt *inletPacket) {
 // receive copies the next packet of the read queue into b, waiting until one comes, until the connection
 // is closed, or until its read deadline passes, and returns the inlet connection of its flow. Once the inlet
 // stops, it still returns the packets queued, then io.EOF.
-func (cb *inletConnBase) receive(b []byte) (int, *inletConn, error) {
+func (ic *inletConnBase) receive(b []byte) (int, *inletConn, error) {
 	switch {
-	case isClosedChan(cb.localDone):
+	case isClosedChan(ic.localDone):
 		return 0, nil, io.ErrClosedPipe
-	case isClosedChan(cb.parent.done) && len(cb.rdRx) == 0:
+	case isClosedChan(ic.parent.done) && len(ic.rdRx) == 0:
 		return 0, nil, io.EOF
-	case isClosedChan(cb.rdDeadline.Wait()):
+	case isClosedChan(ic.rdDeadline.Wait()):
 		return 0, nil, os.ErrDeadlineExceeded
 	}
 
-	cb.rdMu.Lock()
-	defer cb.rdMu.Unlock()
+	ic.rdMu.Lock()
+	defer ic.rdMu.Unlock()
 	switch {
-	case isClosedChan(cb.localDone):
+	case isClosedChan(ic.localDone):
 		return 0, nil, io.ErrClosedPipe
-	case isClosedChan(cb.parent.done) && len(cb.rdRx) == 0:
+	case isClosedChan(ic.parent.done) && len(ic.rdRx) == 0:
 		return 0, nil, io.EOF
-	case isClosedChan(cb.rdDeadline.Wait()):
+	case isClosedChan(ic.rdDeadline.Wait()):
 		return 0, nil, os.ErrDeadlineExceeded
 	}
 
 	var pkt *inletPacket
 	select {
-	case pkt = <-cb.rdRx:
-	case <-cb.localDone:
+	case pkt = <-ic.rdRx:
+	case <-ic.localDone:
 		return 0, nil, io.ErrClosedPipe
-	case <-cb.parent.done:
+	case <-ic.parent.done:
 		select {
-		case pkt = <-cb.rdRx:
+		case pkt = <-ic.rdRx:
 		default:
 			return 0, nil, io.EOF
 		}
-	case <-cb.rdDeadline.Wait():
+	case <-ic.rdDeadline.Wait():
 		return 0, nil, os.ErrDeadlineExceeded
 	}
 	n := copy(b, pkt.buf)
