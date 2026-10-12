@@ -18,54 +18,10 @@ import (
 	"errors"
 	"io"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 )
-
-// receive copies the next packet of q into b, waiting until one comes, until done is closed, or until
-// the deadline d passes, and returns the inlet connection of its flow. Once remoteDone is closed, it still
-// returns the packets queued, then io.EOF.
-func receive(b []byte, q chan *inletPacket, done, remoteDone <-chan struct{}, mu *sync.Mutex, d *deadline[noHook]) (int, *inletConn, error) {
-	switch {
-	case isClosedChan(done):
-		return 0, nil, io.ErrClosedPipe
-	case isClosedChan(remoteDone) && len(q) == 0:
-		return 0, nil, io.EOF
-	case isClosedChan(d.Wait()):
-		return 0, nil, os.ErrDeadlineExceeded
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	switch {
-	case isClosedChan(done):
-		return 0, nil, io.ErrClosedPipe
-	case isClosedChan(remoteDone) && len(q) == 0:
-		return 0, nil, io.EOF
-	case isClosedChan(d.Wait()):
-		return 0, nil, os.ErrDeadlineExceeded
-	}
-
-	var pkt *inletPacket
-	select {
-	case pkt = <-q:
-	case <-done:
-		return 0, nil, io.ErrClosedPipe
-	case <-remoteDone:
-		select {
-		case pkt = <-q:
-		default:
-			return 0, nil, io.EOF
-		}
-	case <-d.Wait():
-		return 0, nil, os.ErrDeadlineExceeded
-	}
-	n := copy(b, pkt.buf)
-	putBuf(pkt.ref)
-	return n, pkt.conn, nil
-}
 
 type inletConn struct {
 	localAddr  net.Addr
@@ -74,8 +30,7 @@ type inletConn struct {
 	localDone chan struct{}
 	rdRx      chan *inletPacket // Packets of the flow, unless it's been released
 
-	parent     *inlet
-	remoteDone <-chan struct{}
+	parent *inlet
 
 	key flowKey
 
@@ -106,7 +61,7 @@ func (ic *inletConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) 
 }
 
 func (ic *inletConn) readFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	n, _, err := receive(b, ic.rdRx, ic.localDone, ic.remoteDone, &ic.rdMu, &ic.rdDeadline)
+	n, _, err := ic.parent.receive(b, ic.rdRx, ic.localDone, &ic.rdMu, &ic.rdDeadline)
 	if err != nil {
 		return 0, nil, nil, 0, err
 	}
@@ -190,7 +145,7 @@ func (ic *inletConn) LocalAddr() net.Addr {
 func (ic *inletConn) RemoteAddr() net.Addr { return ic.remoteAddr }
 
 func (ic *inletConn) SetDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.remoteDone) {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
 		return io.ErrClosedPipe
 	}
 	ic.rdDeadline.Set(t)
@@ -199,7 +154,7 @@ func (ic *inletConn) SetDeadline(t time.Time) error {
 }
 
 func (ic *inletConn) SetReadDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.remoteDone) {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
 		return io.ErrClosedPipe
 	}
 	ic.rdDeadline.Set(t)
@@ -207,7 +162,7 @@ func (ic *inletConn) SetReadDeadline(t time.Time) error {
 }
 
 func (ic *inletConn) SetWriteDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.remoteDone) {
+	if isClosedChan(ic.localDone) || isClosedChan(ic.parent.done) {
 		return io.ErrClosedPipe
 	}
 	ic.wrDeadline.Set(t)
@@ -249,7 +204,7 @@ func (d *inletFallback) ReadFrom(b []byte) (int, net.Addr, error) {
 // ReadFromTo reads a packet of a released flow, and returns its remote address, the local address
 // it came to, and the latest interface index of its flow.
 func (d *inletFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	n, c, err := receive(b, d.rdRx, d.localDone, d.parent.done, &d.rdMu, &d.rdDeadline)
+	n, c, err := d.parent.receive(b, d.rdRx, d.localDone, &d.rdMu, &d.rdDeadline)
 	if err != nil {
 		return 0, nil, nil, 0, d.opError("read", nil, err)
 	}
