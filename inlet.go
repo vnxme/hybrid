@@ -224,9 +224,7 @@ type InletStats struct {
 // which it reads from and writes to its remote address.
 type InletConn interface {
 	FromToPacketConn
-
-	// RemoteAddr returns the remote address of the flow.
-	RemoteAddr() net.Addr
+	ConnectedPacketConn // With the remote address of the flow
 
 	// Release hands the flow over to the fallback connection, e.g. as no handler recognizes it,
 	// and closes the inlet connection.
@@ -236,14 +234,9 @@ type InletConn interface {
 // InletListener is a listener of an inlet, accepting inlet connections, with its fallback connection
 // and statistics.
 type InletListener interface {
-	// Accept waits for and returns the inlet connection of the next new flow.
-	Accept() (InletConn, error)
-
-	// Addr returns the local address of the underlying PacketConn.
-	Addr() net.Addr
-
-	// Close closes the underlying PacketConn and stops the inlet.
-	Close() error
+	// Accept returns the inlet connection of the next new flow, Addr returns the local address
+	// of the underlying PacketConn, and Close closes it and stops the inlet.
+	PacketListener[InletConn]
 
 	// Unwrap stops the inlet like Close does, but leaves the underlying PacketConn open, and returns it
 	// as given to Inlet, with no deadlines.

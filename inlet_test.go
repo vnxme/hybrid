@@ -155,7 +155,7 @@ func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize
 		}()
 
 		for {
-			newMixedConn, err := ln.Accept()
+			conn, err := ln.Accept()
 			if err != nil {
 				if !errors.Is(err, net.ErrClosed) {
 					logfIf(t, testPacketInletDebug, "%v: ln.Accept() = %v", me, err)
@@ -164,7 +164,7 @@ func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize
 			}
 
 			wg.Add(1)
-			go connHandler(newMixedConn, ln, wg)
+			go connHandler(conn, ln, wg)
 		}
 
 		logfIf(t, testPacketInletDebug, "%v: stopped", me)
@@ -529,6 +529,48 @@ func TestInletUnwrapUDP(t *testing.T) {
 				t.Errorf("ReadFrom() = %q, %v, want %q, nil", b[:n], err, "x")
 			}
 		})
+	}
+}
+
+// TestInletStreamListener ensures an inlet wrapped with PacketToStreamListener accepts its inlet connections
+// as StreamConns, which read and write the packets of their flows, and unwraps to the inlet.
+func TestInletStreamListener(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, ln := inletTrunk(t, nil)
+	sl := PacketToStreamListener(ln) // Infers InletConn
+	if sl.Addr() != ln.Addr() {
+		t.Errorf("Addr() = %v, want %v", sl.Addr(), ln.Addr())
+	}
+
+	writeFrom(t, client, a, "a1")
+	conn, err := sl.Accept()
+	if err != nil {
+		t.Fatalf("Accept() = %v, want nil", err)
+	}
+	if conn.RemoteAddr().String() != a.String() {
+		t.Errorf("RemoteAddr() = %v, want %s", conn.RemoteAddr(), a)
+	}
+	b := make([]byte, 8)
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	if n, err := conn.Read(b); err != nil || string(b[:n]) != "a1" {
+		t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, "a1")
+	}
+	if _, err := conn.Write([]byte("x")); err != nil {
+		t.Fatalf("Write() = %v, want nil", err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	if n, _, dst, _, err := client.ReadFromTo(b); err != nil || string(b[:n]) != "x" || dst.String() != a.String() {
+		t.Errorf("ReadFromTo() = %q to %v, %v, want %q to %s, nil", b[:n], dst, err, "x", a)
+	}
+
+	if got := sl.(PacketListenerWrapper[InletConn]).Unwrap(); got != ln {
+		t.Errorf("Unwrap() = %v, want the inlet", got)
+	}
+	if err := sl.Close(); err != nil {
+		t.Errorf("Close() = %v, want nil", err)
+	}
+	if _, err := sl.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("Accept() after Close() = %v, want net.ErrClosed", err)
 	}
 }
 

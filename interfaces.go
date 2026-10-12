@@ -32,12 +32,6 @@ type Deadline interface {
 	Wait() <-chan struct{}
 }
 
-// MixedConn is a network connection that implements both PacketConn and StreamConn interfaces.
-type MixedConn interface {
-	PacketConn
-	StreamConn
-}
-
 type DataPacket interface {
 	Cap() int
 	Len() int
@@ -69,19 +63,27 @@ type PacketConnWrapper interface {
 	Unwrap() PacketConn
 }
 
-// PacketListener is a generic network listener for packet-oriented protocols, similar to StreamListener.
-type PacketListener interface {
+// ConnectedPacketConn is a generic packet-oriented network connection serving a single remote address.
+type ConnectedPacketConn interface {
+	PacketConn
+	// RemoteAddr returns the remote network address.
+	RemoteAddr() net.Addr
+}
+
+// PacketListener is a generic network listener for packet-oriented protocols, similar to StreamListener,
+// accepting connections of type C.
+type PacketListener[C PacketConn] interface {
 	// Accept waits for and returns the next connection to the listener.
-	Accept() (MixedConn, error)
+	Accept() (C, error)
 	// Close closes the listener. Any operations blocked by Accept will be unblocked and return errors.
 	Close() error
 	// Addr returns the listener's network address.
 	Addr() net.Addr
 }
 
-// PacketListenerWrapper can unwrap the underlying PacketListener.
-type PacketListenerWrapper interface {
-	Unwrap() PacketListener
+// PacketListenerWrapper can unwrap the underlying PacketListener of connections of type C.
+type PacketListenerWrapper[C PacketConn] interface {
+	Unwrap() PacketListener[C]
 }
 
 // FromToReader is a capability of a generic packet-oriented network connection

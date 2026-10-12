@@ -277,19 +277,29 @@ func (w *packetToStreamConn) RemoteAddr() net.Addr { return w.remote }
 
 func (w *packetToStreamConn) Unwrap() PacketConn { return w.PacketConn }
 
-type packetToStreamListener struct {
-	PacketListener
+// packetToStreamListener is a PacketListenerWrapper that implements StreamListener.
+type packetToStreamListener[C ConnectedPacketConn] struct {
+	PacketListener[C]
 }
 
-func PacketToStreamListener(pl PacketListener) StreamListener {
-	return &packetToStreamListener{pl}
+// PacketToStreamListener wraps pl as a StreamListener, accepting each connection as a StreamConn:
+// as is if it implements StreamConn already, or wrapped with PacketToStreamConn otherwise.
+func PacketToStreamListener[C ConnectedPacketConn](pl PacketListener[C]) StreamListener {
+	return &packetToStreamListener[C]{pl}
 }
 
-func (w *packetToStreamListener) Accept() (sc StreamConn, err error) {
-	return w.PacketListener.Accept()
+func (w *packetToStreamListener[C]) Accept() (StreamConn, error) {
+	c, err := w.PacketListener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	if sc, ok := any(c).(StreamConn); ok {
+		return sc, nil
+	}
+	return PacketToStreamConn(c, c.RemoteAddr()), nil
 }
 
-func (w *packetToStreamListener) Unwrap() PacketListener { return w.PacketListener }
+func (w *packetToStreamListener[C]) Unwrap() PacketListener[C] { return w.PacketListener }
 
 // streamToPacketConn is a StreamConnWrapper that implements PacketConn.
 type streamToPacketConn struct {
@@ -328,7 +338,7 @@ var (
 	_ PacketConnWrapper = (*packetToFromToPacketConn)(nil)
 	_ PacketConnWrapper = (*packetToStreamConn)(nil)
 
-	_ PacketListenerWrapper = (*packetToStreamListener)(nil)
+	_ PacketListenerWrapper[ConnectedPacketConn] = (*packetToStreamListener[ConnectedPacketConn])(nil)
 
 	_ FromToPacketConn = (*packetToFromToPacketConn)(nil)
 
@@ -340,5 +350,5 @@ var (
 	_ StreamConnWrapper = (*idleTimeoutStreamConn)(nil)
 	_ StreamConnWrapper = (*streamToPacketConn)(nil)
 
-	_ StreamListener = (*packetToStreamListener)(nil)
+	_ StreamListener = (*packetToStreamListener[ConnectedPacketConn])(nil)
 )
