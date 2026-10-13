@@ -17,6 +17,7 @@ package hybrid
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -220,5 +221,74 @@ func TestInletDeadlines(t *testing.T) {
 	}
 	if _, _, err := ln.Fallback().ReadFrom(b); err == nil {
 		t.Errorf("ReadFrom() of the closed fallback connection = nil, want an error")
+	}
+}
+
+// TestInletConcurrentReads ensures reads of an inlet connection and of the fallback connection needn't be
+// serialized: each packet is read once.
+func TestInletConcurrentReads(t *testing.T) {
+	const count = 1000
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	write := func(client FromToPacketConn, from int) {
+		for i := from; i < count; i++ {
+			if _, err := client.WriteToFrom(fmt.Appendf(nil, "p%d", i), nil, a, 0); err != nil {
+				return
+			}
+		}
+	}
+
+	t.Run("Conn", func(t *testing.T) {
+		client, ln := inletTrunk(t, &InletConfig{ReadQueueSize: count})
+		writeFrom(t, client, a, "p0")
+		conn := acceptInletConn(t, ln)
+		go write(client, 1)
+		readConcurrently(t, conn, 8, count)
+		waitInletStats(t, ln, InletStats{})
+	})
+
+	t.Run("Fallback", func(t *testing.T) {
+		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true, FallbackQueueSize: count})
+		writeFrom(t, client, a, "p0")
+		releaseInletConn(t, ln)
+		go write(client, 1)
+		readConcurrently(t, ln.Fallback(), 8, count)
+		waitInletStats(t, ln, InletStats{})
+	})
+}
+
+// TestInletShortBuffer ensures a packet longer than the buffer of a read is read in part, with
+// io.ErrShortBuffer, and the rest of it dropped, from an inlet connection and the fallback connection.
+func TestInletShortBuffer(t *testing.T) {
+	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	writeFrom(t, client, a, "abcdef")
+	writeFrom(t, client, a, "g")
+	conn := acceptInletConn(t, ln)
+	writeFrom(t, client, b, "hijklm")
+	writeFrom(t, client, b, "n")
+	releaseInletConn(t, ln)
+
+	for _, test := range []struct {
+		name     string
+		pc       FromToPacketConn
+		src      net.Addr
+		out, nxt string
+	}{
+		{"Conn", conn, a, "abc", "g"},
+		{"Fallback", ln.Fallback(), b, "hij", "n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_ = test.pc.SetReadDeadline(time.Now().Add(time.Second))
+			buf := make([]byte, 3)
+			n, src, _, _, err := test.pc.ReadFromTo(buf)
+			var oe *net.OpError
+			if string(buf[:n]) != test.out || src.String() != test.src.String() || !errors.Is(err, io.ErrShortBuffer) ||
+				!errors.As(err, &oe) || oe.Op != "read" || oe.Addr.String() != test.src.String() {
+				t.Errorf("ReadFromTo() = %q from %v, %v, want %q from %s, a read net.OpError of io.ErrShortBuffer", buf[:n], src, err, test.out, test.src)
+			}
+			if n, _, err := test.pc.ReadFrom(buf); err != nil || string(buf[:n]) != test.nxt {
+				t.Errorf("ReadFrom() = %q, %v, want %q, nil, the rest of the packet before dropped", buf[:n], err, test.nxt)
+			}
+		})
 	}
 }

@@ -31,8 +31,7 @@ type inletConnBase struct {
 	rdDeadline deadline[noHook]
 	wrDeadline deadline[noHook]
 
-	once sync.Once  // Protects closing localDone
-	rdMu sync.Mutex // Serializes reads
+	once sync.Once // Protects closing localDone
 }
 
 // closeLocal closes localDone, and reports whether it's done so, rather than found it closed.
@@ -79,16 +78,12 @@ func (ic *inletConn) ReadFrom(b []byte) (int, net.Addr, error) {
 }
 
 func (ic *inletConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	n, src, dst, idx, err := ic.readFromTo(b)
-	return n, src, dst, idx, ic.opError("read", ic.LocalAddr(), ic.remoteAddr, err)
-}
-
-func (ic *inletConn) readFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
-	n, _, err := ic.receive(b)
-	if err != nil {
+	n, c, err := ic.receive(b)
+	err = ic.opError("read", ic.LocalAddr(), ic.remoteAddr, err)
+	if c == nil { // No packet read
 		return 0, nil, nil, 0, err
 	}
-	return n, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), nil
+	return n, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), err
 }
 
 func (ic *inletConn) WriteTo(b []byte, _ net.Addr) (int, error) {
@@ -211,10 +206,10 @@ func (ic *inletFallback) ReadFrom(b []byte) (int, net.Addr, error) {
 // it came to, and the latest interface index of its flow.
 func (ic *inletFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, c, err := ic.receive(b)
-	if err != nil {
+	if c == nil { // No packet read
 		return 0, nil, nil, 0, ic.opError("read", ic.LocalAddr(), nil, err)
 	}
-	return n, c.remoteAddr, c.localAddr, c.LocalIfIdx(), nil
+	return n, c.remoteAddr, c.localAddr, c.LocalIfIdx(), ic.opError("read", ic.LocalAddr(), c.remoteAddr, err)
 }
 
 // WriteTo writes a packet to addr, as WriteToFrom does with no local address.

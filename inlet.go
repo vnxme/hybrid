@@ -16,6 +16,7 @@ package hybrid
 
 import (
 	"errors"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -434,6 +435,7 @@ var (
 	errInletClosed           = net.ErrClosed // Reported by using a closed connection, or one of a stopped inlet, the same way as by UDP after local closure
 	errInletDeadlineExceeded = os.ErrDeadlineExceeded
 	errInletMissingAddress   = errors.New("hybrid: missing address") // Reported by writing to the fallback connection with no remote address
+	errInletShortBuffer      = io.ErrShortBuffer                     // Reported by reading a packet longer than the read buffer
 )
 
 // Interface guards

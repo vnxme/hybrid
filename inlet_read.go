@@ -302,43 +302,42 @@ func (i *inlet) toFallback(pkt *inletPacket) {
 
 // receive copies the next packet of the read queue into b, waiting until one comes, until the connection
 // is closed, or until its read deadline passes, and returns the inlet connection of its flow. Once the inlet
-// stops, it still returns the packets queued, then net.ErrClosed.
+// stops, it still returns the packets queued, then net.ErrClosed. Reads needn't be serialized, since each
+// of them receives a whole packet, the same way as UDP reads do. If b is too small, it returns
+// io.ErrShortBuffer and drops the excess bytes.
 func (ic *inletConnBase) receive(b []byte) (int, *inletConn, error) {
 	switch {
 	case isClosedChan(ic.localDone):
 		return 0, nil, errInletClosed
-	case isClosedChan(ic.inlet.done) && len(ic.rdRx) == 0:
-		return 0, nil, errInletClosed
-	case isClosedChan(ic.rdDeadline.Wait()):
+	case isClosedChan(ic.rdDeadline.Wait()): // An exceeded deadline prevails over pending packets
 		return 0, nil, errInletDeadlineExceeded
-	}
-
-	ic.rdMu.Lock()
-	defer ic.rdMu.Unlock()
-	switch {
-	case isClosedChan(ic.localDone):
+	case isClosedChan(ic.inlet.done) && len(ic.rdRx) == 0: // Queued packets may be read after the inlet stops
 		return 0, nil, errInletClosed
-	case isClosedChan(ic.inlet.done) && len(ic.rdRx) == 0:
-		return 0, nil, errInletClosed
-	case isClosedChan(ic.rdDeadline.Wait()):
-		return 0, nil, errInletDeadlineExceeded
 	}
 
 	var pkt *inletPacket
-	select {
+	select { // Receive a pending packet without a blocking select, which is much slower
 	case pkt = <-ic.rdRx:
-	case <-ic.localDone:
-		return 0, nil, errInletClosed
-	case <-ic.inlet.done:
+	default:
 		select {
 		case pkt = <-ic.rdRx:
-		default:
+		case <-ic.localDone:
 			return 0, nil, errInletClosed
+		case <-ic.inlet.done:
+			select { // A packet may have been queued just before the inlet stopped
+			case pkt = <-ic.rdRx:
+			default:
+				return 0, nil, errInletClosed
+			}
+		case <-ic.rdDeadline.Wait():
+			return 0, nil, errInletDeadlineExceeded
 		}
-	case <-ic.rdDeadline.Wait():
-		return 0, nil, errInletDeadlineExceeded
 	}
+
 	n := copy(b, pkt.buf)
 	putBuf(pkt.ref)
+	if n < len(pkt.buf) { // Unread bytes are dropped, i.e. an inlet connection doesn't support partial reads
+		return n, pkt.conn, errInletShortBuffer
+	}
 	return n, pkt.conn, nil
 }

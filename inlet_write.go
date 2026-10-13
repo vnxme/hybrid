@@ -48,25 +48,30 @@ func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int
 		pkt.buf, pkt.ref = getBuf(len(b))
 		copy(pkt.buf, b)
 	}
-	select {
+	select { // Queue without a blocking select if possible, which is much slower
 	case ic.inlet.writeQueue <- pkt:
-		if isClosedChan(ic.inlet.done) { // Closed while queuing, maybe after the write loop has drained the queue
-			ic.inlet.drainWrites()
+	default:
+		select {
+		case ic.inlet.writeQueue <- pkt:
+		case <-ic.localDone:
+			putBuf(pkt.ref)
+			return 0, errInletClosed
+		case <-ic.inlet.done:
+			putBuf(pkt.ref)
+			return 0, errInletClosed
+		case <-ic.wrDeadline.Wait():
+			putBuf(pkt.ref)
+			return 0, errInletDeadlineExceeded
 		}
-		if c != nil {
-			c.touch()
-		}
-		return len(b), nil
-	case <-ic.localDone:
-		putBuf(pkt.ref)
-		return 0, errInletClosed
-	case <-ic.inlet.done:
-		putBuf(pkt.ref)
-		return 0, errInletClosed
-	case <-ic.wrDeadline.Wait():
-		putBuf(pkt.ref)
-		return 0, errInletDeadlineExceeded
 	}
+
+	if isClosedChan(ic.inlet.done) { // Stopped while queuing, maybe after the write loop has drained the queue
+		ic.inlet.drainWrites()
+	}
+	if c != nil {
+		c.touch()
+	}
+	return len(b), nil
 }
 
 // writeLoop writes the packets of the write queue to the underlying connection, until the inlet closes
