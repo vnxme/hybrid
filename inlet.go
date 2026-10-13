@@ -25,7 +25,7 @@ import (
 	"time"
 )
 
-// Inlet design. This is the target the code below is being brought in line with.
+// Inlet design.
 //
 // An inlet serves a packet connection, typically a UDP socket, to many handlers at once, the way
 // a TCP listener serves a socket to many connections. Its read loop reads every packet, tells
@@ -140,22 +140,6 @@ type InletConfig struct {
 	PacketInfo bool
 }
 
-// inletConfig is an InletConfig with its defaults filled in, and with a zero timeout meaning none.
-type inletConfig struct {
-	idleTimeout  time.Duration
-	writeTimeout time.Duration
-
-	acceptQueueSize   int
-	fallbackQueueSize int
-	maxFlows          int
-	readBufferSize    int
-	readQueueSize     int
-	writeQueueSize    int
-
-	fallbackConn bool
-	packetInfo   bool
-}
-
 // resolve returns the configuration of an inlet, with the defaults of the fields not set.
 func (c *InletConfig) resolve() inletConfig {
 	if c == nil {
@@ -193,38 +177,6 @@ func (c *InletConfig) resolve() inletConfig {
 	return cfg
 }
 
-// inletPacket is a packet queued for reading from an inlet connection or from the fallback connection,
-// or for writing by the write loop.
-type inletPacket struct {
-	conn *inletConn // The inlet connection of the flow of a packet read
-	dst  net.Addr   // The remote address to write a packet to
-	src  net.Addr   // The local address to write a packet from, if any
-	ref  *[]byte    // Reference to the pooled buffer of buf, if any
-	buf  []byte
-	idx  int // The interface index to write a packet through, if any
-}
-
-// InletStats counts the packets an inlet has dropped, by reason.
-type InletStats struct {
-	// Reading, in the order a packet meets the checks
-	Truncated       uint64 // The packet was larger than ReadBufferSize
-	NoDestination   uint64 // The packet had no destination address, while the inlet uses them
-	TableFull       uint64 // The flow table was full when the packet started a new flow
-	AcceptQueueFull uint64 // The accept queue was full when the packet started a new flow
-	ConnQueueFull   uint64 // The queue of the inlet connection of the packet was full
-	ConnClosed      uint64 // The inlet connection of the packet was closed before reading it
-
-	// Releasing
-	NoFallback        uint64 // The packet of a released flow had no open fallback connection to go to
-	FallbackQueueFull uint64 // The queue of the fallback connection was full
-	FallbackClosed    uint64 // The fallback connection was closed before reading the packet
-
-	// Writing
-	WriteTimedOut uint64 // The write loop timed out writing the packet
-	WriteFailed   uint64 // The write loop failed to write the packet, e.g. to an unreachable address
-	WriteUnsent   uint64 // The inlet closed, or its underlying connection did, before writing the packet
-}
-
 // InletConn is an inlet connection: a FromToPacketConn serving the packets of a single flow,
 // which it reads from and writes to its remote address.
 type InletConn interface {
@@ -252,6 +204,27 @@ type InletListener interface {
 
 	// Stats returns the numbers of packets dropped so far, by reason.
 	Stats() InletStats
+}
+
+// InletStats counts the packets an inlet has dropped, by reason.
+type InletStats struct {
+	// Reading, in the order a packet meets the checks
+	Truncated       uint64 // The packet was larger than ReadBufferSize
+	NoDestination   uint64 // The packet had no destination address, while the inlet uses them
+	TableFull       uint64 // The flow table was full when the packet started a new flow
+	AcceptQueueFull uint64 // The accept queue was full when the packet started a new flow
+	ConnQueueFull   uint64 // The queue of the inlet connection of the packet was full
+	ConnClosed      uint64 // The inlet connection of the packet was closed before reading it
+
+	// Releasing
+	NoFallback        uint64 // The packet of a released flow had no open fallback connection to go to
+	FallbackQueueFull uint64 // The queue of the fallback connection was full
+	FallbackClosed    uint64 // The fallback connection was closed before reading the packet
+
+	// Writing
+	WriteTimedOut uint64 // The write loop timed out writing the packet
+	WriteFailed   uint64 // The write loop failed to write the packet, e.g. to an unreachable address
+	WriteUnsent   uint64 // The inlet closed, or its underlying connection did, before writing the packet
 }
 
 // inlet implements InletListener for any underlying PacketConn.
@@ -344,6 +317,13 @@ func (i *inlet) Accept() (InletConn, error) {
 // Addr returns the local address of the underlying PacketConn.
 func (i *inlet) Addr() net.Addr { return i.pc.LocalAddr() }
 
+// Close closes the underlying PacketConn and stops the internal goroutines. Accept returns an error,
+// while the inlet connections and the fallback connection return the packets queued, then net.ErrClosed.
+// It returns the error of closing the underlying PacketConn, or net.ErrClosed if the inlet has stopped.
+func (i *inlet) Close() error {
+	return i.stop(i.pc.Close)
+}
+
 // Fallback returns the fallback connection of the inlet, or nil if it has none.
 func (i *inlet) Fallback() FromToPacketConn {
 	if i.fallback == nil {
@@ -370,13 +350,6 @@ func (i *inlet) Stats() InletStats {
 	}
 }
 
-// Close closes the underlying PacketConn and stops the internal goroutines. Accept returns an error,
-// while the inlet connections and the fallback connection return the packets queued, then net.ErrClosed.
-// It returns the error of closing the underlying PacketConn, or net.ErrClosed if the inlet has stopped.
-func (i *inlet) Close() error {
-	return i.stop(i.pc.Close)
-}
-
 // Unwrap stops the inlet and returns the underlying PacketConn, as given to Inlet.
 func (i *inlet) Unwrap() PacketConn {
 	// Interrupt the read and write in progress with deadlines rather than by closing, so that the underlying
@@ -386,6 +359,12 @@ func (i *inlet) Unwrap() PacketConn {
 	// Clear the deadlines that have interrupted the loops, which have returned by now
 	_ = i.orig.SetDeadline(time.Time{})
 	return i.orig
+}
+
+// logError would log an unexpected error of reading from or writing to the underlying PacketConn,
+// had the inlet a logger.
+func (i *inlet) logError(err error) {
+	// TODO(vnxme): Log an unexpected reading/writing error
 }
 
 // stop stops the inlet once: it closes the done channel, interrupts the loops with interrupt, waits for them
@@ -414,10 +393,31 @@ func (i *inlet) stop(interrupt func() error) error {
 	return err
 }
 
-// logError would log an unexpected error of reading from or writing to the underlying PacketConn,
-// had the inlet a logger.
-func (i *inlet) logError(err error) {
-	// TODO(vnxme): Log an unexpected reading/writing error
+// inletConfig is an InletConfig with its defaults filled in, and with a zero timeout meaning none.
+type inletConfig struct {
+	idleTimeout  time.Duration
+	writeTimeout time.Duration
+
+	acceptQueueSize   int
+	fallbackQueueSize int
+	maxFlows          int
+	readBufferSize    int
+	readQueueSize     int
+	writeQueueSize    int
+
+	fallbackConn bool
+	packetInfo   bool
+}
+
+// inletPacket is a packet queued for reading from an inlet connection or from the fallback connection,
+// or for writing by the write loop.
+type inletPacket struct {
+	conn *inletConn // The inlet connection of the flow of a packet read
+	dst  net.Addr   // The remote address to write a packet to
+	src  net.Addr   // The local address to write a packet from, if any
+	ref  *[]byte    // Reference to the pooled buffer of buf, if any
+	buf  []byte
+	idx  int // The interface index to write a packet through, if any
 }
 
 // Defaults of the fields of InletConfig, which apply when a field isn't set

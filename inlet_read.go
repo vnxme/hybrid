@@ -50,110 +50,6 @@ type inletPacketInfo struct {
 	idx      int
 }
 
-// newConnection returns a new inlet connection for the flow of the given packet.
-func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
-	src, dst := p.src, p.dst
-	if i.udp != nil {
-		src, dst = addrPortToAddr(p.key.src), addrPortToAddr(p.key.dst)
-	}
-
-	ic := &inletConn{
-		inletConnBase: i.newConnBase(i.cfg.readQueueSize, dst),
-		remoteAddr:    src,
-		key:           p.key,
-	}
-	ic.localIfIdx.Store(int64(p.idx))
-	ic.touch()
-	return ic
-}
-
-// deleteConnection reports a closed or expired connection, for the read loop to delete its flow. It needs no
-// goroutine, so that it can't race with closing the inlet, which waits for the goroutines of the inlet.
-func (i *inlet) deleteConnection(c *inletConn) {
-	if isClosedChan(i.done) { // With no read loop to delete the flow any more, only drop and count the packets left
-		i.discard(c)
-		return
-	}
-	i.closed.Lock()
-	i.closed.conns = append(i.closed.conns, c)
-	i.closed.Unlock()
-}
-
-// deleteLoop deletes the flows whose connections have been closed and reported so far.
-func (i *inlet) deleteLoop() {
-	i.closed.Lock()
-	closed := i.closed.conns
-	i.closed.conns = nil
-	i.closed.Unlock()
-
-	for _, c := range closed {
-		// Ignore a connection that no longer has a flow, e.g. as it's been deleted already,
-		// and whose flow may have a new connection.
-		if e, ok := i.flows[c.key]; ok && e == c {
-			i.deleteFlow(c)
-		} else {
-			i.discard(c)
-		}
-	}
-}
-
-// deleteFlow discards a closed connection, and deletes its flow from the flow table
-// and from the index of remote addresses.
-func (i *inlet) deleteFlow(c *inletConn) {
-	i.discard(c)
-	delete(i.flows, c.key)
-	i.remotes.Lock()
-	if r := c.key.remote(); i.remotes.m[r] == c {
-		delete(i.remotes.m, r)
-	}
-	i.remotes.Unlock()
-}
-
-// discard drops and counts the packets left unread on a closed connection, and removes the connection
-// from those the sweeper checks.
-func (i *inlet) discard(c *inletConn) {
-	for {
-		select {
-		case pkt := <-c.rdRx:
-			putBuf(pkt.ref)
-			i.drops.connClosed.Add(1)
-		default:
-			i.swept.Lock()
-			delete(i.swept.m, c)
-			i.swept.Unlock()
-			return
-		}
-	}
-}
-
-// sweepLoop keeps the clock of the inlet, and ends the flows idle for the idle timeout, checking them every
-// quarter of it, so that a flow ends within one and a quarter idle timeouts of its last packet.
-func (i *inlet) sweepLoop() {
-	defer i.wg.Done()
-
-	start := time.Now() // The clock is zero until the first tick, as is the last packet time of a new flow
-	ticker := time.NewTicker(max(i.cfg.idleTimeout/4, time.Millisecond))
-	defer ticker.Stop()
-	for {
-		select {
-		case <-i.done:
-			return
-		case now := <-ticker.C:
-			clock := int64(now.Sub(start)) // Monotonic, unlike the wall clock
-			i.clock.Store(clock)
-
-			i.swept.Lock()
-			for c := range i.swept.m {
-				if clock-c.touched.Load() >= int64(i.cfg.idleTimeout) {
-					delete(i.swept.m, c)
-					c.expire()
-				}
-			}
-			i.swept.Unlock()
-		}
-	}
-}
-
 // readLoop reads packets from the underlying connection and routes them to their inlet connections,
 // until the inlet closes or the underlying connection fails.
 func (i *inlet) readLoop() {
@@ -343,4 +239,91 @@ func (ic *inletConnBase) receive(b []byte) (int, *inletConn, error) {
 		return n, pkt.conn, errInletShortBuffer
 	}
 	return n, pkt.conn, nil
+}
+
+// deleteConnection reports a closed or expired connection, for the read loop to delete its flow. It needs no
+// goroutine, so that it can't race with closing the inlet, which waits for the goroutines of the inlet.
+func (i *inlet) deleteConnection(c *inletConn) {
+	if isClosedChan(i.done) { // With no read loop to delete the flow any more, only drop and count the packets left
+		i.discard(c)
+		return
+	}
+	i.closed.Lock()
+	i.closed.conns = append(i.closed.conns, c)
+	i.closed.Unlock()
+}
+
+// deleteLoop deletes the flows whose connections have been closed and reported so far.
+func (i *inlet) deleteLoop() {
+	i.closed.Lock()
+	closed := i.closed.conns
+	i.closed.conns = nil
+	i.closed.Unlock()
+
+	for _, c := range closed {
+		// Ignore a connection that no longer has a flow, e.g. as it's been deleted already,
+		// and whose flow may have a new connection.
+		if e, ok := i.flows[c.key]; ok && e == c {
+			i.deleteFlow(c)
+		} else {
+			i.discard(c)
+		}
+	}
+}
+
+// deleteFlow discards a closed connection, and deletes its flow from the flow table
+// and from the index of remote addresses.
+func (i *inlet) deleteFlow(c *inletConn) {
+	i.discard(c)
+	delete(i.flows, c.key)
+	i.remotes.Lock()
+	if r := c.key.remote(); i.remotes.m[r] == c {
+		delete(i.remotes.m, r)
+	}
+	i.remotes.Unlock()
+}
+
+// discard drops and counts the packets left unread on a closed connection, and removes the connection
+// from those the sweeper checks.
+func (i *inlet) discard(c *inletConn) {
+	for {
+		select {
+		case pkt := <-c.rdRx:
+			putBuf(pkt.ref)
+			i.drops.connClosed.Add(1)
+		default:
+			i.swept.Lock()
+			delete(i.swept.m, c)
+			i.swept.Unlock()
+			return
+		}
+	}
+}
+
+// sweepLoop keeps the clock of the inlet, and ends the flows idle for the idle timeout, checking them every
+// quarter of it, so that a flow ends within one and a quarter idle timeouts of its last packet.
+func (i *inlet) sweepLoop() {
+	defer i.wg.Done()
+
+	start := time.Now() // The clock is zero until the first tick, as is the last packet time of a new flow
+	ticker := time.NewTicker(max(i.cfg.idleTimeout/4, time.Millisecond))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-i.done:
+			return
+		case now := <-ticker.C:
+			clock := int64(now.Sub(start)) // Monotonic, unlike the wall clock
+			i.clock.Store(clock)
+
+			i.swept.Lock()
+			for c := range i.swept.m {
+				if clock-c.touched.Load() >= int64(i.cfg.idleTimeout) {
+					delete(i.swept.m, c)
+					c.expire()
+				}
+			}
+			i.swept.Unlock()
+		}
+	}
 }

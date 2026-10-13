@@ -21,13 +21,6 @@ import (
 	"time"
 )
 
-// lookupRemote returns the inlet connection of the latest flow of the given remote address, if any.
-func (i *inlet) lookupRemote(addr net.Addr) *inletConn {
-	i.remotes.RLock()
-	defer i.remotes.RUnlock()
-	return i.remotes.m[addrKey(addr)]
-}
-
 // send copies b into a packet for the write loop to write to dst, from src and through idx if given,
 // and returns once the packet is queued, keeping the flow of c going if c isn't nil. If the write queue
 // is full, it waits for room, and fails if the connection is closed, the inlet stops or the write deadline
@@ -72,6 +65,13 @@ func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int
 		c.touch()
 	}
 	return len(b), nil
+}
+
+// lookupRemote returns the inlet connection of the latest flow of the given remote address, if any.
+func (i *inlet) lookupRemote(addr net.Addr) *inletConn {
+	i.remotes.RLock()
+	defer i.remotes.RUnlock()
+	return i.remotes.m[addrKey(addr)]
 }
 
 // writeLoop writes the packets of the write queue to the underlying connection, until the inlet closes

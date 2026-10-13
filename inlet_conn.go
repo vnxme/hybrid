@@ -35,26 +35,17 @@ type inletConnBase struct {
 	once sync.Once // Protects closing localDone
 }
 
-// closeLocal closes localDone, and reports whether it's done so, rather than found it closed.
-func (ic *inletConnBase) closeLocal() (closed bool) {
-	ic.once.Do(func() {
-		close(ic.localDone)
-		closed = true
-	})
-	return closed
-}
-
-// opError wraps err in net.OpError the same way as a trunk, and so a UDP connection, does: Source is
-// the local address, and Addr is the remote one. Setting a deadline reports the local address as Addr only.
-func (ic *inletConnBase) opError(op string, local, remote net.Addr, err error) error {
-	if err == nil {
-		return nil
+// newConnBase returns the base of a connection of the inlet, with a read queue of the given size
+// and the local address of its flow, if any.
+func (i *inlet) newConnBase(queueSize int, local net.Addr) inletConnBase {
+	return inletConnBase{
+		inlet:      i,
+		localAddr:  local,
+		rdRx:       make(chan *inletPacket, queueSize),
+		localDone:  make(chan struct{}),
+		rdDeadline: makeDeadline(noHook{}),
+		wrDeadline: makeDeadline(noHook{}),
 	}
-	network := ic.inlet.pc.LocalAddr().Network()
-	if op == "set" {
-		return &net.OpError{Op: op, Net: network, Addr: local, Err: err}
-	}
-	return &net.OpError{Op: op, Net: network, Source: local, Addr: remote, Err: err}
 }
 
 // LocalAddr returns the local address of the flow of the connection, or that of the underlying PacketConn
@@ -97,6 +88,28 @@ func (ic *inletConnBase) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+// closeLocal closes localDone, and reports whether it's done so, rather than found it closed.
+func (ic *inletConnBase) closeLocal() (closed bool) {
+	ic.once.Do(func() {
+		close(ic.localDone)
+		closed = true
+	})
+	return closed
+}
+
+// opError wraps err in net.OpError the same way as a trunk, and so a UDP connection, does: Source is
+// the local address, and Addr is the remote one. Setting a deadline reports the local address as Addr only.
+func (ic *inletConnBase) opError(op string, local, remote net.Addr, err error) error {
+	if err == nil {
+		return nil
+	}
+	network := ic.inlet.pc.LocalAddr().Network()
+	if op == "set" {
+		return &net.OpError{Op: op, Net: network, Addr: local, Err: err}
+	}
+	return &net.OpError{Op: op, Net: network, Source: local, Addr: remote, Err: err}
+}
+
 // inletConn is an inlet connection: it reads the packets of a single flow, queued by the read loop,
 // and writes to the remote address of the flow from its local address, until it's closed or released.
 type inletConn struct {
@@ -114,6 +127,35 @@ type inletConn struct {
 	released atomic.Bool // Set before closing localDone, if the flow goes on to the fallback connection
 }
 
+// newConnection returns a new inlet connection for the flow of the given packet.
+func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
+	src, dst := p.src, p.dst
+	if i.udp != nil {
+		src, dst = addrPortToAddr(p.key.src), addrPortToAddr(p.key.dst)
+	}
+
+	ic := &inletConn{
+		inletConnBase: i.newConnBase(i.cfg.readQueueSize, dst),
+		remoteAddr:    src,
+		key:           p.key,
+	}
+	ic.localIfIdx.Store(int64(p.idx))
+	ic.touch()
+	return ic
+}
+
+// Close closes the connection and ends its flow, so that the next packet of the flow starts a new one.
+func (ic *inletConn) Close() error {
+	if !ic.closeLocal() {
+		return ic.opError("close", ic.LocalAddr(), ic.remoteAddr, errInletClosed)
+	}
+	ic.inlet.deleteConnection(ic)
+	return nil
+}
+
+// LocalIfIdx returns the index of the interface the latest packet of the flow came through, used for replies.
+func (ic *inletConn) LocalIfIdx() int { return int(ic.localIfIdx.Load()) }
+
 // ReadFrom reads a packet of the flow, and returns a copy of the remote address of the flow.
 func (ic *inletConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	n, addr, _, _, err := ic.ReadFromTo(b)
@@ -129,31 +171,6 @@ func (ic *inletConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) 
 		return 0, nil, nil, 0, err
 	}
 	return n, cloneAddr(ic.remoteAddr), cloneAddr(ic.localAddr), ic.LocalIfIdx(), err // Copies the caller may change
-}
-
-// WriteTo writes a packet to the remote address of the flow, as WriteToFrom does with no local address.
-func (ic *inletConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	return ic.WriteToFrom(b, addr, nil, 0)
-}
-
-// WriteToFrom writes a packet to the remote address of the flow from its local address, through its latest
-// interface rather than idx. Like a connected UDP socket, it fails with net.ErrWriteToConnected if dst or src
-// is another address.
-func (ic *inletConn) WriteToFrom(b []byte, dst, src net.Addr, _ int) (int, error) {
-	if dst != nil && addrKey(dst) != ic.key.remote() || src != nil && addrKey(src) != addrKey(ic.LocalAddr()) {
-		return 0, ic.opError("write", ic.LocalAddr(), dst, errInletWriteToConnected)
-	}
-	n, err := ic.send(b, ic, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx())
-	return n, ic.opError("write", ic.LocalAddr(), ic.remoteAddr, err)
-}
-
-// Close closes the connection and ends its flow, so that the next packet of the flow starts a new one.
-func (ic *inletConn) Close() error {
-	if !ic.closeLocal() {
-		return ic.opError("close", ic.LocalAddr(), ic.remoteAddr, errInletClosed)
-	}
-	ic.inlet.deleteConnection(ic)
-	return nil
 }
 
 // Release hands the flow of the connection over to the fallback connection of the inlet: the packets
@@ -178,14 +195,23 @@ func (ic *inletConn) Release() error {
 	}
 }
 
-// touch records the activity of the flow of the connection, at the time of the clock of the inlet.
-func (ic *inletConn) touch() { ic.touched.Store(ic.inlet.clock.Load()) }
+// RemoteAddr returns the remote address of the flow.
+func (ic *inletConn) RemoteAddr() net.Addr { return ic.remoteAddr }
 
-// expire ends the flow of a connection that has been idle: it closes the connection, unless it's been
-// closed already, and reports the flow for deletion, even if it's been released.
-func (ic *inletConn) expire() {
-	ic.closeLocal()
-	ic.inlet.deleteConnection(ic)
+// WriteTo writes a packet to the remote address of the flow, as WriteToFrom does with no local address.
+func (ic *inletConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return ic.WriteToFrom(b, addr, nil, 0)
+}
+
+// WriteToFrom writes a packet to the remote address of the flow from its local address, through its latest
+// interface rather than idx. Like a connected UDP socket, it fails with net.ErrWriteToConnected if dst or src
+// is another address.
+func (ic *inletConn) WriteToFrom(b []byte, dst, src net.Addr, _ int) (int, error) {
+	if dst != nil && addrKey(dst) != ic.key.remote() || src != nil && addrKey(src) != addrKey(ic.LocalAddr()) {
+		return 0, ic.opError("write", ic.LocalAddr(), dst, errInletWriteToConnected)
+	}
+	n, err := ic.send(b, ic, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx())
+	return n, ic.opError("write", ic.LocalAddr(), ic.remoteAddr, err)
 }
 
 // ended reports whether the flow of the connection has ended, i.e. it's been closed without being released,
@@ -199,11 +225,15 @@ func (ic *inletConn) ended() bool {
 	return !ic.released.Load() || ic.inlet.fallback != nil && isClosedChan(ic.inlet.fallback.localDone)
 }
 
-// LocalIfIdx returns the index of the interface the latest packet of the flow came through, used for replies.
-func (ic *inletConn) LocalIfIdx() int { return int(ic.localIfIdx.Load()) }
+// expire ends the flow of a connection that has been idle: it closes the connection, unless it's been
+// closed already, and reports the flow for deletion, even if it's been released.
+func (ic *inletConn) expire() {
+	ic.closeLocal()
+	ic.inlet.deleteConnection(ic)
+}
 
-// RemoteAddr returns the remote address of the flow.
-func (ic *inletConn) RemoteAddr() net.Addr { return ic.remoteAddr }
+// touch records the activity of the flow of the connection, at the time of the clock of the inlet.
+func (ic *inletConn) touch() { ic.touched.Store(ic.inlet.clock.Load()) }
 
 // inletFallback is the fallback connection of an inlet: a plain PacketConn serving the flows released by
 // their handlers. It deliberately gives no access to the socket.
@@ -216,17 +246,15 @@ func (i *inlet) newFallback() *inletFallback {
 	return &inletFallback{i.newConnBase(i.cfg.fallbackQueueSize, nil)}
 }
 
-// newConnBase returns the base of a connection of the inlet, with a read queue of the given size
-// and the local address of its flow, if any.
-func (i *inlet) newConnBase(queueSize int, local net.Addr) inletConnBase {
-	return inletConnBase{
-		inlet:      i,
-		localAddr:  local,
-		rdRx:       make(chan *inletPacket, queueSize),
-		localDone:  make(chan struct{}),
-		rdDeadline: makeDeadline(noHook{}),
-		wrDeadline: makeDeadline(noHook{}),
+// Close closes the fallback connection, so that the packets queued are dropped, and the flows released end:
+// the next packet of each starts a new flow, queued for Accept.
+func (ic *inletFallback) Close() error {
+	var err error
+	if !ic.closeLocal() {
+		err = ic.opError("close", ic.LocalAddr(), nil, errInletClosed)
 	}
+	ic.discard()
+	return err
 }
 
 // ReadFrom reads a packet of a released flow, and returns the remote address of the flow.
@@ -273,17 +301,6 @@ func (ic *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int,
 	}
 	n, err := ic.send(b, c, to, src, idx)
 	return n, ic.opError("write", ic.LocalAddr(), dst, err)
-}
-
-// Close closes the fallback connection, so that the packets queued are dropped, and the flows released end:
-// the next packet of each starts a new flow, queued for Accept.
-func (ic *inletFallback) Close() error {
-	var err error
-	if !ic.closeLocal() {
-		err = ic.opError("close", ic.LocalAddr(), nil, errInletClosed)
-	}
-	ic.discard()
-	return err
 }
 
 // discard drops and counts the packets left unread on the closed fallback connection.
