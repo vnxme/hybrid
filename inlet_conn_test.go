@@ -16,6 +16,7 @@ package hybrid
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -139,6 +140,46 @@ func TestInletConnClosed(t *testing.T) {
 		writeFrom(t, client, b, "b2")
 		waitInletStats(t, ln, InletStats{ConnClosed: 4}) // b1 too, as the connection of b has expired as well
 	})
+}
+
+// TestInletConnErrors ensures an inlet connection and the fallback connection report closing as a trunk does,
+// and so a UDP connection: as net.ErrClosed, wrapped in net.OpError with the operation and the addresses.
+func TestInletConnErrors(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	writeFrom(t, client, a, "a1")
+	conn, fb := acceptInletConn(t, ln), ln.Fallback()
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close() = %v, want nil", err)
+	}
+	if err := fb.Close(); err != nil {
+		t.Fatalf("Close() of the fallback connection = %v, want nil", err)
+	}
+
+	str := func(a net.Addr) string { return fmt.Sprint(a) } // Tells a nil address from any other
+	b := make([]byte, 8)
+	for _, test := range []struct {
+		name         string
+		err          error
+		op           string
+		source, addr net.Addr
+	}{
+		{"ReadFrom", func() error { _, _, err := conn.ReadFrom(b); return err }(), "read", conn.LocalAddr(), a},
+		{"WriteTo", func() error { _, err := conn.WriteTo(b, a); return err }(), "write", conn.LocalAddr(), a},
+		{"Close", conn.Close(), "close", conn.LocalAddr(), a},
+		{"Release", conn.Release(), "release", conn.LocalAddr(), a},
+		{"SetDeadline", conn.SetDeadline(time.Time{}), "set", nil, conn.LocalAddr()},
+		{"FallbackReadFrom", func() error { _, _, err := fb.ReadFrom(b); return err }(), "read", fb.LocalAddr(), nil},
+		{"FallbackWriteTo", func() error { _, err := fb.WriteTo(b, a); return err }(), "write", fb.LocalAddr(), a},
+		{"FallbackClose", fb.Close(), "close", fb.LocalAddr(), nil},
+		{"FallbackSetDeadline", fb.SetDeadline(time.Time{}), "set", nil, fb.LocalAddr()},
+	} {
+		var oe *net.OpError
+		if !errors.As(test.err, &oe) || !errors.Is(test.err, net.ErrClosed) || oe.Op != test.op ||
+			oe.Net != ln.Addr().Network() || str(oe.Source) != str(test.source) || str(oe.Addr) != str(test.addr) {
+			t.Errorf("%s() = %#v, want a %q net.OpError from %v to %v of net.ErrClosed", test.name, test.err, test.op, test.source, test.addr)
+		}
+	}
 }
 
 // TestInletDeadlines ensures the read and write deadlines of inlet connections and of the fallback connection.

@@ -366,7 +366,7 @@ func (i *inlet) Stats() InletStats {
 }
 
 // Close closes the underlying PacketConn and stops the internal goroutines. Accept returns an error,
-// while the inlet connections and the fallback connection return the packets queued, then io.EOF.
+// while the inlet connections and the fallback connection return the packets queued, then net.ErrClosed.
 // It returns the error of closing the underlying PacketConn, or net.ErrClosed if the inlet has stopped.
 func (i *inlet) Close() error {
 	return i.stop(i.pc.Close)
@@ -392,7 +392,7 @@ func (i *inlet) stop(interrupt func() error) error {
 		// Close the done channel in order to:
 		// - unblock Accept and make it return an error;
 		// - make reads of the inlet connections and of the fallback connection return
-		//   the packets queued, then io.EOF, and make their writes fail;
+		//   the packets queued, then net.ErrClosed, and make their writes fail;
 		// - let the readLoop goroutine return before it reads again;
 		// - let the writeLoop goroutine return before it writes again.
 		close(i.done)

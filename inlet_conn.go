@@ -16,7 +16,6 @@ package hybrid
 
 import (
 	"errors"
-	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -46,6 +45,19 @@ func (ic *inletConnBase) closeLocal() (closed bool) {
 	return closed
 }
 
+// opError wraps err in net.OpError the same way as a trunk, and so a UDP connection, does: Source is
+// the local address, and Addr is the remote one. Setting a deadline reports the local address as Addr only.
+func (ic *inletConnBase) opError(op string, local, remote net.Addr, err error) error {
+	if err == nil {
+		return nil
+	}
+	network := ic.inlet.pc.LocalAddr().Network()
+	if op == "set" {
+		return &net.OpError{Op: op, Net: network, Addr: local, Err: err}
+	}
+	return &net.OpError{Op: op, Net: network, Source: local, Addr: remote, Err: err}
+}
+
 type inletConn struct {
 	localAddr  net.Addr
 	remoteAddr net.Addr
@@ -69,10 +81,7 @@ func (ic *inletConn) ReadFrom(b []byte) (int, net.Addr, error) {
 
 func (ic *inletConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, src, dst, idx, err := ic.readFromTo(b)
-	if err != nil && err != io.EOF && !errors.Is(err, io.ErrClosedPipe) {
-		err = &net.OpError{Op: "read", Net: ic.inlet.pc.LocalAddr().Network(), Err: err, Source: ic.LocalAddr(), Addr: ic.remoteAddr}
-	}
-	return n, src, dst, idx, err
+	return n, src, dst, idx, ic.opError("read", ic.LocalAddr(), ic.remoteAddr, err)
 }
 
 func (ic *inletConn) readFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
@@ -89,16 +98,13 @@ func (ic *inletConn) WriteTo(b []byte, _ net.Addr) (int, error) {
 
 func (ic *inletConn) WriteToFrom(b []byte, _, _ net.Addr, _ int) (int, error) {
 	n, err := ic.send(b, ic, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx())
-	if err != nil && !errors.Is(err, io.ErrClosedPipe) {
-		err = &net.OpError{Op: "write", Net: ic.inlet.pc.LocalAddr().Network(), Err: err, Source: ic.LocalAddr(), Addr: ic.remoteAddr}
-	}
-	return n, err
+	return n, ic.opError("write", ic.LocalAddr(), ic.remoteAddr, err)
 }
 
 // Close closes the connection and ends its flow, so that the next packet of the flow starts a new one.
 func (ic *inletConn) Close() error {
 	if !ic.closeLocal() {
-		return net.ErrClosed
+		return ic.opError("close", ic.LocalAddr(), ic.remoteAddr, net.ErrClosed)
 	}
 	ic.inlet.deleteConnection(ic)
 	return nil
@@ -111,7 +117,7 @@ func (ic *inletConn) Release() error {
 	ic.releaseMu.Lock()
 	defer ic.releaseMu.Unlock()
 	if isClosedChan(ic.localDone) {
-		return net.ErrClosed
+		return ic.opError("release", ic.LocalAddr(), ic.remoteAddr, net.ErrClosed)
 	}
 
 	ic.released.Store(true)
@@ -152,7 +158,7 @@ func (ic *inletConn) RemoteAddr() net.Addr { return ic.remoteAddr }
 
 func (ic *inletConn) SetDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return io.ErrClosedPipe
+		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
 	}
 	ic.rdDeadline.Set(t)
 	ic.wrDeadline.Set(t)
@@ -161,7 +167,7 @@ func (ic *inletConn) SetDeadline(t time.Time) error {
 
 func (ic *inletConn) SetReadDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return io.ErrClosedPipe
+		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
 	}
 	ic.rdDeadline.Set(t)
 	return nil
@@ -169,7 +175,7 @@ func (ic *inletConn) SetReadDeadline(t time.Time) error {
 
 func (ic *inletConn) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return io.ErrClosedPipe
+		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
 	}
 	ic.wrDeadline.Set(t)
 	return nil
@@ -207,7 +213,7 @@ func (ic *inletFallback) ReadFrom(b []byte) (int, net.Addr, error) {
 func (ic *inletFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, c, err := ic.receive(b)
 	if err != nil {
-		return 0, nil, nil, 0, ic.opError("read", nil, err)
+		return 0, nil, nil, 0, ic.opError("read", ic.LocalAddr(), nil, err)
 	}
 	return n, c.remoteAddr, c.localAddr, c.LocalIfIdx(), nil
 }
@@ -223,14 +229,14 @@ func (ic *inletFallback) WriteTo(b []byte, addr net.Addr) (int, error) {
 // so a reply from a dst without a flow is queued for Accept, rather than read by the fallback connection.
 func (ic *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	if dst == nil {
-		return 0, ic.opError("write", nil, errMissingAddress)
+		return 0, ic.opError("write", ic.LocalAddr(), nil, errMissingAddress)
 	}
 	c := ic.inlet.lookupRemote(dst)
 	if src == nil && c != nil {
 		src, idx = c.localAddr, c.LocalIfIdx()
 	}
 	n, err := ic.send(b, c, dst, src, idx)
-	return n, ic.opError("write", dst, err)
+	return n, ic.opError("write", ic.LocalAddr(), dst, err)
 }
 
 // Close closes the fallback connection, so that the packets queued and those of released flows are dropped
@@ -238,7 +244,7 @@ func (ic *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int,
 func (ic *inletFallback) Close() error {
 	var err error
 	if !ic.closeLocal() {
-		err = net.ErrClosed
+		err = ic.opError("close", ic.LocalAddr(), nil, net.ErrClosed)
 	}
 	ic.discard()
 	return err
@@ -261,7 +267,7 @@ func (ic *inletFallback) LocalAddr() net.Addr { return ic.inlet.pc.LocalAddr() }
 
 func (ic *inletFallback) SetDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return io.ErrClosedPipe
+		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
 	}
 	ic.rdDeadline.Set(t)
 	ic.wrDeadline.Set(t)
@@ -270,7 +276,7 @@ func (ic *inletFallback) SetDeadline(t time.Time) error {
 
 func (ic *inletFallback) SetReadDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return io.ErrClosedPipe
+		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
 	}
 	ic.rdDeadline.Set(t)
 	return nil
@@ -278,18 +284,10 @@ func (ic *inletFallback) SetReadDeadline(t time.Time) error {
 
 func (ic *inletFallback) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return io.ErrClosedPipe
+		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
 	}
 	ic.wrDeadline.Set(t)
 	return nil
-}
-
-// opError wraps an error of an operation on the fallback connection, except for the end of reading.
-func (ic *inletFallback) opError(op string, addr net.Addr, err error) error {
-	if err == nil || err == io.EOF || errors.Is(err, io.ErrClosedPipe) {
-		return err
-	}
-	return &net.OpError{Op: op, Net: ic.LocalAddr().Network(), Source: ic.LocalAddr(), Addr: addr, Err: err}
 }
 
 var errMissingAddress = errors.New("hybrid: missing address")

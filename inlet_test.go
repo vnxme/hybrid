@@ -112,9 +112,9 @@ func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize
 		var n int
 		for {
 			// Once the inlet has closed, setting a deadline fails, but the packets queued are still read,
-			// without waiting, then io.EOF
+			// without waiting, then net.ErrClosed
 			err = mc.SetReadDeadline(time.Now().Add(2 * timeout))
-			if err != nil && !errors.Is(err, io.ErrClosedPipe) {
+			if err != nil && !errors.Is(err, net.ErrClosed) {
 				t.Errorf("%v: pc.SetReadDeadline() = %v, want nil", me, err)
 				break
 			}
@@ -415,7 +415,7 @@ func TestInletConfig(t *testing.T) {
 }
 
 // TestInletClose ensures that once an inlet is closed, Accept fails, an inlet connection returns the packets
-// queued and then io.EOF, writes fail, and the fallback connection fails too.
+// queued and then net.ErrClosed, writes fail, and the fallback connection fails too.
 func TestInletClose(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
@@ -439,14 +439,14 @@ func TestInletClose(t *testing.T) {
 			t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, want)
 		}
 	}
-	if _, _, err := conn.ReadFrom(b); !errors.Is(err, io.EOF) {
-		t.Errorf("Read() = %v, want io.EOF", err)
+	if _, _, err := conn.ReadFrom(b); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("ReadFrom() = %v, want net.ErrClosed", err)
 	}
 	if _, err := conn.WriteTo([]byte("x"), conn.RemoteAddr()); err == nil {
 		t.Errorf("Write() = nil, want an error")
 	}
-	if _, _, err := ln.Fallback().ReadFrom(b); !errors.Is(err, io.EOF) {
-		t.Errorf("ReadFrom() of the fallback connection = %v, want io.EOF", err)
+	if _, _, err := ln.Fallback().ReadFrom(b); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("ReadFrom() of the fallback connection = %v, want net.ErrClosed", err)
 	}
 	if _, err := ln.Fallback().WriteTo([]byte("x"), a); err == nil {
 		t.Errorf("WriteTo() of the fallback connection = nil, want an error")
