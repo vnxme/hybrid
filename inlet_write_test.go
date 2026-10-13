@@ -116,6 +116,43 @@ func TestInletFallbackFromTo(t *testing.T) {
 	}
 }
 
+// TestInletFallbackWriteCopiesAddrs ensures the fallback connection writes a packet queued to and from
+// the addresses given at the time of writing, though the caller changes them before the packet is written.
+func TestInletFallbackWriteCopiesAddrs(t *testing.T) {
+	client, server := BufferedTrunk(1, nil, nil) // Holds one packet, the next one blocks the write loop
+	t.Cleanup(func() { _ = client.Close() })
+	ln := Inlet(server, &InletConfig{FallbackConn: true, WriteTimeout: -1})
+	t.Cleanup(func() { _ = ln.Close() })
+	fb := ln.Fallback()
+
+	u := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 9), Port: 9}
+	dst := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 8), Port: 8}
+	src := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 2), Port: 53}
+	wantDst, wantSrc := dst.String(), src.String()
+	for _, data := range []string{"w1", "w2"} { // Into the trunk, then blocking the write loop
+		if _, err := fb.WriteTo([]byte(data), u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := fb.WriteToFrom([]byte("w3"), dst, src, 7); err != nil { // Queued
+		t.Fatal(err)
+	}
+	dst.IP[len(dst.IP)-1], dst.Port = 99, 99
+	src.IP[len(src.IP)-1], src.Port = 99, 99
+
+	b := make([]byte, 8)
+	for _, want := range []string{"w1", "w2", "w3"} {
+		_ = client.SetReadDeadline(time.Now().Add(time.Second))
+		n, from, to, idx, err := client.ReadFromTo(b)
+		if err != nil || string(b[:n]) != want {
+			t.Fatalf("ReadFromTo() = %q, %v, want %q, nil", b[:n], err, want)
+		}
+		if want == "w3" && (to.String() != wantDst || from.String() != wantSrc || idx != 7) {
+			t.Errorf("ReadFromTo() = from %v to %v through %d, want from %s to %s through 7", from, to, idx, wantSrc, wantDst)
+		}
+	}
+}
+
 // TestInletWriteCopies ensures a write returns once its packet is queued, with a copy of the bytes given.
 func TestInletWriteCopies(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}

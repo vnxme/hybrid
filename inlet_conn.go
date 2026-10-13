@@ -230,11 +230,19 @@ func (ic *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int,
 	if dst == nil {
 		return 0, ic.opError("write", ic.LocalAddr(), nil, errInletMissingAddress)
 	}
+	// The packet is written once this write returns, so don't queue the addresses of the caller, which may
+	// change them by then: use those of the latest flow of dst if any, or copies otherwise, as trunks do
+	var to net.Addr
 	c := ic.inlet.lookupRemote(dst)
-	if src == nil && c != nil {
-		src, idx = c.localAddr, c.LocalIfIdx()
+	switch {
+	case c == nil:
+		to, src = cloneAddr(dst), cloneAddr(src)
+	case src == nil:
+		to, src, idx = c.remoteAddr, c.localAddr, c.LocalIfIdx()
+	default:
+		to, src = c.remoteAddr, cloneAddr(src)
 	}
-	n, err := ic.send(b, c, dst, src, idx)
+	n, err := ic.send(b, c, to, src, idx)
 	return n, ic.opError("write", ic.LocalAddr(), dst, err)
 }
 
