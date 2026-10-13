@@ -19,7 +19,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"os"
 	"time"
 )
 
@@ -307,37 +306,37 @@ func (i *inlet) toFallback(pkt *inletPacket) {
 func (ic *inletConnBase) receive(b []byte) (int, *inletConn, error) {
 	switch {
 	case isClosedChan(ic.localDone):
-		return 0, nil, net.ErrClosed
+		return 0, nil, errInletClosed
 	case isClosedChan(ic.inlet.done) && len(ic.rdRx) == 0:
-		return 0, nil, net.ErrClosed
+		return 0, nil, errInletClosed
 	case isClosedChan(ic.rdDeadline.Wait()):
-		return 0, nil, os.ErrDeadlineExceeded
+		return 0, nil, errInletDeadlineExceeded
 	}
 
 	ic.rdMu.Lock()
 	defer ic.rdMu.Unlock()
 	switch {
 	case isClosedChan(ic.localDone):
-		return 0, nil, net.ErrClosed
+		return 0, nil, errInletClosed
 	case isClosedChan(ic.inlet.done) && len(ic.rdRx) == 0:
-		return 0, nil, net.ErrClosed
+		return 0, nil, errInletClosed
 	case isClosedChan(ic.rdDeadline.Wait()):
-		return 0, nil, os.ErrDeadlineExceeded
+		return 0, nil, errInletDeadlineExceeded
 	}
 
 	var pkt *inletPacket
 	select {
 	case pkt = <-ic.rdRx:
 	case <-ic.localDone:
-		return 0, nil, net.ErrClosed
+		return 0, nil, errInletClosed
 	case <-ic.inlet.done:
 		select {
 		case pkt = <-ic.rdRx:
 		default:
-			return 0, nil, net.ErrClosed
+			return 0, nil, errInletClosed
 		}
 	case <-ic.rdDeadline.Wait():
-		return 0, nil, os.ErrDeadlineExceeded
+		return 0, nil, errInletDeadlineExceeded
 	}
 	n := copy(b, pkt.buf)
 	putBuf(pkt.ref)

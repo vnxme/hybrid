@@ -18,7 +18,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"os"
 	"time"
 )
 
@@ -37,11 +36,11 @@ func (i *inlet) lookupRemote(addr net.Addr) *inletConn {
 func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int) (int, error) {
 	switch {
 	case isClosedChan(ic.localDone):
-		return 0, net.ErrClosed
+		return 0, errInletClosed
 	case isClosedChan(ic.inlet.done):
-		return 0, net.ErrClosed
+		return 0, errInletClosed
 	case isClosedChan(ic.wrDeadline.Wait()):
-		return 0, os.ErrDeadlineExceeded
+		return 0, errInletDeadlineExceeded
 	}
 
 	pkt := &inletPacket{dst: dst, src: src, idx: idx}
@@ -60,13 +59,13 @@ func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int
 		return len(b), nil
 	case <-ic.localDone:
 		putBuf(pkt.ref)
-		return 0, net.ErrClosed
+		return 0, errInletClosed
 	case <-ic.inlet.done:
 		putBuf(pkt.ref)
-		return 0, net.ErrClosed
+		return 0, errInletClosed
 	case <-ic.wrDeadline.Wait():
 		putBuf(pkt.ref)
-		return 0, os.ErrDeadlineExceeded
+		return 0, errInletDeadlineExceeded
 	}
 }
 

@@ -15,7 +15,6 @@
 package hybrid
 
 import (
-	"errors"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -104,7 +103,7 @@ func (ic *inletConn) WriteToFrom(b []byte, _, _ net.Addr, _ int) (int, error) {
 // Close closes the connection and ends its flow, so that the next packet of the flow starts a new one.
 func (ic *inletConn) Close() error {
 	if !ic.closeLocal() {
-		return ic.opError("close", ic.LocalAddr(), ic.remoteAddr, net.ErrClosed)
+		return ic.opError("close", ic.LocalAddr(), ic.remoteAddr, errInletClosed)
 	}
 	ic.inlet.deleteConnection(ic)
 	return nil
@@ -117,7 +116,7 @@ func (ic *inletConn) Release() error {
 	ic.releaseMu.Lock()
 	defer ic.releaseMu.Unlock()
 	if isClosedChan(ic.localDone) {
-		return ic.opError("release", ic.LocalAddr(), ic.remoteAddr, net.ErrClosed)
+		return ic.opError("release", ic.LocalAddr(), ic.remoteAddr, errInletClosed)
 	}
 
 	ic.released.Store(true)
@@ -158,7 +157,7 @@ func (ic *inletConn) RemoteAddr() net.Addr { return ic.remoteAddr }
 
 func (ic *inletConn) SetDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
+		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
 	}
 	ic.rdDeadline.Set(t)
 	ic.wrDeadline.Set(t)
@@ -167,7 +166,7 @@ func (ic *inletConn) SetDeadline(t time.Time) error {
 
 func (ic *inletConn) SetReadDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
+		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
 	}
 	ic.rdDeadline.Set(t)
 	return nil
@@ -175,7 +174,7 @@ func (ic *inletConn) SetReadDeadline(t time.Time) error {
 
 func (ic *inletConn) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
+		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
 	}
 	ic.wrDeadline.Set(t)
 	return nil
@@ -229,7 +228,7 @@ func (ic *inletFallback) WriteTo(b []byte, addr net.Addr) (int, error) {
 // so a reply from a dst without a flow is queued for Accept, rather than read by the fallback connection.
 func (ic *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	if dst == nil {
-		return 0, ic.opError("write", ic.LocalAddr(), nil, errMissingAddress)
+		return 0, ic.opError("write", ic.LocalAddr(), nil, errInletMissingAddress)
 	}
 	c := ic.inlet.lookupRemote(dst)
 	if src == nil && c != nil {
@@ -244,7 +243,7 @@ func (ic *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int,
 func (ic *inletFallback) Close() error {
 	var err error
 	if !ic.closeLocal() {
-		err = ic.opError("close", ic.LocalAddr(), nil, net.ErrClosed)
+		err = ic.opError("close", ic.LocalAddr(), nil, errInletClosed)
 	}
 	ic.discard()
 	return err
@@ -267,7 +266,7 @@ func (ic *inletFallback) LocalAddr() net.Addr { return ic.inlet.pc.LocalAddr() }
 
 func (ic *inletFallback) SetDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
+		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
 	}
 	ic.rdDeadline.Set(t)
 	ic.wrDeadline.Set(t)
@@ -276,7 +275,7 @@ func (ic *inletFallback) SetDeadline(t time.Time) error {
 
 func (ic *inletFallback) SetReadDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
+		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
 	}
 	ic.rdDeadline.Set(t)
 	return nil
@@ -284,13 +283,11 @@ func (ic *inletFallback) SetReadDeadline(t time.Time) error {
 
 func (ic *inletFallback) SetWriteDeadline(t time.Time) error {
 	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, net.ErrClosed)
+		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
 	}
 	ic.wrDeadline.Set(t)
 	return nil
 }
-
-var errMissingAddress = errors.New("hybrid: missing address")
 
 // Interface guards
 var (

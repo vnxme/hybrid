@@ -15,8 +15,10 @@
 package hybrid
 
 import (
+	"errors"
 	"math"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -325,14 +327,14 @@ func Inlet(pc PacketConn, config *InletConfig) InletListener {
 // Accept waits for and returns the next connection to the listener.
 func (i *inlet) Accept() (InletConn, error) {
 	if isClosedChan(i.done) {
-		return nil, net.ErrClosed
+		return nil, errInletClosed
 	}
 
 	select {
 	case conn := <-i.acceptQueue:
 		return conn, nil
 	case <-i.done:
-		return nil, net.ErrClosed
+		return nil, errInletClosed
 	}
 }
 
@@ -387,7 +389,7 @@ func (i *inlet) Unwrap() PacketConn {
 // to return, and drops the writes left. It returns the error of interrupt, or net.ErrClosed if the inlet
 // has been stopped already.
 func (i *inlet) stop(interrupt func() error) error {
-	err := net.ErrClosed
+	err := errInletClosed
 	i.once.Do(func() {
 		// Close the done channel in order to:
 		// - unblock Accept and make it return an error;
@@ -425,6 +427,13 @@ const (
 	DefaultInletWriteTimeout      = 500 * time.Millisecond
 
 	minInletReadBufferSize = 512 // A read buffer of less than 512 bytes seems impractical
+)
+
+// Shared variables
+var (
+	errInletClosed           = net.ErrClosed // Reported by using a closed connection, or one of a stopped inlet, the same way as by UDP after local closure
+	errInletDeadlineExceeded = os.ErrDeadlineExceeded
+	errInletMissingAddress   = errors.New("hybrid: missing address") // Reported by writing to the fallback connection with no remote address
 )
 
 // Interface guards
