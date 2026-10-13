@@ -56,8 +56,7 @@ func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
 	}
 
 	ic := &inletConn{
-		inletConnBase: i.newConnBase(i.cfg.readQueueSize),
-		localAddr:     dst,
+		inletConnBase: i.newConnBase(i.cfg.readQueueSize, dst),
 		remoteAddr:    src,
 		key:           p.key,
 	}

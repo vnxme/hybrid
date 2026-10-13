@@ -25,6 +25,7 @@ import (
 // and inletFallback.
 type inletConnBase struct {
 	inlet     *inlet
+	localAddr net.Addr          // Local address of the flow, if any
 	rdRx      chan *inletPacket // Packets waiting to be read
 	localDone chan struct{}     // Closed once the connection is closed
 
@@ -56,8 +57,47 @@ func (ic *inletConnBase) opError(op string, local, remote net.Addr, err error) e
 	return &net.OpError{Op: op, Net: network, Source: local, Addr: remote, Err: err}
 }
 
+// LocalAddr returns the local address of the flow of the connection, or that of the underlying PacketConn
+// if there's none, e.g. for the fallback connection, which serves many flows.
+func (ic *inletConnBase) LocalAddr() net.Addr {
+	if ic.localAddr == nil {
+		return ic.inlet.pc.LocalAddr()
+	}
+	return ic.localAddr
+}
+
+// SetDeadline sets the read and write deadlines to t. It returns net.ErrClosed
+// only once the connection is closed, since packets queued may be read after the inlet stops.
+func (ic *inletConnBase) SetDeadline(t time.Time) error {
+	if isClosedChan(ic.localDone) {
+		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
+	}
+	ic.rdDeadline.Set(t)
+	ic.wrDeadline.Set(t)
+	return nil
+}
+
+// SetReadDeadline sets the read deadline to t. It returns net.ErrClosed
+// only once the connection is closed, since packets queued may be read after the inlet stops.
+func (ic *inletConnBase) SetReadDeadline(t time.Time) error {
+	if isClosedChan(ic.localDone) {
+		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
+	}
+	ic.rdDeadline.Set(t)
+	return nil
+}
+
+// SetWriteDeadline sets the write deadline to t. Like UDP, it returns net.ErrClosed
+// only once the connection is closed, while a write fails with it after the inlet stops too.
+func (ic *inletConnBase) SetWriteDeadline(t time.Time) error {
+	if isClosedChan(ic.localDone) {
+		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
+	}
+	ic.wrDeadline.Set(t)
+	return nil
+}
+
 type inletConn struct {
-	localAddr  net.Addr
 	remoteAddr net.Addr
 
 	key flowKey
@@ -141,39 +181,7 @@ func (ic *inletConn) ended() bool { return isClosedChan(ic.localDone) && !ic.rel
 
 func (ic *inletConn) LocalIfIdx() int { return int(ic.localIfIdx.Load()) }
 
-func (ic *inletConn) LocalAddr() net.Addr {
-	if ic.localAddr == nil {
-		return ic.inlet.pc.LocalAddr()
-	}
-	return ic.localAddr
-}
-
 func (ic *inletConn) RemoteAddr() net.Addr { return ic.remoteAddr }
-
-func (ic *inletConn) SetDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
-	}
-	ic.rdDeadline.Set(t)
-	ic.wrDeadline.Set(t)
-	return nil
-}
-
-func (ic *inletConn) SetReadDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
-	}
-	ic.rdDeadline.Set(t)
-	return nil
-}
-
-func (ic *inletConn) SetWriteDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
-	}
-	ic.wrDeadline.Set(t)
-	return nil
-}
 
 // inletFallback is the fallback connection of an inlet: a plain PacketConn serving the flows released by
 // their handlers. It deliberately gives no access to the socket.
@@ -182,13 +190,15 @@ type inletFallback struct {
 }
 
 func (i *inlet) newFallback() *inletFallback {
-	return &inletFallback{i.newConnBase(i.cfg.fallbackQueueSize)}
+	return &inletFallback{i.newConnBase(i.cfg.fallbackQueueSize, nil)}
 }
 
-// newConnBase returns the base of a connection of the inlet, with a read queue of the given size.
-func (i *inlet) newConnBase(queueSize int) inletConnBase {
+// newConnBase returns the base of a connection of the inlet, with a read queue of the given size
+// and the local address of its flow, if any.
+func (i *inlet) newConnBase(queueSize int, local net.Addr) inletConnBase {
 	return inletConnBase{
 		inlet:      i,
+		localAddr:  local,
 		rdRx:       make(chan *inletPacket, queueSize),
 		localDone:  make(chan struct{}),
 		rdDeadline: makeDeadline(noHook{}),
@@ -263,33 +273,6 @@ func (ic *inletFallback) discard() {
 			return
 		}
 	}
-}
-
-func (ic *inletFallback) LocalAddr() net.Addr { return ic.inlet.pc.LocalAddr() }
-
-func (ic *inletFallback) SetDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
-	}
-	ic.rdDeadline.Set(t)
-	ic.wrDeadline.Set(t)
-	return nil
-}
-
-func (ic *inletFallback) SetReadDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
-	}
-	ic.rdDeadline.Set(t)
-	return nil
-}
-
-func (ic *inletFallback) SetWriteDeadline(t time.Time) error {
-	if isClosedChan(ic.localDone) || isClosedChan(ic.inlet.done) {
-		return ic.opError("set", ic.LocalAddr(), nil, errInletClosed)
-	}
-	ic.wrDeadline.Set(t)
-	return nil
 }
 
 // Interface guards

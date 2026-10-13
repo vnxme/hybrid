@@ -111,10 +111,9 @@ func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize
 		var err error
 		var n int
 		for {
-			// Once the inlet has closed, setting a deadline fails, but the packets queued are still read,
-			// without waiting, then net.ErrClosed
+			// Once the inlet has closed, the packets queued are still read, then net.ErrClosed
 			err = mc.SetReadDeadline(time.Now().Add(2 * timeout))
-			if err != nil && !errors.Is(err, net.ErrClosed) {
+			if err != nil {
 				t.Errorf("%v: pc.SetReadDeadline() = %v, want nil", me, err)
 				break
 			}
@@ -415,7 +414,7 @@ func TestInletConfig(t *testing.T) {
 }
 
 // TestInletClose ensures that once an inlet is closed, Accept fails, an inlet connection returns the packets
-// queued and then net.ErrClosed, writes fail, and the fallback connection fails too.
+// queued and then net.ErrClosed, writes fail, the fallback connection fails too, and deadlines can still be set.
 func TestInletClose(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
@@ -453,8 +452,8 @@ func TestInletClose(t *testing.T) {
 	}
 	for _, set := range []func(time.Time) error{conn.SetDeadline, conn.SetReadDeadline, conn.SetWriteDeadline,
 		ln.Fallback().SetDeadline, ln.Fallback().SetReadDeadline, ln.Fallback().SetWriteDeadline} {
-		if err := set(time.Time{}); err == nil {
-			t.Errorf("setting a deadline = nil, want an error")
+		if err := set(time.Time{}); err != nil { // As the connections are open, though the inlet isn't
+			t.Errorf("setting a deadline = %v, want nil", err)
 		}
 	}
 }
