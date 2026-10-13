@@ -259,7 +259,7 @@ func testTrunkAddrs(t *testing.T, ctor trunkCtor) {
 	from := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 3).To4(), Port: 1003}
 	src, _ = transfer(c1, c2, "f", addr2, from, 0)
 	from.IP[3], from.Port = 99, 9999
-	if src.String() != "192.0.2.3:1003" {
+	if src == nil || src.String() != "192.0.2.3:1003" { // Nil if the transfer has failed
 		t.Errorf("ReadFromTo() src = %v, want 192.0.2.3:1003", src)
 	}
 
