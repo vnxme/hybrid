@@ -188,8 +188,16 @@ func (ic *inletConn) expire() {
 	ic.inlet.deleteConnection(ic)
 }
 
-// ended reports whether the flow of the connection has ended, i.e. it's been closed without being released.
-func (ic *inletConn) ended() bool { return isClosedChan(ic.localDone) && !ic.released.Load() }
+// ended reports whether the flow of the connection has ended, i.e. it's been closed without being released,
+// or released while the fallback connection is closed.
+func (ic *inletConn) ended() bool {
+	if !isClosedChan(ic.localDone) {
+		return false
+	}
+	// A released flow goes on, unless its fallback connection has been closed, so that its next packet starts
+	// a new flow, offered to Accept again, rather than being dropped while the flow is kept going by its packets
+	return !ic.released.Load() || ic.inlet.fallback != nil && isClosedChan(ic.inlet.fallback.localDone)
+}
 
 // LocalIfIdx returns the index of the interface the latest packet of the flow came through, used for replies.
 func (ic *inletConn) LocalIfIdx() int { return int(ic.localIfIdx.Load()) }
@@ -267,8 +275,8 @@ func (ic *inletFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int,
 	return n, ic.opError("write", ic.LocalAddr(), dst, err)
 }
 
-// Close closes the fallback connection, so that the packets queued and those of released flows are dropped
-// from now on.
+// Close closes the fallback connection, so that the packets queued are dropped, and the flows released end:
+// the next packet of each starts a new flow, queued for Accept.
 func (ic *inletFallback) Close() error {
 	var err error
 	if !ic.closeLocal() {

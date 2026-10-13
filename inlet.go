@@ -50,6 +50,8 @@ import (
 // and queues the packet on it. A handler accepting the connection either serves it or releases it,
 // e.g. as no matcher recognizes the flow: then the packets queued on the connection and all the later
 // packets of the flow go to the fallback connection if there is one, or are dropped if there isn't.
+// Once the fallback connection is closed, a released flow ends instead, so that its next packet is offered
+// to Accept again, e.g. as the server behind the fallback connection has stopped.
 // A flow ends when its connection is closed, by its handler or by its idle timeout, and its next
 // packet starts a new flow straight away: UDP has nothing like TCP's TIME_WAIT and RST to tell a late
 // packet of an old flow from the first packet of a new one. Only packets read start flows: a write
@@ -128,7 +130,7 @@ type InletConfig struct {
 	WriteTimeout time.Duration
 
 	// FallbackConn gives the inlet a fallback connection, which serves the flows released by their handlers.
-	// Without one, the packets of a released flow are dropped.
+	// Without one, the packets of a released flow are dropped. Once it's closed, a released flow ends.
 	FallbackConn bool
 
 	// PacketInfo makes the inlet enable packet info with [PacketInfoUDPConn] if the underlying PacketConn

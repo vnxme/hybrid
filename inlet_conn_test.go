@@ -76,7 +76,8 @@ func TestInletReleaseWithoutFallback(t *testing.T) {
 }
 
 // TestInletReleaseDrops ensures the packets of a released flow are dropped if the queue of the fallback
-// connection is full, or if the fallback connection is closed.
+// connection is full, or if the fallback connection is closed, which ends the released flows, so that
+// the next packet of each is offered to Accept again.
 func TestInletReleaseDrops(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
@@ -101,8 +102,32 @@ func TestInletReleaseDrops(t *testing.T) {
 		if err := ln.Fallback().Close(); err != nil {
 			t.Fatalf("Close() = %v, want nil", err)
 		}
-		writeFrom(t, client, a, "a2")
-		waitInletStats(t, ln, InletStats{NoFallback: 1, FallbackClosed: 1}) // a1 left unread, and a2
+		writeFrom(t, client, a, "a2") // A new flow, as the released one has ended
+		conn := acceptInletConn(t, ln)
+		if got := readInletConn(t, conn); conn.RemoteAddr().String() != a.String() || strings.Join(got, " ") != "a2" {
+			t.Errorf("RemoteAddr(), packets read = %s, %q, want %s, the latest one only", conn.RemoteAddr(), got, a)
+		}
+		waitInletStats(t, ln, InletStats{FallbackClosed: 1}) // a1 left unread
+	})
+
+	t.Run("ReleasedOnceClosed", func(t *testing.T) {
+		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+		writeFrom(t, client, a, "a1")
+		writeFrom(t, client, b, "b1") // Read after a1, as there is a single read loop
+		conn := acceptInletConn(t, ln)
+		_ = acceptInletConn(t, ln) // So a1 is queued on conn
+		if err := ln.Fallback().Close(); err != nil {
+			t.Fatalf("Close() = %v, want nil", err)
+		}
+		if err := conn.Release(); err != nil {
+			t.Fatalf("Release() = %v, want nil", err)
+		}
+		waitInletStats(t, ln, InletStats{NoFallback: 1}) // a1, moved to the closed fallback connection
+
+		writeFrom(t, client, a, "a2") // A new flow, as the flow released has ended straight away
+		if got := readInletConn(t, acceptInletConn(t, ln)); strings.Join(got, " ") != "a2" {
+			t.Errorf("packets read = %q, want the latest one only", got)
+		}
 	})
 }
 
