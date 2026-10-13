@@ -251,6 +251,7 @@ type failingWrites struct {
 	err error
 }
 
+// WriteToFrom fails with the error for a packet to the address, and writes any other packet.
 func (c *failingWrites) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	if dst != nil && dst.String() == c.to.String() {
 		return 0, c.err

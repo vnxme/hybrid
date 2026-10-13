@@ -29,6 +29,8 @@ import (
 	"time"
 )
 
+// TestInletPairedConns ensures an inlet over each kind of pipe and over UDP sockets reads the packets written
+// to it, with payloads from the smallest size to the largest, and counts those it drops.
 func TestInletPairedConns(t *testing.T) {
 	packetCount := 1 << 13
 
@@ -89,6 +91,9 @@ func TestInletPairedConns(t *testing.T) {
 	}
 }
 
+// testInletPairedConns writes packetCount packets of writeBufferSize bytes from one connection of a pair made
+// by ctor to an inlet over the other, reads them from the inlet connections it accepts, and checks that each
+// packet has been read, or counted as dropped.
 func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
 	t.Helper()
 	pc1, pc2 := ctor()
@@ -150,7 +155,7 @@ func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize
 		})
 		defer func() {
 			_ = ln.Close()
-			stats = ln.(interface{ Stats() InletStats }).Stats()
+			stats = ln.Stats()
 		}()
 
 		for {
@@ -248,15 +253,16 @@ loop:
 	}
 }
 
-const (
-	testPacketInletDebug = false
-)
+// testPacketInletDebug makes testInletPairedConns log what each of its goroutines does.
+const testPacketInletDebug = false
 
 // testAddr is an address of a network other than UDP, e.g. of a flow over a trunk.
 type testAddr string
 
+// Network returns the network of every testAddr.
 func (a testAddr) Network() string { return "test" }
 
+// String returns the address itself.
 func (a testAddr) String() string { return string(a) }
 
 // waitInletStats waits until the inlet has dropped the given numbers of packets, or fails.
@@ -464,6 +470,7 @@ type failingClose struct {
 	err error
 }
 
+// Close closes the connection embedded, and returns the error.
 func (c failingClose) Close() error {
 	_ = c.FromToPacketConn.Close()
 	return c.err

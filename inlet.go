@@ -325,7 +325,7 @@ func Inlet(pc PacketConn, config *InletConfig) InletListener {
 	return i
 }
 
-// Accept waits for and returns the next connection to the listener.
+// Accept waits for and returns the inlet connection of the next new flow, or fails once the inlet stops.
 func (i *inlet) Accept() (InletConn, error) {
 	if isClosedChan(i.done) {
 		return nil, errInletClosed
@@ -339,7 +339,7 @@ func (i *inlet) Accept() (InletConn, error) {
 	}
 }
 
-// Addr returns the local network address, if known.
+// Addr returns the local address of the underlying PacketConn.
 func (i *inlet) Addr() net.Addr { return i.pc.LocalAddr() }
 
 // Fallback returns the fallback connection of the inlet, or nil if it has none.
@@ -412,6 +412,8 @@ func (i *inlet) stop(interrupt func() error) error {
 	return err
 }
 
+// logError would log an unexpected error of reading from or writing to the underlying PacketConn,
+// had the inlet a logger.
 func (i *inlet) logError(err error) {
 	// TODO(vnxme): Log an unexpected reading/writing error
 }

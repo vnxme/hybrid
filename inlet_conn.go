@@ -97,6 +97,8 @@ func (ic *inletConnBase) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+// inletConn is an inlet connection: it reads the packets of a single flow, queued by the read loop,
+// and writes to the remote address of the flow from its local address, until it's closed or released.
 type inletConn struct {
 	remoteAddr net.Addr
 
@@ -112,11 +114,14 @@ type inletConn struct {
 	released atomic.Bool // Set before closing localDone, if the flow goes on to the fallback connection
 }
 
+// ReadFrom reads a packet of the flow, and returns a copy of the remote address of the flow.
 func (ic *inletConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	n, addr, _, _, err := ic.ReadFromTo(b)
 	return n, addr, err
 }
 
+// ReadFromTo reads a packet of the flow, and returns copies of the remote and local addresses of the flow,
+// which the caller may change, and its latest interface index.
 func (ic *inletConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, c, err := ic.receive(b)
 	err = ic.opError("read", ic.LocalAddr(), ic.remoteAddr, err)
@@ -186,8 +191,10 @@ func (ic *inletConn) expire() {
 // ended reports whether the flow of the connection has ended, i.e. it's been closed without being released.
 func (ic *inletConn) ended() bool { return isClosedChan(ic.localDone) && !ic.released.Load() }
 
+// LocalIfIdx returns the index of the interface the latest packet of the flow came through, used for replies.
 func (ic *inletConn) LocalIfIdx() int { return int(ic.localIfIdx.Load()) }
 
+// RemoteAddr returns the remote address of the flow.
 func (ic *inletConn) RemoteAddr() net.Addr { return ic.remoteAddr }
 
 // inletFallback is the fallback connection of an inlet: a plain PacketConn serving the flows released by
@@ -196,6 +203,7 @@ type inletFallback struct {
 	inletConnBase // With the packets of released flows in rdRx
 }
 
+// newFallback returns the fallback connection of the inlet.
 func (i *inlet) newFallback() *inletFallback {
 	return &inletFallback{i.newConnBase(i.cfg.fallbackQueueSize, nil)}
 }

@@ -75,11 +75,13 @@ type scriptedUDPConn struct {
 	once sync.Once
 }
 
+// scriptedPacket is a packet a scriptedUDPConn reads, with its source and destination addresses.
 type scriptedPacket struct {
 	src, dst netip.AddrPort
 	data     string
 }
 
+// newScriptedUDPConn returns a scriptedUDPConn that reads the given packets in order.
 func newScriptedUDPConn(pkts ...scriptedPacket) *scriptedUDPConn {
 	c := &scriptedUDPConn{pkts: make(chan scriptedPacket, len(pkts)), done: make(chan struct{})}
 	for _, p := range pkts {
@@ -88,6 +90,7 @@ func newScriptedUDPConn(pkts ...scriptedPacket) *scriptedUDPConn {
 	return c
 }
 
+// ReadFromToUDPAddrPort returns the next packet, through interface 1, or waits until the connection is closed.
 func (c *scriptedUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort, netip.AddrPort, int, error) {
 	select {
 	case p := <-c.pkts:
@@ -97,11 +100,13 @@ func (c *scriptedUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort, 
 	}
 }
 
+// Close closes the connection, so that reads fail with net.ErrClosed once the packets are read.
 func (c *scriptedUDPConn) Close() error {
 	c.once.Do(func() { close(c.done) })
 	return nil
 }
 
+// LocalAddr returns an unspecified address, as of a socket that needs packet info.
 func (c *scriptedUDPConn) LocalAddr() net.Addr { return &net.UDPAddr{IP: net.IPv4zero, Port: 53} }
 
 // TestInletUDPFlows ensures a UDP connection that reports destination addresses makes a flow per source
@@ -296,6 +301,7 @@ type negativeReads struct {
 	FromToPacketConn
 }
 
+// ReadFromTo reads as the connection embedded does, but reports a negative count for a failed read.
 func (c negativeReads) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, src, dst, idx, err := c.FromToPacketConn.ReadFromTo(b)
 	if err != nil {
