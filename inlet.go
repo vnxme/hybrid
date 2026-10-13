@@ -436,6 +436,7 @@ var (
 	errInletDeadlineExceeded = os.ErrDeadlineExceeded
 	errInletMissingAddress   = errors.New("hybrid: missing address") // Reported by writing to the fallback connection with no remote address
 	errInletShortBuffer      = io.ErrShortBuffer                     // Reported by reading a packet longer than the read buffer
+	errInletWriteToConnected = net.ErrWriteToConnected               // Reported by writing to another address than that of the flow
 )
 
 // Interface guards

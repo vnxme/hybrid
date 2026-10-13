@@ -292,3 +292,131 @@ func TestInletShortBuffer(t *testing.T) {
 		})
 	}
 }
+
+// TestInletReadCopiesAddrs ensures reads of an inlet connection and of the fallback connection return
+// addresses the caller may change, as trunks and UDP do, without changing those the flow is written to.
+func TestInletReadCopiesAddrs(t *testing.T) {
+	a, c := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 3), Port: 3}
+	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	for _, src := range []net.Addr{a, c} {
+		if _, err := client.WriteToFrom([]byte("x"), local, src, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conn := acceptInletConn(t, ln)
+	releaseInletConn(t, ln) // The flow of c, read by the fallback connection
+
+	change := func(addrs ...net.Addr) {
+		for _, addr := range addrs {
+			u := addr.(*net.UDPAddr)
+			u.IP[len(u.IP)-1], u.Port = 99, 99
+		}
+	}
+	b := make([]byte, 8)
+	for _, test := range []struct {
+		name string
+		pc   FromToPacketConn
+		src  *net.UDPAddr
+	}{
+		{"Conn", conn, a},
+		{"Fallback", ln.Fallback(), c},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_ = test.pc.SetReadDeadline(time.Now().Add(time.Second))
+			_, src, dst, _, err := test.pc.ReadFromTo(b)
+			if err != nil || src.String() != test.src.String() || dst.String() != local.String() {
+				t.Fatalf("ReadFromTo() = from %v to %v, %v, want from %s to %s, nil", src, dst, err, test.src, local)
+			}
+			change(src, dst)
+			if _, err := test.pc.WriteTo([]byte("y"), &net.UDPAddr{IP: test.src.IP, Port: test.src.Port}); err != nil {
+				t.Fatalf("WriteTo() = %v, want nil", err)
+			}
+			_ = client.SetReadDeadline(time.Now().Add(time.Second))
+			if _, from, to, _, err := client.ReadFromTo(b); err != nil || to.String() != test.src.String() || from.String() != local.String() {
+				t.Errorf("ReadFromTo() = from %v to %v, %v, want from %s to %s, nil", from, to, err, local, test.src)
+			}
+		})
+	}
+	if conn.RemoteAddr().String() != a.String() || conn.LocalAddr().String() != local.String() {
+		t.Errorf("RemoteAddr(), LocalAddr() = %v, %v, want %s, %s", conn.RemoteAddr(), conn.LocalAddr(), a, local)
+	}
+}
+
+// TestInletConnWriteToConnected ensures an inlet connection writes to the remote address of its flow only,
+// from its local address, failing with net.ErrWriteToConnected otherwise, as a connected UDP socket does,
+// and that an IPv4 address matches whether it's written in 4 bytes or 16.
+func TestInletConnWriteToConnected(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
+	other := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+	client, ln := inletTrunk(t, nil)
+	if _, err := client.WriteToFrom([]byte("x"), local, a, 0); err != nil {
+		t.Fatal(err)
+	}
+	conn := acceptInletConn(t, ln)
+	a4, local4 := &net.UDPAddr{IP: a.IP.To4(), Port: a.Port}, &net.UDPAddr{IP: local.IP.To4(), Port: local.Port}
+
+	for _, test := range []struct {
+		name     string
+		dst, src net.Addr
+		ok       bool
+	}{
+		{"None", nil, nil, true},
+		{"Remote", a, nil, true},
+		{"Remote4", a4, nil, true},
+		{"Local4", nil, local4, true},
+		{"OtherRemote", other, nil, false},
+		{"OtherLocal", nil, other, false},
+	} {
+		_, err := conn.WriteToFrom([]byte("y"), test.dst, test.src, 5)
+		var oe *net.OpError
+		if test.ok && err != nil || !test.ok && (!errors.Is(err, net.ErrWriteToConnected) || !errors.As(err, &oe) || oe.Op != "write") {
+			t.Errorf("%s: WriteToFrom() = %v, want %v", test.name, err, map[bool]string{true: "nil", false: "a write net.OpError of net.ErrWriteToConnected"}[test.ok])
+		}
+	}
+}
+
+// TestInletFallbackWriteUnmapped ensures the fallback connection finds the flow of an IPv4 remote address,
+// whether it's written in 4 bytes or 16, and writes from its local address.
+func TestInletFallbackWriteUnmapped(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1} // 16 bytes
+	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	if _, err := client.WriteToFrom([]byte("x"), local, a, 3); err != nil {
+		t.Fatal(err)
+	}
+	releaseInletConn(t, ln)
+	_ = readFallback(t, ln.Fallback())
+
+	if _, err := ln.Fallback().WriteTo([]byte("y"), &net.UDPAddr{IP: a.IP.To4(), Port: a.Port}); err != nil {
+		t.Fatal(err)
+	}
+	b := make([]byte, 8)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	if _, from, _, idx, err := client.ReadFromTo(b); err != nil || from.String() != local.String() || idx != 3 {
+		t.Errorf("ReadFromTo() = from %v through %d, %v, want from %s through 3, nil", from, idx, err, local)
+	}
+}
+
+// TestInletConnCloseAfterStop ensures closing an inlet connection once the inlet has stopped drops and counts
+// the packets left unread, though there is no read loop to report the connection to.
+func TestInletConnCloseAfterStop(t *testing.T) {
+	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+	client, ln := inletTrunk(t, nil)
+	writeFrom(t, client, a, "a1")
+	writeFrom(t, client, a, "a2")
+	writeFrom(t, client, b, "b1") // Read after those of a, as there is a single read loop
+	conn := acceptInletConn(t, ln)
+	_ = acceptInletConn(t, ln)
+
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close() = %v, want nil", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close() of the connection = %v, want nil", err)
+	}
+	if got, want := ln.Stats(), (InletStats{ConnClosed: 2}); got != want {
+		t.Errorf("Stats() = %+v, want %+v", got, want)
+	}
+}

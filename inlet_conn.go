@@ -123,14 +123,21 @@ func (ic *inletConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) 
 	if c == nil { // No packet read
 		return 0, nil, nil, 0, err
 	}
-	return n, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx(), err
+	return n, cloneAddr(ic.remoteAddr), cloneAddr(ic.localAddr), ic.LocalIfIdx(), err // Copies the caller may change
 }
 
-func (ic *inletConn) WriteTo(b []byte, _ net.Addr) (int, error) {
-	return ic.WriteToFrom(b, nil, nil, 0)
+// WriteTo writes a packet to the remote address of the flow, as WriteToFrom does with no local address.
+func (ic *inletConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return ic.WriteToFrom(b, addr, nil, 0)
 }
 
-func (ic *inletConn) WriteToFrom(b []byte, _, _ net.Addr, _ int) (int, error) {
+// WriteToFrom writes a packet to the remote address of the flow from its local address, through its latest
+// interface rather than idx. Like a connected UDP socket, it fails with net.ErrWriteToConnected if dst or src
+// is another address.
+func (ic *inletConn) WriteToFrom(b []byte, dst, src net.Addr, _ int) (int, error) {
+	if dst != nil && addrKey(dst) != ic.key.remote() || src != nil && addrKey(src) != addrKey(ic.LocalAddr()) {
+		return 0, ic.opError("write", ic.LocalAddr(), dst, errInletWriteToConnected)
+	}
 	n, err := ic.send(b, ic, ic.remoteAddr, ic.localAddr, ic.LocalIfIdx())
 	return n, ic.opError("write", ic.LocalAddr(), ic.remoteAddr, err)
 }
@@ -219,7 +226,8 @@ func (ic *inletFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, err
 	if c == nil { // No packet read
 		return 0, nil, nil, 0, ic.opError("read", ic.LocalAddr(), nil, err)
 	}
-	return n, c.remoteAddr, c.localAddr, c.LocalIfIdx(), ic.opError("read", ic.LocalAddr(), c.remoteAddr, err)
+	err = ic.opError("read", ic.LocalAddr(), c.remoteAddr, err)
+	return n, cloneAddr(c.remoteAddr), cloneAddr(c.localAddr), c.LocalIfIdx(), err // Copies the caller may change
 }
 
 // WriteTo writes a packet to addr, as WriteToFrom does with no local address.

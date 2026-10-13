@@ -25,7 +25,7 @@ import (
 func (i *inlet) lookupRemote(addr net.Addr) *inletConn {
 	i.remotes.RLock()
 	defer i.remotes.RUnlock()
-	return i.remotes.m[remoteKey(addr)]
+	return i.remotes.m[addrKey(addr)]
 }
 
 // send copies b into a packet for the write loop to write to dst, from src and through idx if given,

@@ -33,10 +33,12 @@ type flowKey struct {
 // remote returns the key of the remote address of a flow, i.e. of its source address.
 func (k flowKey) remote() flowKey { return flowKey{src: k.src, addr: k.addr} }
 
-// remoteKey returns the key of a remote address given to a write, the way flowKey.remote does.
-func remoteKey(a net.Addr) flowKey {
+// addrKey returns the key of an address the way a flow is told apart by its source address alone,
+// with an IPv4 address unmapped, as packet info reports it, so that it matches however it's written.
+func addrKey(a net.Addr) flowKey {
 	if u, ok := a.(*net.UDPAddr); ok {
-		return flowKey{src: u.AddrPort()}
+		ap := u.AddrPort()
+		return flowKey{src: netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
 	}
 	return flowKey{addr: a.String()}
 }
@@ -68,6 +70,10 @@ func (i *inlet) newConnection(p *inletPacketInfo) *inletConn {
 // deleteConnection reports a closed or expired connection, for the read loop to delete its flow. It needs no
 // goroutine, so that it can't race with closing the inlet, which waits for the goroutines of the inlet.
 func (i *inlet) deleteConnection(c *inletConn) {
+	if isClosedChan(i.done) { // With no read loop to delete the flow any more, only drop and count the packets left
+		i.discard(c)
+		return
+	}
 	i.closed.Lock()
 	i.closed.conns = append(i.closed.conns, c)
 	i.closed.Unlock()
@@ -212,10 +218,8 @@ func (i *inlet) read(b []byte, p *inletPacketInfo) (n int, err error) {
 	}
 
 	n, p.src, p.dst, p.idx, err = i.pc.ReadFromTo(b)
-	if a, ok := p.src.(*net.UDPAddr); ok {
-		p.key.src = a.AddrPort()
-	} else if p.src != nil {
-		p.key.addr = p.src.String()
+	if p.src != nil {
+		p.key = addrKey(p.src)
 	}
 	return n, err
 }
