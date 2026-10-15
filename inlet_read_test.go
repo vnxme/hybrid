@@ -26,9 +26,9 @@ import (
 	"time"
 )
 
-// TestInletTrunkFlows ensures packets over a trunk make a flow per source address, whatever its type,
+// testInletTrunkFlows ensures packets over a trunk make a flow per source address, whatever its type,
 // destination address and interface index are, and that a flow keeps the latest interface index.
-func TestInletTrunkFlows(t *testing.T) {
+func testInletTrunkFlows(t *testing.T) {
 	client, server := BufferedTrunk(16, nil, nil)
 	defer func() { _ = client.Close() }()
 	ln := Inlet(server, nil)
@@ -109,9 +109,9 @@ func (c *scriptedUDPConn) Close() error {
 // LocalAddr returns an unspecified address, as of a socket that needs packet info.
 func (c *scriptedUDPConn) LocalAddr() net.Addr { return &net.UDPAddr{IP: net.IPv4zero, Port: 53} }
 
-// TestInletUDPFlows ensures a UDP connection that reports destination addresses makes a flow per source
+// testInletPacketInfoFlows ensures a UDP connection that reports destination addresses makes a flow per source
 // and destination address, and that a packet without a destination address is dropped and counted.
-func TestInletUDPFlows(t *testing.T) {
+func testInletPacketInfoFlows(t *testing.T) {
 	s1, s2 := netip.MustParseAddrPort("192.0.2.1:1"), netip.MustParseAddrPort("192.0.2.2:2")
 	d1, d2 := netip.MustParseAddrPort("198.51.100.1:53"), netip.MustParseAddrPort("198.51.100.2:53")
 	ln := Inlet(newScriptedUDPConn(
@@ -134,9 +134,9 @@ func TestInletUDPFlows(t *testing.T) {
 	waitInletStats(t, ln, InletStats{NoDestination: 1})
 }
 
-// TestInletDrops ensures the inlet drops and counts a packet rather than wait for a full queue
+// testInletReadDrops ensures the inlet drops and counts a packet rather than wait for a full queue
 // or a full table, and that a dropped first packet doesn't create a flow.
-func TestInletDrops(t *testing.T) {
+func testInletReadDrops(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 	setup := func(t *testing.T, config *InletConfig) (write func(src net.Addr, data string), ln InletListener) {
 		client, server := BufferedTrunk(16, nil, nil)
@@ -207,9 +207,9 @@ func TestInletDrops(t *testing.T) {
 // isClosedInletConn reports whether an inlet connection has been closed, e.g. as its flow has expired.
 func isClosedInletConn(c InletConn) bool { return c.SetDeadline(time.Time{}) != nil }
 
-// TestInletIdleTimeout ensures a flow ends once it's been idle for the idle timeout, released or not,
+// testInletIdleTimeout ensures a flow ends once it's been idle for the idle timeout, released or not,
 // so that its next packet starts a new flow, while packets read or written keep it going.
-func TestInletIdleTimeout(t *testing.T) {
+func testInletIdleTimeout(t *testing.T) {
 	const idle = 200 * time.Millisecond // Long enough for the scheduling stalls of a busy machine
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 
@@ -310,9 +310,9 @@ func (c negativeReads) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error
 	return n, src, dst, idx, nil
 }
 
-// TestInletNegativeRead ensures the read loop takes a failed read with a negative count for an error,
+// testInletNegativeRead ensures the read loop takes a failed read with a negative count for an error,
 // rather than for a packet, so that the inlet closes once its underlying connection does.
-func TestInletNegativeRead(t *testing.T) {
+func testInletNegativeRead(t *testing.T) {
 	client, server := BufferedTrunk(16, nil, nil)
 	defer func() { _ = client.Close() }()
 	ln := Inlet(negativeReads{server}, nil)
@@ -345,9 +345,9 @@ func checkInletPacket(t *testing.T, c InletConn, want string) {
 	}
 }
 
-// TestInletUDPTruncated ensures an inlet drops and counts a UDP datagram larger than its read buffer,
+// testInletUDPTruncated ensures an inlet drops and counts a UDP datagram larger than its read buffer,
 // whether the system flags truncation, as Linux does, or reports an error, as Windows does.
-func TestInletUDPTruncated(t *testing.T) {
+func testInletUDPTruncated(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)

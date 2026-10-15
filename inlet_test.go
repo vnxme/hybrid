@@ -29,9 +29,48 @@ import (
 	"time"
 )
 
-// TestInletPairedConns ensures an inlet over each kind of pipe and over UDP sockets reads the packets written
+// TestInlet runs the tests of inlets, of their inlet connections and of their fallback connections.
+func TestInlet(t *testing.T) {
+	t.Run(testInletCloseName, testInletClose)
+	t.Run(testInletCloseErrorName, testInletCloseError)
+	t.Run(testInletClosedErrorsName, testInletClosedErrors)
+	t.Run(testInletConcurrentReadsName, testInletConcurrentReads)
+	t.Run(testInletConfigName, testInletConfig)
+	t.Run(testInletConnCloseAfterStopName, testInletConnCloseAfterStop)
+	t.Run(testInletConnCloseDropsName, testInletConnCloseDrops)
+	t.Run(testInletConnWriteToConnectedName, testInletConnWriteToConnected)
+	t.Run(testInletDeadlinesName, testInletDeadlines)
+	t.Run(testInletFallbackDropsName, testInletFallbackDrops)
+	t.Run(testInletFallbackFromToName, testInletFallbackFromTo)
+	t.Run(testInletFallbackWriteName, testInletFallbackWrite)
+	t.Run(testInletFallbackWriteCopiesAddrsName, testInletFallbackWriteCopiesAddrs)
+	t.Run(testInletFallbackWriteOtherNetworkName, testInletFallbackWriteOtherNetwork)
+	t.Run(testInletFallbackWriteUnmappedName, testInletFallbackWriteUnmapped)
+	t.Run(testInletIdleTimeoutName, testInletIdleTimeout)
+	t.Run(testInletNegativeReadName, testInletNegativeRead)
+	t.Run(testInletPacketInfoFlowsName, testInletPacketInfoFlows)
+	t.Run(testInletPayloadSizesName, testInletPayloadSizes)
+	t.Run(testInletReadCopiesAddrsName, testInletReadCopiesAddrs)
+	t.Run(testInletReadDropsName, testInletReadDrops)
+	t.Run(testInletReleaseName, testInletRelease)
+	t.Run(testInletReleaseWithoutFallbackName, testInletReleaseWithoutFallback)
+	t.Run(testInletShortBufferName, testInletShortBuffer)
+	t.Run(testInletStreamListenerName, testInletStreamListener)
+	t.Run(testInletTrunkFlowsName, testInletTrunkFlows)
+	t.Run(testInletUDPSocketFlowsName, testInletUDPSocketFlows)
+	t.Run(testInletUDPTruncatedName, testInletUDPTruncated)
+	t.Run(testInletUnwrapName, testInletUnwrap)
+	t.Run(testInletUnwrapUDPName, testInletUnwrapUDP)
+	t.Run(testInletWriteCopiesBytesName, testInletWriteCopiesBytes)
+	t.Run(testInletWriteFailedName, testInletWriteFailed)
+	t.Run(testInletWriteQueueFullName, testInletWriteQueueFull)
+	t.Run(testInletWriteTimeoutName, testInletWriteTimeout)
+	t.Run(testInletWriteUnsentName, testInletWriteUnsent)
+}
+
+// testInletPayloadSizes ensures an inlet over each kind of pipe and over UDP sockets reads the packets written
 // to it, with payloads from the smallest size to the largest, and counts those it drops.
-func TestInletPairedConns(t *testing.T) {
+func testInletPayloadSizes(t *testing.T) {
 	packetCount := 1 << 13
 
 	type pair struct {
@@ -66,7 +105,7 @@ func TestInletPairedConns(t *testing.T) {
 	}
 
 	testFunc := func(t *testing.T, ctor packetConnPairCtor, writeBufferSize int) {
-		testInletPairedConns(t, ctor, DefaultInletAcceptQueueSize, DefaultInletReadQueueSize, packetSizeMax, writeBufferSize, packetCount)
+		checkInletPayloads(t, ctor, DefaultInletAcceptQueueSize, DefaultInletReadQueueSize, packetSizeMax, writeBufferSize, packetCount)
 	}
 
 	for _, item := range pairs {
@@ -91,10 +130,10 @@ func TestInletPairedConns(t *testing.T) {
 	}
 }
 
-// testInletPairedConns writes packetCount packets of writeBufferSize bytes from one connection of a pair made
+// checkInletPayloads writes packetCount packets of writeBufferSize bytes from one connection of a pair made
 // by ctor to an inlet over the other, reads them from the inlet connections it accepts, and checks that each
 // packet has been read, or counted as dropped.
-func testInletPairedConns(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
+func checkInletPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
 	t.Helper()
 	pc1, pc2 := ctor()
 
@@ -253,7 +292,7 @@ loop:
 	}
 }
 
-// testPacketInletDebug makes testInletPairedConns log what each of its goroutines does.
+// testPacketInletDebug makes checkInletPayloads log what each of its goroutines does.
 const testPacketInletDebug = false
 
 // testAddr is an address of a network other than UDP, e.g. of a flow over a trunk.
@@ -360,8 +399,8 @@ func readFallback(t *testing.T, d PacketConn) []string {
 	}
 }
 
-// TestInletConfig ensures the fields of an InletConfig not set give their defaults, and the others are applied.
-func TestInletConfig(t *testing.T) {
+// testInletConfig ensures the fields of an InletConfig not set give their defaults, and the others are applied.
+func testInletConfig(t *testing.T) {
 	def := inletConfig{
 		idleTimeout:       DefaultInletIdleTimeout,
 		writeTimeout:      DefaultInletWriteTimeout,
@@ -419,9 +458,9 @@ func TestInletConfig(t *testing.T) {
 	}
 }
 
-// TestInletClose ensures that once an inlet is closed, Accept fails, an inlet connection returns the packets
+// testInletClose ensures that once an inlet is closed, Accept fails, an inlet connection returns the packets
 // queued and then net.ErrClosed, writes fail, the fallback connection fails too, and deadlines can still be set.
-func TestInletClose(t *testing.T) {
+func testInletClose(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
@@ -476,9 +515,9 @@ func (c failingClose) Close() error {
 	return c.err
 }
 
-// TestInletCloseError ensures Close returns the error of closing the underlying connection,
+// testInletCloseError ensures Close returns the error of closing the underlying connection,
 // and net.ErrClosed once the inlet has stopped.
-func TestInletCloseError(t *testing.T) {
+func testInletCloseError(t *testing.T) {
 	client, server := BufferedTrunk(16, nil, nil)
 	defer func() { _ = client.Close() }()
 	errClose := errors.New("close failed")
@@ -491,8 +530,8 @@ func TestInletCloseError(t *testing.T) {
 	}
 }
 
-// TestInletUnwrap ensures Unwrap stops the inlet, but leaves the underlying connection open.
-func TestInletUnwrap(t *testing.T) {
+// testInletUnwrap ensures Unwrap stops the inlet, but leaves the underlying connection open.
+func testInletUnwrap(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := inletTrunk(t, nil)
 	pc := ln.Unwrap()
@@ -507,9 +546,9 @@ func TestInletUnwrap(t *testing.T) {
 	}
 }
 
-// TestInletUnwrapUDP ensures Unwrap returns the UDP connection given to Inlet, rather than the wrapper
+// testInletUnwrapUDP ensures Unwrap returns the UDP connection given to Inlet, rather than the wrapper
 // the inlet reads and writes through, with packet info or without.
-func TestInletUnwrapUDP(t *testing.T) {
+func testInletUnwrapUDP(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -538,9 +577,9 @@ func TestInletUnwrapUDP(t *testing.T) {
 	}
 }
 
-// TestInletStreamListener ensures an inlet wrapped with PacketToStreamListener accepts its inlet connections
+// testInletStreamListener ensures an inlet wrapped with PacketToStreamListener accepts its inlet connections
 // as StreamConns, which read and write the packets of their flows, and unwraps to the inlet.
-func TestInletStreamListener(t *testing.T) {
+func testInletStreamListener(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := inletTrunk(t, nil)
 	sl := PacketToStreamListener(ln) // Infers InletConn
@@ -580,10 +619,10 @@ func TestInletStreamListener(t *testing.T) {
 	}
 }
 
-// TestInletUDPLoopback ensures an inlet over a dual-stack UDP socket tells flows apart by their destination
+// testInletUDPSocketFlows ensures an inlet over a dual-stack UDP socket tells flows apart by their destination
 // addresses too, and replies from the address each flow came to, while an inlet without packet info
 // tells them apart by their source addresses alone.
-func TestInletUDPLoopback(t *testing.T) {
+func testInletUDPSocketFlows(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -646,3 +685,41 @@ func TestInletUDPLoopback(t *testing.T) {
 		})
 	}
 }
+
+const (
+	testInletCloseName                     = "Close"
+	testInletCloseErrorName                = "CloseError"
+	testInletClosedErrorsName              = "ClosedErrors"
+	testInletConcurrentReadsName           = "ConcurrentReads"
+	testInletConfigName                    = "Config"
+	testInletConnCloseAfterStopName        = "ConnCloseAfterStop"
+	testInletConnCloseDropsName            = "ConnCloseDrops"
+	testInletConnWriteToConnectedName      = "ConnWriteToConnected"
+	testInletDeadlinesName                 = "Deadlines"
+	testInletFallbackDropsName             = "FallbackDrops"
+	testInletFallbackFromToName            = "FallbackFromTo"
+	testInletFallbackWriteName             = "FallbackWrite"
+	testInletFallbackWriteCopiesAddrsName  = "FallbackWriteCopiesAddrs"
+	testInletFallbackWriteOtherNetworkName = "FallbackWriteOtherNetwork"
+	testInletFallbackWriteUnmappedName     = "FallbackWriteUnmapped"
+	testInletIdleTimeoutName               = "IdleTimeout"
+	testInletNegativeReadName              = "NegativeRead"
+	testInletPacketInfoFlowsName           = "PacketInfoFlows"
+	testInletPayloadSizesName              = "PayloadSizes"
+	testInletReadCopiesAddrsName           = "ReadCopiesAddrs"
+	testInletReadDropsName                 = "ReadDrops"
+	testInletReleaseName                   = "Release"
+	testInletReleaseWithoutFallbackName    = "ReleaseWithoutFallback"
+	testInletShortBufferName               = "ShortBuffer"
+	testInletStreamListenerName            = "StreamListener"
+	testInletTrunkFlowsName                = "TrunkFlows"
+	testInletUDPSocketFlowsName            = "UDPSocketFlows"
+	testInletUDPTruncatedName              = "UDPTruncated"
+	testInletUnwrapName                    = "Unwrap"
+	testInletUnwrapUDPName                 = "UnwrapUDP"
+	testInletWriteCopiesBytesName          = "WriteCopiesBytes"
+	testInletWriteFailedName               = "WriteFailed"
+	testInletWriteQueueFullName            = "WriteQueueFull"
+	testInletWriteTimeoutName              = "WriteTimeout"
+	testInletWriteUnsentName               = "WriteUnsent"
+)

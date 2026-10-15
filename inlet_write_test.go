@@ -23,9 +23,9 @@ import (
 	"time"
 )
 
-// TestInletFallbackWrite ensures the fallback connection writes to a remote address it has seen from the local
+// testInletFallbackWrite ensures the fallback connection writes to a remote address it has seen from the local
 // address and through the interface of its latest flow, and lets the system choose them for another one.
-func TestInletFallbackWrite(t *testing.T) {
+func testInletFallbackWrite(t *testing.T) {
 	a, u := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 9), Port: 9}
 	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
@@ -69,10 +69,10 @@ func TestInletFallbackWrite(t *testing.T) {
 	}
 }
 
-// TestInletFallbackFromTo ensures the fallback connection reads the local address and interface index
+// testInletFallbackFromTo ensures the fallback connection reads the local address and interface index
 // of the flow of each packet, and writes from a local address and through an interface given,
 // or from those of the latest flow of the remote address if none is given.
-func TestInletFallbackFromTo(t *testing.T) {
+func testInletFallbackFromTo(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
 	other := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 2), Port: 53}
@@ -116,9 +116,9 @@ func TestInletFallbackFromTo(t *testing.T) {
 	}
 }
 
-// TestInletFallbackWriteCopiesAddrs ensures the fallback connection writes a packet queued to and from
+// testInletFallbackWriteCopiesAddrs ensures the fallback connection writes a packet queued to and from
 // the addresses given at the time of writing, though the caller changes them before the packet is written.
-func TestInletFallbackWriteCopiesAddrs(t *testing.T) {
+func testInletFallbackWriteCopiesAddrs(t *testing.T) {
 	client, server := BufferedTrunk(1, nil, nil) // Holds one packet, the next one blocks the write loop
 	t.Cleanup(func() { _ = client.Close() })
 	ln := Inlet(server, &InletConfig{FallbackConn: true, WriteTimeout: -1})
@@ -153,8 +153,8 @@ func TestInletFallbackWriteCopiesAddrs(t *testing.T) {
 	}
 }
 
-// TestInletWriteCopies ensures a write returns once its packet is queued, with a copy of the bytes given.
-func TestInletWriteCopies(t *testing.T) {
+// testInletWriteCopiesBytes ensures a write returns once its packet is queued, with a copy of the bytes given.
+func testInletWriteCopiesBytes(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := inletTrunk(t, nil)
 	writeFrom(t, client, a, "a1")
@@ -173,8 +173,8 @@ func TestInletWriteCopies(t *testing.T) {
 	}
 }
 
-// TestInletWriteQueueFull ensures a write waits for room in a full write queue until its write deadline.
-func TestInletWriteQueueFull(t *testing.T) {
+// testInletWriteQueueFull ensures a write waits for room in a full write queue until its write deadline.
+func testInletWriteQueueFull(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, server := BufferedTrunk(1, nil, nil) // Holds one packet, the next one blocks the write loop
 	t.Cleanup(func() { _ = client.Close() })
@@ -208,9 +208,9 @@ func TestInletWriteQueueFull(t *testing.T) {
 	}
 }
 
-// TestInletWriteTimeout ensures the write loop drops and counts a packet it can't write within the write timeout,
+// testInletWriteTimeout ensures the write loop drops and counts a packet it can't write within the write timeout,
 // and goes on writing.
-func TestInletWriteTimeout(t *testing.T) {
+func testInletWriteTimeout(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, server := BufferedTrunk(1, nil, nil)
 	t.Cleanup(func() { _ = client.Close() })
@@ -259,9 +259,9 @@ func (c *failingWrites) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, 
 	return c.FromToPacketConn.WriteToFrom(b, dst, src, idx)
 }
 
-// TestInletWriteFailed ensures the write loop drops and counts a packet it fails to write, and goes on
+// testInletWriteFailed ensures the write loop drops and counts a packet it fails to write, and goes on
 // writing, unless the underlying connection is closed, which closes the inlet.
-func TestInletWriteFailed(t *testing.T) {
+func testInletWriteFailed(t *testing.T) {
 	a, bad := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 66), Port: 66}
 	setup := func(t *testing.T, err error) (FromToPacketConn, InletListener) {
 		client, server := BufferedTrunk(16, nil, nil)
@@ -309,9 +309,9 @@ func TestInletWriteFailed(t *testing.T) {
 	})
 }
 
-// TestInletFallbackWriteOther ensures the fallback connection finds the flow of a remote address of a network
+// testInletFallbackWriteOtherNetwork ensures the fallback connection finds the flow of a remote address of a network
 // other than UDP, and writes from its local address.
-func TestInletFallbackWriteOther(t *testing.T) {
+func testInletFallbackWriteOtherNetwork(t *testing.T) {
 	c, local := testAddr("c"), testAddr("local")
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	if _, err := client.WriteToFrom([]byte("c1"), local, c, 0); err != nil {
@@ -329,9 +329,31 @@ func TestInletFallbackWriteOther(t *testing.T) {
 	}
 }
 
-// TestInletWriteUnsent ensures the packets an inlet has taken for writing, but hasn't written when it closes,
+// testInletFallbackWriteUnmapped ensures the fallback connection finds the flow of an IPv4 remote address,
+// whether it's written in 4 bytes or 16, and writes from its local address.
+func testInletFallbackWriteUnmapped(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1} // 16 bytes
+	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	if _, err := client.WriteToFrom([]byte("x"), local, a, 3); err != nil {
+		t.Fatal(err)
+	}
+	releaseInletConn(t, ln)
+	_ = readFallback(t, ln.Fallback())
+
+	if _, err := ln.Fallback().WriteTo([]byte("y"), &net.UDPAddr{IP: a.IP.To4(), Port: a.Port}); err != nil {
+		t.Fatal(err)
+	}
+	b := make([]byte, 8)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	if _, from, _, idx, err := client.ReadFromTo(b); err != nil || from.String() != local.String() || idx != 3 {
+		t.Errorf("ReadFromTo() = from %v through %d, %v, want from %s through 3, nil", from, idx, err, local)
+	}
+}
+
+// testInletWriteUnsent ensures the packets an inlet has taken for writing, but hasn't written when it closes,
 // are dropped and counted, whether they're being written or queued.
-func TestInletWriteUnsent(t *testing.T) {
+func testInletWriteUnsent(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, server := BufferedTrunk(1, nil, nil) // Holds one packet, the next one blocks the write loop
 	t.Cleanup(func() { _ = client.Close() })

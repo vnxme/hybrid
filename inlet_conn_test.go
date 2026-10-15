@@ -25,9 +25,9 @@ import (
 	"time"
 )
 
-// TestInletRelease ensures releasing an inlet connection hands the packets queued and the later packets
+// testInletRelease ensures releasing an inlet connection hands the packets queued and the later packets
 // of its flow over to the fallback connection, in order, while the other flows go on as they were.
-func TestInletRelease(t *testing.T) {
+func testInletRelease(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
@@ -57,9 +57,9 @@ func TestInletRelease(t *testing.T) {
 	waitInletStats(t, ln, InletStats{})
 }
 
-// TestInletReleaseWithoutFallback ensures releasing an inlet connection without a fallback connection drops
+// testInletReleaseWithoutFallback ensures releasing an inlet connection without a fallback connection drops
 // the packets of its flow, without starting a new flow.
-func TestInletReleaseWithoutFallback(t *testing.T) {
+func testInletReleaseWithoutFallback(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 	client, ln := inletTrunk(t, nil)
 	if ln.Fallback() != nil {
@@ -75,10 +75,10 @@ func TestInletReleaseWithoutFallback(t *testing.T) {
 	}
 }
 
-// TestInletReleaseDrops ensures the packets of a released flow are dropped if the queue of the fallback
+// testInletFallbackDrops ensures the packets of a released flow are dropped if the queue of the fallback
 // connection is full, or if the fallback connection is closed, which ends the released flows, so that
 // the next packet of each is offered to Accept again.
-func TestInletReleaseDrops(t *testing.T) {
+func testInletFallbackDrops(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
 	t.Run("QueueFull", func(t *testing.T) {
@@ -131,9 +131,9 @@ func TestInletReleaseDrops(t *testing.T) {
 	})
 }
 
-// TestInletConnClosed ensures the packets left unread on an inlet connection are dropped and counted
+// testInletConnCloseDrops ensures the packets left unread on an inlet connection are dropped and counted
 // once it's closed by its handler or expires.
-func TestInletConnClosed(t *testing.T) {
+func testInletConnCloseDrops(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
 	// queue writes packets of a and accepts the connection of a, then of b, once the packets of a are queued
@@ -168,9 +168,9 @@ func TestInletConnClosed(t *testing.T) {
 	})
 }
 
-// TestInletConnErrors ensures an inlet connection and the fallback connection report closing as a trunk does,
+// testInletClosedErrors ensures an inlet connection and the fallback connection report closing as a trunk does,
 // and so a UDP connection: as net.ErrClosed, wrapped in net.OpError with the operation and the addresses.
-func TestInletConnErrors(t *testing.T) {
+func testInletClosedErrors(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
@@ -208,8 +208,8 @@ func TestInletConnErrors(t *testing.T) {
 	}
 }
 
-// TestInletDeadlines ensures the read and write deadlines of inlet connections and of the fallback connection.
-func TestInletDeadlines(t *testing.T) {
+// testInletDeadlines ensures the read and write deadlines of inlet connections and of the fallback connection.
+func testInletDeadlines(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
@@ -249,9 +249,9 @@ func TestInletDeadlines(t *testing.T) {
 	}
 }
 
-// TestInletConcurrentReads ensures reads of an inlet connection and of the fallback connection needn't be
+// testInletConcurrentReads ensures reads of an inlet connection and of the fallback connection needn't be
 // serialized: each packet is read once.
-func TestInletConcurrentReads(t *testing.T) {
+func testInletConcurrentReads(t *testing.T) {
 	const count = 1000
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	write := func(client FromToPacketConn, from int) {
@@ -281,9 +281,9 @@ func TestInletConcurrentReads(t *testing.T) {
 	})
 }
 
-// TestInletShortBuffer ensures a packet longer than the buffer of a read is read in part, with
+// testInletShortBuffer ensures a packet longer than the buffer of a read is read in part, with
 // io.ErrShortBuffer, and the rest of it dropped, from an inlet connection and the fallback connection.
-func TestInletShortBuffer(t *testing.T) {
+func testInletShortBuffer(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
 	writeFrom(t, client, a, "abcdef")
@@ -318,9 +318,9 @@ func TestInletShortBuffer(t *testing.T) {
 	}
 }
 
-// TestInletReadCopiesAddrs ensures reads of an inlet connection and of the fallback connection return
+// testInletReadCopiesAddrs ensures reads of an inlet connection and of the fallback connection return
 // addresses the caller may change, as trunks and UDP do, without changing those the flow is written to.
-func TestInletReadCopiesAddrs(t *testing.T) {
+func testInletReadCopiesAddrs(t *testing.T) {
 	a, c := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 3), Port: 3}
 	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
 	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
@@ -368,10 +368,10 @@ func TestInletReadCopiesAddrs(t *testing.T) {
 	}
 }
 
-// TestInletConnWriteToConnected ensures an inlet connection writes to the remote address of its flow only,
+// testInletConnWriteToConnected ensures an inlet connection writes to the remote address of its flow only,
 // from its local address, failing with net.ErrWriteToConnected otherwise, as a connected UDP socket does,
 // and that an IPv4 address matches whether it's written in 4 bytes or 16.
-func TestInletConnWriteToConnected(t *testing.T) {
+func testInletConnWriteToConnected(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
 	other := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
@@ -402,31 +402,9 @@ func TestInletConnWriteToConnected(t *testing.T) {
 	}
 }
 
-// TestInletFallbackWriteUnmapped ensures the fallback connection finds the flow of an IPv4 remote address,
-// whether it's written in 4 bytes or 16, and writes from its local address.
-func TestInletFallbackWriteUnmapped(t *testing.T) {
-	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1} // 16 bytes
-	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
-	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
-	if _, err := client.WriteToFrom([]byte("x"), local, a, 3); err != nil {
-		t.Fatal(err)
-	}
-	releaseInletConn(t, ln)
-	_ = readFallback(t, ln.Fallback())
-
-	if _, err := ln.Fallback().WriteTo([]byte("y"), &net.UDPAddr{IP: a.IP.To4(), Port: a.Port}); err != nil {
-		t.Fatal(err)
-	}
-	b := make([]byte, 8)
-	_ = client.SetReadDeadline(time.Now().Add(time.Second))
-	if _, from, _, idx, err := client.ReadFromTo(b); err != nil || from.String() != local.String() || idx != 3 {
-		t.Errorf("ReadFromTo() = from %v through %d, %v, want from %s through 3, nil", from, idx, err, local)
-	}
-}
-
-// TestInletConnCloseAfterStop ensures closing an inlet connection once the inlet has stopped drops and counts
+// testInletConnCloseAfterStop ensures closing an inlet connection once the inlet has stopped drops and counts
 // the packets left unread, though there is no read loop to report the connection to.
-func TestInletConnCloseAfterStop(t *testing.T) {
+func testInletConnCloseAfterStop(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 	client, ln := inletTrunk(t, nil)
 	writeFrom(t, client, a, "a1")
