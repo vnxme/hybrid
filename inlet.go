@@ -270,7 +270,7 @@ type inlet struct {
 }
 
 // Inlet returns an InletListener for the given PacketConn, configured by config, which may be nil for the defaults,
-// and starts its internal loops.
+// and starts its internal loops. It takes pc over, clearing its deadlines, until Close or Unwrap.
 func Inlet(pc PacketConn, config *InletConfig) InletListener {
 	cfg := config.resolve()
 
@@ -289,6 +289,10 @@ func Inlet(pc PacketConn, config *InletConfig) InletListener {
 	if cfg.fallbackConn {
 		i.fallback = i.newFallback()
 	}
+
+	// Clear the deadlines the underlying PacketConn may have, as Unwrap does, since a deadline passed would make
+	// the read loop spin on timeouts without reading a packet, and fail every write without a write timeout
+	_ = i.pc.SetDeadline(time.Time{})
 
 	i.wg.Add(2)
 	go i.readLoop()

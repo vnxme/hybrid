@@ -373,3 +373,80 @@ func testInletWriteUnsent(t *testing.T) {
 		t.Errorf("Stats() = %+v, want %+v", got, want)
 	}
 }
+
+// testInletBlockedWrites ensures a write waiting for room in a full write queue returns net.ErrClosed
+// once its connection is closed, or once the inlet stops.
+func testInletBlockedWrites(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	for name, stop := range map[string]func(conn InletConn, ln InletListener) error{
+		"ConnClosed":   func(conn InletConn, _ InletListener) error { return conn.Close() },
+		"InletStopped": func(_ InletConn, ln InletListener) error { return ln.Close() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, server := BufferedTrunk(1, nil, nil) // Holds one packet, the next one blocks the write loop
+			t.Cleanup(func() { _ = client.Close() })
+			ln := Inlet(server, &InletConfig{WriteQueueSize: 1, WriteTimeout: -1})
+			t.Cleanup(func() { _ = ln.Close() })
+			writeFrom(t, client, a, "a1")
+			conn := acceptInletConn(t, ln)
+			for _, data := range []string{"w1", "w2", "w3"} { // Into the trunk, then blocking the write loop, then queued
+				if _, err := conn.WriteTo([]byte(data), nil); err != nil {
+					t.Fatalf("WriteTo(%q) = %v, want nil", data, err)
+				}
+			}
+
+			written := make(chan error, 1)
+			go func() {
+				_, err := conn.WriteTo([]byte("w4"), nil) // Waits for room
+				written <- err
+			}()
+			time.Sleep(20 * time.Millisecond) // Let the write wait
+			if err := stop(conn, ln); err != nil {
+				t.Fatalf("closing = %v, want nil", err)
+			}
+			select {
+			case err := <-written:
+				if !errors.Is(err, net.ErrClosed) {
+					t.Errorf("WriteTo() = %v, want net.ErrClosed", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("WriteTo() hasn't returned once closed")
+			}
+		})
+	}
+}
+
+// testInletEmptyPackets ensures an empty packet is read and written by an inlet connection, and by the fallback
+// connection, as an empty packet rather than as no packet.
+func testInletEmptyPackets(t *testing.T) {
+	a, c := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 3), Port: 3}
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	writeFrom(t, client, a, "")
+	conn := acceptInletConn(t, ln)
+	writeFrom(t, client, c, "")
+	releaseInletConn(t, ln) // The flow of c, read by the fallback connection
+
+	b := make([]byte, 8)
+	for _, test := range []struct {
+		name string
+		pc   PacketConn
+		src  net.Addr
+	}{
+		{"Conn", conn, a},
+		{"Fallback", ln.Fallback(), c},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_ = test.pc.SetReadDeadline(time.Now().Add(time.Second))
+			if n, src, err := test.pc.ReadFrom(b); n != 0 || err != nil || src.String() != test.src.String() {
+				t.Fatalf("ReadFrom() = %d bytes from %v, %v, want 0 bytes from %s, nil", n, src, err, test.src)
+			}
+			if n, err := test.pc.WriteTo(nil, test.src); n != 0 || err != nil {
+				t.Fatalf("WriteTo() = %d, %v, want 0, nil", n, err)
+			}
+			_ = client.SetReadDeadline(time.Now().Add(time.Second))
+			if n, _, dst, _, err := client.ReadFromTo(b); n != 0 || err != nil || dst.String() != test.src.String() {
+				t.Errorf("ReadFromTo() = %d bytes to %v, %v, want 0 bytes to %s, nil", n, dst, err, test.src)
+			}
+		})
+	}
+}

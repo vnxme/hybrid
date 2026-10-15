@@ -199,6 +199,10 @@ func testInletClosedErrors(t *testing.T) {
 		{"FallbackWriteTo", func() error { _, err := fb.WriteTo(b, a); return err }(), "write", fb.LocalAddr(), a},
 		{"FallbackClose", fb.Close(), "close", fb.LocalAddr(), nil},
 		{"FallbackSetDeadline", fb.SetDeadline(time.Time{}), "set", nil, fb.LocalAddr()},
+		{"SetReadDeadline", conn.SetReadDeadline(time.Time{}), "set", nil, conn.LocalAddr()},
+		{"SetWriteDeadline", conn.SetWriteDeadline(time.Time{}), "set", nil, conn.LocalAddr()},
+		{"FallbackSetReadDeadline", fb.SetReadDeadline(time.Time{}), "set", nil, fb.LocalAddr()},
+		{"FallbackSetWriteDeadline", fb.SetWriteDeadline(time.Time{}), "set", nil, fb.LocalAddr()},
 	} {
 		var oe *net.OpError
 		if !errors.As(test.err, &oe) || !errors.Is(test.err, net.ErrClosed) || oe.Op != test.op ||

@@ -106,6 +106,9 @@ func (c *scriptedUDPConn) Close() error {
 	return nil
 }
 
+// SetDeadline does nothing, as reads wait until the connection is closed.
+func (c *scriptedUDPConn) SetDeadline(time.Time) error { return nil }
+
 // LocalAddr returns an unspecified address, as of a socket that needs packet info.
 func (c *scriptedUDPConn) LocalAddr() net.Addr { return &net.UDPAddr{IP: net.IPv4zero, Port: 53} }
 
@@ -201,6 +204,24 @@ func testInletReadDrops(t *testing.T) {
 		if got := readInletConn(t, conn); conn.RemoteAddr().String() != b.String() || strings.Join(got, " ") != "b2" {
 			t.Errorf("RemoteAddr(), packets read = %s, %q, want %s, the latest one only", conn.RemoteAddr(), got, b)
 		}
+	})
+
+	t.Run("TableFullEnded", func(t *testing.T) {
+		// A flow released to a fallback connection closed since has ended, but nothing has reported it,
+		// so the full table is swept for ended flows before a new flow is dropped
+		write, ln := setup(t, &InletConfig{MaxFlows: 1, FallbackConn: true})
+		write(a, "a1")
+		releaseInletConn(t, ln)
+		_ = readFallback(t, ln.Fallback())
+		if err := ln.Fallback().Close(); err != nil {
+			t.Fatalf("Close() = %v, want nil", err)
+		}
+		write(b, "b1")
+		conn := acceptInletConn(t, ln)
+		if got := readInletConn(t, conn); conn.RemoteAddr().String() != b.String() || strings.Join(got, " ") != "b1" {
+			t.Errorf("RemoteAddr(), packets read = %s, %q, want %s, b1", conn.RemoteAddr(), got, b)
+		}
+		waitInletStats(t, ln, InletStats{})
 	})
 }
 

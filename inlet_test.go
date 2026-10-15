@@ -31,6 +31,8 @@ import (
 
 // TestInlet runs the tests of inlets, of their inlet connections and of their fallback connections.
 func TestInlet(t *testing.T) {
+	t.Run(testInletBlockedReadsName, testInletBlockedReads)
+	t.Run(testInletBlockedWritesName, testInletBlockedWrites)
 	t.Run(testInletCloseName, testInletClose)
 	t.Run(testInletCloseErrorName, testInletCloseError)
 	t.Run(testInletClosedErrorsName, testInletClosedErrors)
@@ -40,6 +42,7 @@ func TestInlet(t *testing.T) {
 	t.Run(testInletConnCloseDropsName, testInletConnCloseDrops)
 	t.Run(testInletConnWriteToConnectedName, testInletConnWriteToConnected)
 	t.Run(testInletDeadlinesName, testInletDeadlines)
+	t.Run(testInletEmptyPacketsName, testInletEmptyPackets)
 	t.Run(testInletFallbackDropsName, testInletFallbackDrops)
 	t.Run(testInletFallbackFromToName, testInletFallbackFromTo)
 	t.Run(testInletFallbackWriteName, testInletFallbackWrite)
@@ -59,6 +62,7 @@ func TestInlet(t *testing.T) {
 	t.Run(testInletTrunkFlowsName, testInletTrunkFlows)
 	t.Run(testInletUDPSocketFlowsName, testInletUDPSocketFlows)
 	t.Run(testInletUDPTruncatedName, testInletUDPTruncated)
+	t.Run(testInletUnderlyingDeadlineName, testInletUnderlyingDeadline)
 	t.Run(testInletUnwrapName, testInletUnwrap)
 	t.Run(testInletUnwrapUDPName, testInletUnwrapUDP)
 	t.Run(testInletWriteCopiesBytesName, testInletWriteCopiesBytes)
@@ -530,6 +534,62 @@ func testInletCloseError(t *testing.T) {
 	}
 }
 
+// testInletUnderlyingDeadline ensures an inlet clears the deadlines of the connection it takes over, so that
+// a deadline passed neither keeps the read loop from reading, nor fails writes without a write timeout.
+func testInletUnderlyingDeadline(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, server := BufferedTrunk(16, nil, nil)
+	t.Cleanup(func() { _ = client.Close() })
+	_ = server.SetDeadline(time.Now().Add(-time.Second))
+	ln := Inlet(server, &InletConfig{WriteTimeout: -1})
+	t.Cleanup(func() { _ = ln.Close() })
+
+	writeFrom(t, client, a, "a1")
+	conn := acceptInletConn(t, ln)
+	if _, err := conn.WriteTo([]byte("x"), nil); err != nil {
+		t.Fatalf("WriteTo() = %v, want nil", err)
+	}
+	b := make([]byte, 8)
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	if n, _, err := client.ReadFrom(b); err != nil || string(b[:n]) != "x" {
+		t.Errorf("ReadFrom() = %q, %v, want %q, nil", b[:n], err, "x")
+	}
+	waitInletStats(t, ln, InletStats{})
+}
+
+// testInletBlockedReads ensures a read waiting on an empty inlet connection, or on the fallback connection,
+// returns net.ErrClosed once the inlet stops.
+func testInletBlockedReads(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	writeFrom(t, client, a, "a1")
+	conn := acceptInletConn(t, ln)
+	_ = readInletConn(t, conn)            // So the next read waits
+	_ = conn.SetReadDeadline(time.Time{}) // Which readInletConn has set
+
+	errs := make(chan error, 2)
+	for _, pc := range []PacketConn{conn, ln.Fallback()} {
+		go func() {
+			_, _, err := pc.ReadFrom(make([]byte, 8))
+			errs <- err
+		}()
+	}
+	time.Sleep(20 * time.Millisecond) // Let both reads wait
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close() = %v, want nil", err)
+	}
+	for range 2 {
+		select {
+		case err := <-errs:
+			if !errors.Is(err, net.ErrClosed) {
+				t.Errorf("ReadFrom() = %v, want net.ErrClosed", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("ReadFrom() hasn't returned once the inlet has stopped")
+		}
+	}
+}
+
 // testInletUnwrap ensures Unwrap stops the inlet, but leaves the underlying connection open.
 func testInletUnwrap(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
@@ -687,6 +747,8 @@ func testInletUDPSocketFlows(t *testing.T) {
 }
 
 const (
+	testInletBlockedReadsName              = "BlockedReads"
+	testInletBlockedWritesName             = "BlockedWrites"
 	testInletCloseName                     = "Close"
 	testInletCloseErrorName                = "CloseError"
 	testInletClosedErrorsName              = "ClosedErrors"
@@ -696,6 +758,7 @@ const (
 	testInletConnCloseDropsName            = "ConnCloseDrops"
 	testInletConnWriteToConnectedName      = "ConnWriteToConnected"
 	testInletDeadlinesName                 = "Deadlines"
+	testInletEmptyPacketsName              = "EmptyPackets"
 	testInletFallbackDropsName             = "FallbackDrops"
 	testInletFallbackFromToName            = "FallbackFromTo"
 	testInletFallbackWriteName             = "FallbackWrite"
@@ -715,6 +778,7 @@ const (
 	testInletTrunkFlowsName                = "TrunkFlows"
 	testInletUDPSocketFlowsName            = "UDPSocketFlows"
 	testInletUDPTruncatedName              = "UDPTruncated"
+	testInletUnderlyingDeadlineName        = "UnderlyingDeadline"
 	testInletUnwrapName                    = "Unwrap"
 	testInletUnwrapUDPName                 = "UnwrapUDP"
 	testInletWriteCopiesBytesName          = "WriteCopiesBytes"
