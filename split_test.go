@@ -29,52 +29,52 @@ import (
 	"time"
 )
 
-// TestInlet runs the tests of inlets, of their inlet connections and of their fallback connections.
-func TestInlet(t *testing.T) {
-	t.Run(testInletBlockedReadsName, testInletBlockedReads)
-	t.Run(testInletBlockedWritesName, testInletBlockedWrites)
-	t.Run(testInletCloseName, testInletClose)
-	t.Run(testInletCloseErrorName, testInletCloseError)
-	t.Run(testInletClosedErrorsName, testInletClosedErrors)
-	t.Run(testInletConcurrentReadsName, testInletConcurrentReads)
-	t.Run(testInletConfigName, testInletConfig)
-	t.Run(testInletConnCloseAfterStopName, testInletConnCloseAfterStop)
-	t.Run(testInletConnCloseDropsName, testInletConnCloseDrops)
-	t.Run(testInletConnWriteToConnectedName, testInletConnWriteToConnected)
-	t.Run(testInletDeadlinesName, testInletDeadlines)
-	t.Run(testInletEmptyPacketsName, testInletEmptyPackets)
-	t.Run(testInletFallbackDropsName, testInletFallbackDrops)
-	t.Run(testInletFallbackFromToName, testInletFallbackFromTo)
-	t.Run(testInletFallbackWriteName, testInletFallbackWrite)
-	t.Run(testInletFallbackWriteCopiesAddrsName, testInletFallbackWriteCopiesAddrs)
-	t.Run(testInletFallbackWriteOtherNetworkName, testInletFallbackWriteOtherNetwork)
-	t.Run(testInletFallbackWriteUnmappedName, testInletFallbackWriteUnmapped)
-	t.Run(testInletIdleTimeoutName, testInletIdleTimeout)
-	t.Run(testInletNegativeReadName, testInletNegativeRead)
-	t.Run(testInletPacketInfoFlowsName, testInletPacketInfoFlows)
-	t.Run(testInletPayloadSizesName, testInletPayloadSizes)
-	t.Run(testInletReadCopiesAddrsName, testInletReadCopiesAddrs)
-	t.Run(testInletReadDropsName, testInletReadDrops)
-	t.Run(testInletReleaseName, testInletRelease)
-	t.Run(testInletReleaseWithoutFallbackName, testInletReleaseWithoutFallback)
-	t.Run(testInletShortBufferName, testInletShortBuffer)
-	t.Run(testInletStreamListenerName, testInletStreamListener)
-	t.Run(testInletTrunkFlowsName, testInletTrunkFlows)
-	t.Run(testInletUDPSocketFlowsName, testInletUDPSocketFlows)
-	t.Run(testInletUDPTruncatedName, testInletUDPTruncated)
-	t.Run(testInletUnderlyingDeadlineName, testInletUnderlyingDeadline)
-	t.Run(testInletUnwrapName, testInletUnwrap)
-	t.Run(testInletUnwrapUDPName, testInletUnwrapUDP)
-	t.Run(testInletWriteCopiesBytesName, testInletWriteCopiesBytes)
-	t.Run(testInletWriteFailedName, testInletWriteFailed)
-	t.Run(testInletWriteQueueFullName, testInletWriteQueueFull)
-	t.Run(testInletWriteTimeoutName, testInletWriteTimeout)
-	t.Run(testInletWriteUnsentName, testInletWriteUnsent)
+// TestSplit runs the tests of splitters, of their split connections and of their fallback connections.
+func TestSplit(t *testing.T) {
+	t.Run(testSplitBlockedReadsName, testSplitBlockedReads)
+	t.Run(testSplitBlockedWritesName, testSplitBlockedWrites)
+	t.Run(testSplitCloseName, testSplitClose)
+	t.Run(testSplitCloseErrorName, testSplitCloseError)
+	t.Run(testSplitClosedErrorsName, testSplitClosedErrors)
+	t.Run(testSplitConcurrentReadsName, testSplitConcurrentReads)
+	t.Run(testSplitConfigName, testSplitConfig)
+	t.Run(testSplitConnCloseAfterStopName, testSplitConnCloseAfterStop)
+	t.Run(testSplitConnCloseDropsName, testSplitConnCloseDrops)
+	t.Run(testSplitConnWriteToConnectedName, testSplitConnWriteToConnected)
+	t.Run(testSplitDeadlinesName, testSplitDeadlines)
+	t.Run(testSplitEmptyPacketsName, testSplitEmptyPackets)
+	t.Run(testSplitFallbackDropsName, testSplitFallbackDrops)
+	t.Run(testSplitFallbackFromToName, testSplitFallbackFromTo)
+	t.Run(testSplitFallbackWriteName, testSplitFallbackWrite)
+	t.Run(testSplitFallbackWriteCopiesAddrsName, testSplitFallbackWriteCopiesAddrs)
+	t.Run(testSplitFallbackWriteOtherNetworkName, testSplitFallbackWriteOtherNetwork)
+	t.Run(testSplitFallbackWriteUnmappedName, testSplitFallbackWriteUnmapped)
+	t.Run(testSplitIdleTimeoutName, testSplitIdleTimeout)
+	t.Run(testSplitNegativeReadName, testSplitNegativeRead)
+	t.Run(testSplitPacketInfoFlowsName, testSplitPacketInfoFlows)
+	t.Run(testSplitPayloadSizesName, testSplitPayloadSizes)
+	t.Run(testSplitReadCopiesAddrsName, testSplitReadCopiesAddrs)
+	t.Run(testSplitReadDropsName, testSplitReadDrops)
+	t.Run(testSplitReleaseName, testSplitRelease)
+	t.Run(testSplitReleaseWithoutFallbackName, testSplitReleaseWithoutFallback)
+	t.Run(testSplitShortBufferName, testSplitShortBuffer)
+	t.Run(testSplitStreamListenerName, testSplitStreamListener)
+	t.Run(testSplitTrunkFlowsName, testSplitTrunkFlows)
+	t.Run(testSplitUDPSocketFlowsName, testSplitUDPSocketFlows)
+	t.Run(testSplitUDPTruncatedName, testSplitUDPTruncated)
+	t.Run(testSplitUnderlyingDeadlineName, testSplitUnderlyingDeadline)
+	t.Run(testSplitUnwrapName, testSplitUnwrap)
+	t.Run(testSplitUnwrapUDPName, testSplitUnwrapUDP)
+	t.Run(testSplitWriteCopiesBytesName, testSplitWriteCopiesBytes)
+	t.Run(testSplitWriteFailedName, testSplitWriteFailed)
+	t.Run(testSplitWriteQueueFullName, testSplitWriteQueueFull)
+	t.Run(testSplitWriteTimeoutName, testSplitWriteTimeout)
+	t.Run(testSplitWriteUnsentName, testSplitWriteUnsent)
 }
 
-// testInletPayloadSizes ensures an inlet over each kind of pipe and over UDP sockets reads the packets written
+// testSplitPayloadSizes ensures a splitter over each kind of pipe and over UDP sockets reads the packets written
 // to it, with payloads from the smallest size to the largest, and counts those it drops.
-func testInletPayloadSizes(t *testing.T) {
+func testSplitPayloadSizes(t *testing.T) {
 	packetCount := 1 << 13
 
 	type pair struct {
@@ -109,7 +109,7 @@ func testInletPayloadSizes(t *testing.T) {
 	}
 
 	testFunc := func(t *testing.T, ctor packetConnPairCtor, writeBufferSize int) {
-		checkInletPayloads(t, ctor, DefaultInletAcceptQueueSize, DefaultInletReadQueueSize, packetSizeMax, writeBufferSize, packetCount)
+		checkSplitPayloads(t, ctor, DefaultSplitAcceptQueueSize, DefaultSplitReadQueueSize, packetSizeMax, writeBufferSize, packetCount)
 	}
 
 	for _, item := range pairs {
@@ -134,23 +134,23 @@ func testInletPayloadSizes(t *testing.T) {
 	}
 }
 
-// checkInletPayloads writes packetCount packets of writeBufferSize bytes from one connection of a pair made
-// by ctor to an inlet over the other, reads them from the inlet connections it accepts, and checks that each
+// checkSplitPayloads writes packetCount packets of writeBufferSize bytes from one connection of a pair made
+// by ctor to a splitter over the other, reads them from the split connections it accepts, and checks that each
 // packet has been read, or counted as dropped.
-func checkInletPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
+func checkSplitPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
 	t.Helper()
 	pc1, pc2 := ctor()
 
 	timeout := 50 * time.Millisecond
 	chr, chw, done := make(chan int), make(chan int), make(chan struct{})
-	var stats InletStats // Of the inlet, once closed
+	var stats SplitStats // Of the splitter, once closed
 
-	connHandler := func(mc InletConn, ln InletListener, wg *sync.WaitGroup) {
+	connHandler := func(mc SplitConn, ln SplitListener, wg *sync.WaitGroup) {
 		defer wg.Done()
 
 		lAddr, rAddr := mc.LocalAddr(), mc.RemoteAddr()
-		me := fmt.Sprintf("inlet connection %v <- %v", lAddr, rAddr)
-		logfIf(t, testPacketInletDebug, "%v: started", me)
+		me := fmt.Sprintf("split connection %v <- %v", lAddr, rAddr)
+		logfIf(t, testPacketSplitDebug, "%v: started", me)
 
 		defer func() { _ = mc.Close() }()
 
@@ -159,7 +159,7 @@ func checkInletPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 		var err error
 		var n int
 		for {
-			// Once the inlet has closed, the packets queued are still read, then net.ErrClosed
+			// Once the splitter has closed, the packets queued are still read, then net.ErrClosed
 			err = mc.SetReadDeadline(time.Now().Add(2 * timeout))
 			if err != nil {
 				t.Errorf("%v: pc.SetReadDeadline() = %v, want nil", me, err)
@@ -168,7 +168,7 @@ func checkInletPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 
 			n, addr, err = mc.ReadFrom(b)
 			if n == 0 && err != nil {
-				logfIf(t, testPacketInletDebug, "%v: pc.ReadFrom() = %v", me, err)
+				logfIf(t, testPacketSplitDebug, "%v: pc.ReadFrom() = %v", me, err)
 				break
 			}
 
@@ -177,20 +177,20 @@ func checkInletPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 			}
 
 			chr <- n
-			logfIf(t, testPacketInletDebug, "%v: read %d bytes", me, n)
+			logfIf(t, testPacketSplitDebug, "%v: read %d bytes", me, n)
 		}
 
-		logfIf(t, testPacketInletDebug, "%v: stopped", me)
+		logfIf(t, testPacketSplitDebug, "%v: stopped", me)
 	}
 
 	serverHandler := func(pc PacketConn, wg *sync.WaitGroup) {
 		defer wg.Done()
 
 		lAddr := pc.LocalAddr()
-		me := fmt.Sprintf("inlet %v", lAddr)
-		logfIf(t, testPacketInletDebug, "%v: started", me)
+		me := fmt.Sprintf("splitter %v", lAddr)
+		logfIf(t, testPacketSplitDebug, "%v: started", me)
 
-		ln := Inlet(pc, &InletConfig{
+		ln := Split(pc, &SplitConfig{
 			AcceptQueueSize: acceptQueueSize,
 			ReadQueueSize:   readQueueSize,
 			ReadBufferSize:  readBufferSize,
@@ -205,7 +205,7 @@ func checkInletPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 			conn, err := ln.Accept()
 			if err != nil {
 				if !errors.Is(err, net.ErrClosed) {
-					logfIf(t, testPacketInletDebug, "%v: ln.Accept() = %v", me, err)
+					logfIf(t, testPacketSplitDebug, "%v: ln.Accept() = %v", me, err)
 				}
 				break
 			}
@@ -214,7 +214,7 @@ func checkInletPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 			go connHandler(conn, ln, wg)
 		}
 
-		logfIf(t, testPacketInletDebug, "%v: stopped", me)
+		logfIf(t, testPacketSplitDebug, "%v: stopped", me)
 	}
 
 	clientHandler := func(pc PacketConn, to net.Addr, wg *sync.WaitGroup) {
@@ -222,7 +222,7 @@ func checkInletPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 
 		lAddr, rAddr := pc.LocalAddr(), to
 		me := fmt.Sprintf("client %v -> %v", lAddr, rAddr)
-		logfIf(t, testPacketInletDebug, "%v: started", me)
+		logfIf(t, testPacketSplitDebug, "%v: started", me)
 
 		b := make([]byte, writeBufferSize)
 		_, _ = io.ReadFull(rand.Reader, b)
@@ -243,14 +243,14 @@ func checkInletPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 			}
 
 			chw <- n
-			logfIf(t, testPacketInletDebug, "%v: wrote %d bytes", me, n)
+			logfIf(t, testPacketSplitDebug, "%v: wrote %d bytes", me, n)
 		}
 
 		time.AfterFunc(timeout, func() {
 			close(done)
 		})
 
-		logfIf(t, testPacketInletDebug, "%v: stopped", me)
+		logfIf(t, testPacketSplitDebug, "%v: stopped", me)
 	}
 
 	var wg sync.WaitGroup
@@ -277,11 +277,11 @@ loop:
 
 	wg.Wait()
 
-	// The inlet drops a packet rather than wait for a slow reader, and counts it
+	// The splitter drops a packet rather than wait for a slow reader, and counts it
 	dropped := int(stats.ConnQueueFull + stats.AcceptQueueFull + stats.TableFull + stats.NoDestination)
 	message := fmt.Sprintf("r/w statistics: count %d+%d/%d, bytes %d+%d/%d", acr, dropped, acw, anr, dropped*writeBufferSize, anw)
 	if pc2.LocalAddr().Network() == "udp" {
-		// The system may drop datagrams the inlet never sees, e.g. as the receive buffer of the socket overflows,
+		// The system may drop datagrams the splitter never sees, e.g. as the receive buffer of the socket overflows,
 		// so fewer packets may be read and counted than written, but never more, and not none at all.
 		t.Log(message)
 		if acr+dropped > acw || anr+dropped*writeBufferSize > anw || acr == 0 {
@@ -290,14 +290,14 @@ loop:
 		return
 	}
 
-	// Pipes deliver every packet, so the inlet reads or counts each one
+	// Pipes deliver every packet, so the splitter reads or counts each one
 	if acr+dropped != acw || anr+dropped*writeBufferSize != anw {
 		t.Error(message)
 	}
 }
 
-// testPacketInletDebug makes checkInletPayloads log what each of its goroutines does.
-const testPacketInletDebug = false
+// testPacketSplitDebug makes checkSplitPayloads log what each of its goroutines does.
+const testPacketSplitDebug = false
 
 // testAddr is an address of a network other than UDP, e.g. of a flow over a trunk.
 type testAddr string
@@ -308,8 +308,8 @@ func (a testAddr) Network() string { return "test" }
 // String returns the address itself.
 func (a testAddr) String() string { return string(a) }
 
-// waitInletStats waits until the inlet has dropped the given numbers of packets, or fails.
-func waitInletStats(t *testing.T, ln InletListener, want InletStats) {
+// waitSplitStats waits until the splitter has dropped the given numbers of packets, or fails.
+func waitSplitStats(t *testing.T, ln SplitListener, want SplitStats) {
 	t.Helper()
 	s := ln
 	deadline := time.Now().Add(time.Second)
@@ -321,11 +321,11 @@ func waitInletStats(t *testing.T, ln InletListener, want InletStats) {
 	}
 }
 
-// acceptInletConn accepts an inlet connection, or fails if there is none within a second.
-func acceptInletConn(t *testing.T, ln InletListener) InletConn {
+// acceptSplitConn accepts a split connection, or fails if there is none within a second.
+func acceptSplitConn(t *testing.T, ln SplitListener) SplitConn {
 	t.Helper()
 	type result struct {
-		c   InletConn
+		c   SplitConn
 		err error
 	}
 	ch := make(chan result, 1)
@@ -345,17 +345,17 @@ func acceptInletConn(t *testing.T, ln InletListener) InletConn {
 	}
 }
 
-// releaseInletConn accepts the next inlet connection and releases it, handing its flow over to the fallback
+// releaseSplitConn accepts the next split connection and releases it, handing its flow over to the fallback
 // connection.
-func releaseInletConn(t *testing.T, ln InletListener) {
+func releaseSplitConn(t *testing.T, ln SplitListener) {
 	t.Helper()
-	if err := acceptInletConn(t, ln).Release(); err != nil {
+	if err := acceptSplitConn(t, ln).Release(); err != nil {
 		t.Fatalf("Release() = %v, want nil", err)
 	}
 }
 
-// readInletConn returns the packets read from an inlet connection until none comes for a while.
-func readInletConn(t *testing.T, c InletConn) []string {
+// readSplitConn returns the packets read from a split connection until none comes for a while.
+func readSplitConn(t *testing.T, c SplitConn) []string {
 	t.Helper()
 	var pkts []string
 	b := make([]byte, 64)
@@ -369,12 +369,12 @@ func readInletConn(t *testing.T, c InletConn) []string {
 	}
 }
 
-// inletTrunk returns a trunk end to write to an inlet over the other end from, and the inlet.
-func inletTrunk(t *testing.T, config *InletConfig) (FromToPacketConn, InletListener) {
+// splitTrunk returns a trunk end to write to a splitter over the other end from, and the splitter.
+func splitTrunk(t *testing.T, config *SplitConfig) (FromToPacketConn, SplitListener) {
 	t.Helper()
 	client, server := BufferedTrunk(16, nil, nil)
 	t.Cleanup(func() { _ = client.Close() })
-	ln := Inlet(server, config)
+	ln := Split(server, config)
 	t.Cleanup(func() { _ = ln.Close() })
 	return client, ln
 }
@@ -403,19 +403,19 @@ func readFallback(t *testing.T, d PacketConn) []string {
 	}
 }
 
-// testInletConfig ensures the fields of an InletConfig not set give their defaults, and the others are applied.
-func testInletConfig(t *testing.T) {
-	def := inletConfig{
-		idleTimeout:       DefaultInletIdleTimeout,
-		writeTimeout:      DefaultInletWriteTimeout,
-		acceptQueueSize:   DefaultInletAcceptQueueSize,
-		fallbackQueueSize: DefaultInletFallbackQueueSize,
-		maxFlows:          DefaultInletMaxFlows,
-		readBufferSize:    DefaultInletReadBufferSize,
-		readQueueSize:     DefaultInletReadQueueSize,
-		writeQueueSize:    DefaultInletWriteQueueSize,
+// testSplitConfig ensures the fields of a SplitConfig not set give their defaults, and the others are applied.
+func testSplitConfig(t *testing.T) {
+	def := splitConfig{
+		idleTimeout:       DefaultSplitIdleTimeout,
+		writeTimeout:      DefaultSplitWriteTimeout,
+		acceptQueueSize:   DefaultSplitAcceptQueueSize,
+		fallbackQueueSize: DefaultSplitFallbackQueueSize,
+		maxFlows:          DefaultSplitMaxFlows,
+		readBufferSize:    DefaultSplitReadBufferSize,
+		readQueueSize:     DefaultSplitReadQueueSize,
+		writeQueueSize:    DefaultSplitWriteQueueSize,
 	}
-	with := func(f func(*inletConfig)) inletConfig {
+	with := func(f func(*splitConfig)) splitConfig {
 		cfg := def
 		f(&cfg)
 		return cfg
@@ -423,32 +423,32 @@ func testInletConfig(t *testing.T) {
 
 	for _, test := range []struct {
 		name   string
-		config *InletConfig
-		want   inletConfig
+		config *SplitConfig
+		want   splitConfig
 	}{
 		{"Nil", nil, def},
-		{"Zero", &InletConfig{}, def},
-		{"Negative", &InletConfig{AcceptQueueSize: -1, FallbackQueueSize: -1, MaxFlows: -1, ReadBufferSize: -1, ReadQueueSize: -1, WriteQueueSize: -1}, def},
-		{"NoTimeouts", &InletConfig{IdleTimeout: -1, WriteTimeout: -1}, with(func(cfg *inletConfig) { cfg.idleTimeout, cfg.writeTimeout = 0, 0 })},
-		{"ReadBufferSizeMin", &InletConfig{ReadBufferSize: minInletReadBufferSize - 1}, with(func(cfg *inletConfig) { cfg.readBufferSize = minInletReadBufferSize })},
-		{"FallbackConn", &InletConfig{FallbackConn: true}, with(func(cfg *inletConfig) { cfg.fallbackConn = true })},
-		{"Set", &InletConfig{
+		{"Zero", &SplitConfig{}, def},
+		{"Negative", &SplitConfig{AcceptQueueSize: -1, FallbackQueueSize: -1, MaxFlows: -1, ReadBufferSize: -1, ReadQueueSize: -1, WriteQueueSize: -1}, def},
+		{"NoTimeouts", &SplitConfig{IdleTimeout: -1, WriteTimeout: -1}, with(func(cfg *splitConfig) { cfg.idleTimeout, cfg.writeTimeout = 0, 0 })},
+		{"ReadBufferSizeMin", &SplitConfig{ReadBufferSize: minSplitReadBufferSize - 1}, with(func(cfg *splitConfig) { cfg.readBufferSize = minSplitReadBufferSize })},
+		{"FallbackConn", &SplitConfig{FallbackConn: true}, with(func(cfg *splitConfig) { cfg.fallbackConn = true })},
+		{"Set", &SplitConfig{
 			AcceptQueueSize:   1,
 			ReadQueueSize:     2,
 			FallbackQueueSize: 3,
 			IdleTimeout:       4,
 			MaxFlows:          5,
-			ReadBufferSize:    minInletReadBufferSize + 6,
+			ReadBufferSize:    minSplitReadBufferSize + 6,
 			WriteQueueSize:    7,
 			WriteTimeout:      8,
 			PacketInfo:        true,
-		}, inletConfig{
+		}, splitConfig{
 			idleTimeout:       4,
 			writeTimeout:      8,
 			acceptQueueSize:   1,
 			fallbackQueueSize: 3,
 			maxFlows:          5,
-			readBufferSize:    minInletReadBufferSize + 6,
+			readBufferSize:    minSplitReadBufferSize + 6,
 			readQueueSize:     2,
 			writeQueueSize:    7,
 			packetInfo:        true,
@@ -462,14 +462,14 @@ func testInletConfig(t *testing.T) {
 	}
 }
 
-// testInletClose ensures that once an inlet is closed, Accept fails, an inlet connection returns the packets
+// testSplitClose ensures that once a splitter is closed, Accept fails, a split connection returns the packets
 // queued and then net.ErrClosed, writes fail, the fallback connection fails too, and deadlines can still be set.
-func testInletClose(t *testing.T) {
+func testSplitClose(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
 	writeFrom(t, client, a, "a2")
-	conn := acceptInletConn(t, ln)
+	conn := acceptSplitConn(t, ln)
 	time.Sleep(10 * time.Millisecond) // Let the read loop queue a2 too
 	if err := ln.Close(); err != nil {
 		t.Fatalf("Close() = %v, want nil", err)
@@ -501,7 +501,7 @@ func testInletClose(t *testing.T) {
 	}
 	for _, set := range []func(time.Time) error{conn.SetDeadline, conn.SetReadDeadline, conn.SetWriteDeadline,
 		ln.Fallback().SetDeadline, ln.Fallback().SetReadDeadline, ln.Fallback().SetWriteDeadline} {
-		if err := set(time.Time{}); err != nil { // As the connections are open, though the inlet isn't
+		if err := set(time.Time{}); err != nil { // As the connections are open, though the splitter isn't
 			t.Errorf("setting a deadline = %v, want nil", err)
 		}
 	}
@@ -519,13 +519,13 @@ func (c failingClose) Close() error {
 	return c.err
 }
 
-// testInletCloseError ensures Close returns the error of closing the underlying connection,
-// and net.ErrClosed once the inlet has stopped.
-func testInletCloseError(t *testing.T) {
+// testSplitCloseError ensures Close returns the error of closing the underlying connection,
+// and net.ErrClosed once the splitter has stopped.
+func testSplitCloseError(t *testing.T) {
 	client, server := BufferedTrunk(16, nil, nil)
 	defer func() { _ = client.Close() }()
 	errClose := errors.New("close failed")
-	ln := Inlet(failingClose{server, errClose}, nil)
+	ln := Split(failingClose{server, errClose}, nil)
 	if err := ln.Close(); !errors.Is(err, errClose) {
 		t.Errorf("Close() = %v, want %v", err, errClose)
 	}
@@ -534,18 +534,18 @@ func testInletCloseError(t *testing.T) {
 	}
 }
 
-// testInletUnderlyingDeadline ensures an inlet clears the deadlines of the connection it takes over, so that
+// testSplitUnderlyingDeadline ensures a splitter clears the deadlines of the connection it takes over, so that
 // a deadline passed neither keeps the read loop from reading, nor fails writes without a write timeout.
-func testInletUnderlyingDeadline(t *testing.T) {
+func testSplitUnderlyingDeadline(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, server := BufferedTrunk(16, nil, nil)
 	t.Cleanup(func() { _ = client.Close() })
 	_ = server.SetDeadline(time.Now().Add(-time.Second))
-	ln := Inlet(server, &InletConfig{WriteTimeout: -1})
+	ln := Split(server, &SplitConfig{WriteTimeout: -1})
 	t.Cleanup(func() { _ = ln.Close() })
 
 	writeFrom(t, client, a, "a1")
-	conn := acceptInletConn(t, ln)
+	conn := acceptSplitConn(t, ln)
 	if _, err := conn.WriteTo([]byte("x"), nil); err != nil {
 		t.Fatalf("WriteTo() = %v, want nil", err)
 	}
@@ -554,18 +554,18 @@ func testInletUnderlyingDeadline(t *testing.T) {
 	if n, _, err := client.ReadFrom(b); err != nil || string(b[:n]) != "x" {
 		t.Errorf("ReadFrom() = %q, %v, want %q, nil", b[:n], err, "x")
 	}
-	waitInletStats(t, ln, InletStats{})
+	waitSplitStats(t, ln, SplitStats{})
 }
 
-// testInletBlockedReads ensures a read waiting on an empty inlet connection, or on the fallback connection,
-// returns net.ErrClosed once the inlet stops.
-func testInletBlockedReads(t *testing.T) {
+// testSplitBlockedReads ensures a read waiting on an empty split connection, or on the fallback connection,
+// returns net.ErrClosed once the splitter stops.
+func testSplitBlockedReads(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
-	conn := acceptInletConn(t, ln)
-	_ = readInletConn(t, conn)            // So the next read waits
-	_ = conn.SetReadDeadline(time.Time{}) // Which readInletConn has set
+	conn := acceptSplitConn(t, ln)
+	_ = readSplitConn(t, conn)            // So the next read waits
+	_ = conn.SetReadDeadline(time.Time{}) // Which readSplitConn has set
 
 	errs := make(chan error, 2)
 	for _, pc := range []PacketConn{conn, ln.Fallback()} {
@@ -585,15 +585,15 @@ func testInletBlockedReads(t *testing.T) {
 				t.Errorf("ReadFrom() = %v, want net.ErrClosed", err)
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("ReadFrom() hasn't returned once the inlet has stopped")
+			t.Fatalf("ReadFrom() hasn't returned once the splitter has stopped")
 		}
 	}
 }
 
-// testInletUnwrap ensures Unwrap stops the inlet, but leaves the underlying connection open.
-func testInletUnwrap(t *testing.T) {
+// testSplitUnwrap ensures Unwrap stops the splitter, but leaves the underlying connection open.
+func testSplitUnwrap(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, nil)
+	client, ln := splitTrunk(t, nil)
 	pc := ln.Unwrap()
 	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("Accept() = %v, want net.ErrClosed", err)
@@ -606,9 +606,9 @@ func testInletUnwrap(t *testing.T) {
 	}
 }
 
-// testInletUnwrapUDP ensures Unwrap returns the UDP connection given to Inlet, rather than the wrapper
-// the inlet reads and writes through, with packet info or without.
-func testInletUnwrapUDP(t *testing.T) {
+// testSplitUnwrapUDP ensures Unwrap returns the UDP connection given to Split, rather than the wrapper
+// the splitter reads and writes through, with packet info or without.
+func testSplitUnwrapUDP(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -621,7 +621,7 @@ func testInletUnwrapUDP(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = pc.Close() }()
-			if got := Inlet(pc, &InletConfig{PacketInfo: info}).Unwrap(); got != pc {
+			if got := Split(pc, &SplitConfig{PacketInfo: info}).Unwrap(); got != pc {
 				t.Errorf("Unwrap() = %T, want the %T given", got, pc)
 			}
 
@@ -637,12 +637,12 @@ func testInletUnwrapUDP(t *testing.T) {
 	}
 }
 
-// testInletStreamListener ensures an inlet wrapped with PacketToStreamListener accepts its inlet connections
-// as StreamConns, which read and write the packets of their flows, and unwraps to the inlet.
-func testInletStreamListener(t *testing.T) {
+// testSplitStreamListener ensures a splitter wrapped with PacketToStreamListener accepts its split connections
+// as StreamConns, which read and write the packets of their flows, and unwraps to the splitter.
+func testSplitStreamListener(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, nil)
-	sl := PacketToStreamListener(ln) // Infers InletConn
+	client, ln := splitTrunk(t, nil)
+	sl := PacketToStreamListener(ln) // Infers SplitConn
 	if sl.Addr() != ln.Addr() {
 		t.Errorf("Addr() = %v, want %v", sl.Addr(), ln.Addr())
 	}
@@ -668,8 +668,8 @@ func testInletStreamListener(t *testing.T) {
 		t.Errorf("ReadFromTo() = %q to %v, %v, want %q to %s, nil", b[:n], dst, err, "x", a)
 	}
 
-	if got := sl.(PacketListenerWrapper[InletConn]).Unwrap(); got != ln {
-		t.Errorf("Unwrap() = %v, want the inlet", got)
+	if got := sl.(PacketListenerWrapper[SplitConn]).Unwrap(); got != ln {
+		t.Errorf("Unwrap() = %v, want the splitter", got)
 	}
 	if err := sl.Close(); err != nil {
 		t.Errorf("Close() = %v, want nil", err)
@@ -679,10 +679,10 @@ func testInletStreamListener(t *testing.T) {
 	}
 }
 
-// testInletUDPSocketFlows ensures an inlet over a dual-stack UDP socket tells flows apart by their destination
-// addresses too, and replies from the address each flow came to, while an inlet without packet info
+// testSplitUDPSocketFlows ensures a splitter over a dual-stack UDP socket tells flows apart by their destination
+// addresses too, and replies from the address each flow came to, while a splitter without packet info
 // tells them apart by their source addresses alone.
-func testInletUDPSocketFlows(t *testing.T) {
+func testSplitUDPSocketFlows(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		t.Skipf("not supported on %s", runtime.GOOS)
@@ -690,10 +690,10 @@ func testInletUDPSocketFlows(t *testing.T) {
 
 	for _, test := range []struct {
 		name   string
-		config *InletConfig
+		config *SplitConfig
 		info   bool
 	}{
-		{"PacketInfo", &InletConfig{PacketInfo: true}, true},
+		{"PacketInfo", &SplitConfig{PacketInfo: true}, true},
 		{"NoPacketInfo", nil, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -701,7 +701,7 @@ func testInletUDPSocketFlows(t *testing.T) {
 			if err != nil {
 				t.Skipf("ListenUDP() = %v", err) // E.g. no IPv6 support
 			}
-			ln := Inlet(pc, test.config)
+			ln := Split(pc, test.config)
 			defer func() { _ = ln.Close() }()
 			if ln.Addr() != pc.LocalAddr() {
 				t.Errorf("Addr() = %v, want %v", ln.Addr(), pc.LocalAddr())
@@ -720,7 +720,7 @@ func testInletUDPSocketFlows(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				conn := acceptInletConn(t, ln)
+				conn := acceptSplitConn(t, ln)
 				wantLocal := pc.LocalAddr().String()
 				if test.info {
 					wantLocal = dst.String()
@@ -728,7 +728,7 @@ func testInletUDPSocketFlows(t *testing.T) {
 				if local := conn.LocalAddr().String(); local != wantLocal {
 					t.Errorf("LocalAddr() = %s, want %s", local, wantLocal)
 				}
-				if got := readInletConn(t, conn); strings.Join(got, " ") != "ping" {
+				if got := readSplitConn(t, conn); strings.Join(got, " ") != "ping" {
 					t.Errorf("packets of the flow = %q, want %q", got, "ping")
 				}
 
@@ -747,43 +747,43 @@ func testInletUDPSocketFlows(t *testing.T) {
 }
 
 const (
-	testInletBlockedReadsName              = "BlockedReads"
-	testInletBlockedWritesName             = "BlockedWrites"
-	testInletCloseName                     = "Close"
-	testInletCloseErrorName                = "CloseError"
-	testInletClosedErrorsName              = "ClosedErrors"
-	testInletConcurrentReadsName           = "ConcurrentReads"
-	testInletConfigName                    = "Config"
-	testInletConnCloseAfterStopName        = "ConnCloseAfterStop"
-	testInletConnCloseDropsName            = "ConnCloseDrops"
-	testInletConnWriteToConnectedName      = "ConnWriteToConnected"
-	testInletDeadlinesName                 = "Deadlines"
-	testInletEmptyPacketsName              = "EmptyPackets"
-	testInletFallbackDropsName             = "FallbackDrops"
-	testInletFallbackFromToName            = "FallbackFromTo"
-	testInletFallbackWriteName             = "FallbackWrite"
-	testInletFallbackWriteCopiesAddrsName  = "FallbackWriteCopiesAddrs"
-	testInletFallbackWriteOtherNetworkName = "FallbackWriteOtherNetwork"
-	testInletFallbackWriteUnmappedName     = "FallbackWriteUnmapped"
-	testInletIdleTimeoutName               = "IdleTimeout"
-	testInletNegativeReadName              = "NegativeRead"
-	testInletPacketInfoFlowsName           = "PacketInfoFlows"
-	testInletPayloadSizesName              = "PayloadSizes"
-	testInletReadCopiesAddrsName           = "ReadCopiesAddrs"
-	testInletReadDropsName                 = "ReadDrops"
-	testInletReleaseName                   = "Release"
-	testInletReleaseWithoutFallbackName    = "ReleaseWithoutFallback"
-	testInletShortBufferName               = "ShortBuffer"
-	testInletStreamListenerName            = "StreamListener"
-	testInletTrunkFlowsName                = "TrunkFlows"
-	testInletUDPSocketFlowsName            = "UDPSocketFlows"
-	testInletUDPTruncatedName              = "UDPTruncated"
-	testInletUnderlyingDeadlineName        = "UnderlyingDeadline"
-	testInletUnwrapName                    = "Unwrap"
-	testInletUnwrapUDPName                 = "UnwrapUDP"
-	testInletWriteCopiesBytesName          = "WriteCopiesBytes"
-	testInletWriteFailedName               = "WriteFailed"
-	testInletWriteQueueFullName            = "WriteQueueFull"
-	testInletWriteTimeoutName              = "WriteTimeout"
-	testInletWriteUnsentName               = "WriteUnsent"
+	testSplitBlockedReadsName              = "BlockedReads"
+	testSplitBlockedWritesName             = "BlockedWrites"
+	testSplitCloseName                     = "Close"
+	testSplitCloseErrorName                = "CloseError"
+	testSplitClosedErrorsName              = "ClosedErrors"
+	testSplitConcurrentReadsName           = "ConcurrentReads"
+	testSplitConfigName                    = "Config"
+	testSplitConnCloseAfterStopName        = "ConnCloseAfterStop"
+	testSplitConnCloseDropsName            = "ConnCloseDrops"
+	testSplitConnWriteToConnectedName      = "ConnWriteToConnected"
+	testSplitDeadlinesName                 = "Deadlines"
+	testSplitEmptyPacketsName              = "EmptyPackets"
+	testSplitFallbackDropsName             = "FallbackDrops"
+	testSplitFallbackFromToName            = "FallbackFromTo"
+	testSplitFallbackWriteName             = "FallbackWrite"
+	testSplitFallbackWriteCopiesAddrsName  = "FallbackWriteCopiesAddrs"
+	testSplitFallbackWriteOtherNetworkName = "FallbackWriteOtherNetwork"
+	testSplitFallbackWriteUnmappedName     = "FallbackWriteUnmapped"
+	testSplitIdleTimeoutName               = "IdleTimeout"
+	testSplitNegativeReadName              = "NegativeRead"
+	testSplitPacketInfoFlowsName           = "PacketInfoFlows"
+	testSplitPayloadSizesName              = "PayloadSizes"
+	testSplitReadCopiesAddrsName           = "ReadCopiesAddrs"
+	testSplitReadDropsName                 = "ReadDrops"
+	testSplitReleaseName                   = "Release"
+	testSplitReleaseWithoutFallbackName    = "ReleaseWithoutFallback"
+	testSplitShortBufferName               = "ShortBuffer"
+	testSplitStreamListenerName            = "StreamListener"
+	testSplitTrunkFlowsName                = "TrunkFlows"
+	testSplitUDPSocketFlowsName            = "UDPSocketFlows"
+	testSplitUDPTruncatedName              = "UDPTruncated"
+	testSplitUnderlyingDeadlineName        = "UnderlyingDeadline"
+	testSplitUnwrapName                    = "Unwrap"
+	testSplitUnwrapUDPName                 = "UnwrapUDP"
+	testSplitWriteCopiesBytesName          = "WriteCopiesBytes"
+	testSplitWriteFailedName               = "WriteFailed"
+	testSplitWriteQueueFullName            = "WriteQueueFull"
+	testSplitWriteTimeoutName              = "WriteTimeout"
+	testSplitWriteUnsentName               = "WriteUnsent"
 )

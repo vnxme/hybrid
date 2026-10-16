@@ -23,43 +23,43 @@ import (
 
 // send copies b into a packet for the write loop to write to dst, from src and through idx if given,
 // and returns once the packet is queued, keeping the flow of c going if c isn't nil. If the write queue
-// is full, it waits for room, and fails if the connection is closed, the inlet stops or the write deadline
+// is full, it waits for room, and fails if the connection is closed, the splitter stops or the write deadline
 // passes first. As the packet is written later, an error of the underlying connection can't be returned:
 // the write loop counts it.
-func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int) (int, error) {
+func (sc *splitConnBase) send(b []byte, c *splitConn, dst, src net.Addr, idx int) (int, error) {
 	switch {
-	case isClosedChan(ic.localDone):
-		return 0, errInletClosed
-	case isClosedChan(ic.inlet.done):
-		return 0, errInletClosed
-	case isClosedChan(ic.wrDeadline.Wait()):
-		return 0, errInletDeadlineExceeded
+	case isClosedChan(sc.localDone):
+		return 0, errSplitClosed
+	case isClosedChan(sc.splitter.done):
+		return 0, errSplitClosed
+	case isClosedChan(sc.wrDeadline.Wait()):
+		return 0, errSplitDeadlineExceeded
 	}
 
-	pkt := &inletPacket{dst: dst, src: src, idx: idx}
+	pkt := &splitPacket{dst: dst, src: src, idx: idx}
 	if len(b) > 0 {
 		pkt.buf, pkt.ref = getBuf(len(b))
 		copy(pkt.buf, b)
 	}
 	select { // Queue without a blocking select if possible, which is much slower
-	case ic.inlet.writeQueue <- pkt:
+	case sc.splitter.writeQueue <- pkt:
 	default:
 		select {
-		case ic.inlet.writeQueue <- pkt:
-		case <-ic.localDone:
+		case sc.splitter.writeQueue <- pkt:
+		case <-sc.localDone:
 			putBuf(pkt.ref)
-			return 0, errInletClosed
-		case <-ic.inlet.done:
+			return 0, errSplitClosed
+		case <-sc.splitter.done:
 			putBuf(pkt.ref)
-			return 0, errInletClosed
-		case <-ic.wrDeadline.Wait():
+			return 0, errSplitClosed
+		case <-sc.wrDeadline.Wait():
 			putBuf(pkt.ref)
-			return 0, errInletDeadlineExceeded
+			return 0, errSplitDeadlineExceeded
 		}
 	}
 
-	if isClosedChan(ic.inlet.done) { // Stopped while queuing, maybe after the write loop has drained the queue
-		ic.inlet.drainWrites()
+	if isClosedChan(sc.splitter.done) { // Stopped while queuing, maybe after the write loop has drained the queue
+		sc.splitter.drainWrites()
 	}
 	if c != nil {
 		c.touch()
@@ -67,32 +67,32 @@ func (ic *inletConnBase) send(b []byte, c *inletConn, dst, src net.Addr, idx int
 	return len(b), nil
 }
 
-// lookupRemote returns the inlet connection of the latest flow of the given remote address, if any.
-func (i *inlet) lookupRemote(addr net.Addr) *inletConn {
-	i.remotes.RLock()
-	defer i.remotes.RUnlock()
-	return i.remotes.m[addrKey(addr)]
+// lookupRemote returns the split connection of the latest flow of the given remote address, if any.
+func (s *splitter) lookupRemote(addr net.Addr) *splitConn {
+	s.remotes.RLock()
+	defer s.remotes.RUnlock()
+	return s.remotes.m[addrKey(addr)]
 }
 
-// writeLoop writes the packets of the write queue to the underlying connection, until the inlet closes
+// writeLoop writes the packets of the write queue to the underlying connection, until the splitter closes
 // or the underlying connection does.
-func (i *inlet) writeLoop() {
-	defer i.wg.Done()
+func (s *splitter) writeLoop() {
+	defer s.wg.Done()
 
 	for {
 		select {
-		case <-i.done:
-			i.drainWrites()
+		case <-s.done:
+			s.drainWrites()
 			return
-		case pkt := <-i.writeQueue:
-			if isClosedChan(i.done) { // Picked at random, as the inlet has closed meanwhile
+		case pkt := <-s.writeQueue:
+			if isClosedChan(s.done) { // Picked at random, as the splitter has closed meanwhile
 				putBuf(pkt.ref)
-				i.drops.writeUnsent.Add(1)
-				i.drainWrites()
+				s.drops.writeUnsent.Add(1)
+				s.drainWrites()
 				return
 			}
-			if !i.write(pkt) {
-				i.drainWrites()
+			if !s.write(pkt) {
+				s.drainWrites()
 				return
 			}
 		}
@@ -101,16 +101,16 @@ func (i *inlet) writeLoop() {
 
 // write writes a packet to the underlying connection, with the addresses it has been queued with,
 // and drops it if the write times out or fails. It reports false if the underlying connection is closed,
-// and closes the inlet then.
-func (i *inlet) write(pkt *inletPacket) bool {
+// and closes the splitter then.
+func (s *splitter) write(pkt *splitPacket) bool {
 	defer putBuf(pkt.ref)
 
 	var err error
-	if i.cfg.writeTimeout > 0 { // The write loop is the only user of the write deadline of the underlying connection
-		err = i.pc.SetWriteDeadline(time.Now().Add(i.cfg.writeTimeout))
+	if s.cfg.writeTimeout > 0 { // The write loop is the only user of the write deadline of the underlying connection
+		err = s.pc.SetWriteDeadline(time.Now().Add(s.cfg.writeTimeout))
 	}
 	if err == nil {
-		_, err = i.pc.WriteToFrom(pkt.buf, pkt.dst, pkt.src, pkt.idx)
+		_, err = s.pc.WriteToFrom(pkt.buf, pkt.dst, pkt.src, pkt.idx)
 	}
 
 	var nrr net.Error
@@ -119,31 +119,31 @@ func (i *inlet) write(pkt *inletPacket) bool {
 		return true
 	case errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe):
 		// If the underlying FromToPacketConn has unexpectedly closed while
-		// the inlet's done channel remains open, spawn a closing goroutine.
+		// the splitter's done channel remains open, spawn a closing goroutine.
 		// Close() waits until writeLoop() returns, so it can't be done in sync.
-		if !isClosedChan(i.done) {
+		if !isClosedChan(s.done) {
 			go func() {
-				_ = i.Close()
+				_ = s.Close()
 			}()
 		}
-		i.drops.writeUnsent.Add(1)
+		s.drops.writeUnsent.Add(1)
 		return false
 	case errors.As(err, &nrr) && nrr.Timeout():
-		i.drops.writeTimedOut.Add(1)
+		s.drops.writeTimedOut.Add(1)
 	default: // E.g. an address unreachable or of the wrong IP version, which another packet may not have
-		i.drops.writeFailed.Add(1)
-		i.logError(err)
+		s.drops.writeFailed.Add(1)
+		s.logError(err)
 	}
 	return true
 }
 
 // drainWrites drops and counts the packets left in the write queue, which their writers took for written.
-func (i *inlet) drainWrites() {
+func (s *splitter) drainWrites() {
 	for {
 		select {
-		case pkt := <-i.writeQueue:
+		case pkt := <-s.writeQueue:
 			putBuf(pkt.ref)
-			i.drops.writeUnsent.Add(1)
+			s.drops.writeUnsent.Add(1)
 		default:
 			return
 		}

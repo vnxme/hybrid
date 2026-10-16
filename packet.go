@@ -18,7 +18,7 @@ import "net"
 
 type dataPacketWithOutletPtr struct {
 	DataPacket
-	outlet *inletConn // Pointer to the outlet this packet goes to / comes from
+	outlet *splitConn // Pointer to the outlet this packet goes to / comes from
 }
 
 func (p *dataPacketWithOutletPtr) Data() DataPacket { return p.DataPacket }

@@ -25,14 +25,14 @@ import (
 	"time"
 )
 
-// testInletRelease ensures releasing an inlet connection hands the packets queued and the later packets
+// testSplitRelease ensures releasing a split connection hands the packets queued and the later packets
 // of its flow over to the fallback connection, in order, while the other flows go on as they were.
-func testInletRelease(t *testing.T) {
+func testSplitRelease(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
 	writeFrom(t, client, a, "a2")
-	conn := acceptInletConn(t, ln)
+	conn := acceptSplitConn(t, ln)
 	if err := conn.Release(); err != nil {
 		t.Fatalf("Release() = %v, want nil", err)
 	}
@@ -42,7 +42,7 @@ func testInletRelease(t *testing.T) {
 	if got, want := strings.Join(readFallback(t, ln.Fallback()), " "), a.String()+":a1 "+a.String()+":a2 "+a.String()+":a3"; got != want {
 		t.Errorf("packets of the fallback connection = %q, want %q", got, want)
 	}
-	if other := acceptInletConn(t, ln); other.RemoteAddr().String() != b.String() {
+	if other := acceptSplitConn(t, ln); other.RemoteAddr().String() != b.String() {
 		t.Errorf("RemoteAddr() = %s, want %s", other.RemoteAddr(), b)
 	}
 	if _, _, err := conn.ReadFrom(make([]byte, 8)); err == nil {
@@ -54,127 +54,127 @@ func testInletRelease(t *testing.T) {
 	if err := conn.Close(); err == nil {
 		t.Errorf("Close() after Release() = nil, want an error")
 	}
-	waitInletStats(t, ln, InletStats{})
+	waitSplitStats(t, ln, SplitStats{})
 }
 
-// testInletReleaseWithoutFallback ensures releasing an inlet connection without a fallback connection drops
+// testSplitReleaseWithoutFallback ensures releasing a split connection without a fallback connection drops
 // the packets of its flow, without starting a new flow.
-func testInletReleaseWithoutFallback(t *testing.T) {
+func testSplitReleaseWithoutFallback(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	client, ln := inletTrunk(t, nil)
+	client, ln := splitTrunk(t, nil)
 	if ln.Fallback() != nil {
 		t.Fatalf("Fallback() = %v, want nil", ln.Fallback())
 	}
 	writeFrom(t, client, a, "a1")
-	releaseInletConn(t, ln)
+	releaseSplitConn(t, ln)
 	writeFrom(t, client, a, "a2")
 	writeFrom(t, client, b, "b1")
-	waitInletStats(t, ln, InletStats{NoFallback: 2})
-	if conn := acceptInletConn(t, ln); conn.RemoteAddr().String() != b.String() { // Not a new flow of a
+	waitSplitStats(t, ln, SplitStats{NoFallback: 2})
+	if conn := acceptSplitConn(t, ln); conn.RemoteAddr().String() != b.String() { // Not a new flow of a
 		t.Errorf("RemoteAddr() = %s, want %s", conn.RemoteAddr(), b)
 	}
 }
 
-// testInletFallbackDrops ensures the packets of a released flow are dropped if the queue of the fallback
+// testSplitFallbackDrops ensures the packets of a released flow are dropped if the queue of the fallback
 // connection is full, or if the fallback connection is closed, which ends the released flows, so that
 // the next packet of each is offered to Accept again.
-func testInletFallbackDrops(t *testing.T) {
+func testSplitFallbackDrops(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
 	t.Run("QueueFull", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true, FallbackQueueSize: 1})
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true, FallbackQueueSize: 1})
 		writeFrom(t, client, a, "a1")
-		releaseInletConn(t, ln)
+		releaseSplitConn(t, ln)
 		writeFrom(t, client, a, "a2")
 		writeFrom(t, client, a, "a3")
-		waitInletStats(t, ln, InletStats{FallbackQueueFull: 2})
+		waitSplitStats(t, ln, SplitStats{FallbackQueueFull: 2})
 		if got, want := strings.Join(readFallback(t, ln.Fallback()), " "), a.String()+":a1"; got != want {
 			t.Errorf("packets of the fallback connection = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 		writeFrom(t, client, a, "a1")
 		writeFrom(t, client, b, "b1") // Read after a1, as there is a single read loop
-		releaseInletConn(t, ln)
-		_ = acceptInletConn(t, ln) // So a1 has reached the fallback connection
+		releaseSplitConn(t, ln)
+		_ = acceptSplitConn(t, ln) // So a1 has reached the fallback connection
 		if err := ln.Fallback().Close(); err != nil {
 			t.Fatalf("Close() = %v, want nil", err)
 		}
 		writeFrom(t, client, a, "a2") // A new flow, as the released one has ended
-		conn := acceptInletConn(t, ln)
-		if got := readInletConn(t, conn); conn.RemoteAddr().String() != a.String() || strings.Join(got, " ") != "a2" {
+		conn := acceptSplitConn(t, ln)
+		if got := readSplitConn(t, conn); conn.RemoteAddr().String() != a.String() || strings.Join(got, " ") != "a2" {
 			t.Errorf("RemoteAddr(), packets read = %s, %q, want %s, the latest one only", conn.RemoteAddr(), got, a)
 		}
-		waitInletStats(t, ln, InletStats{FallbackClosed: 1}) // a1 left unread
+		waitSplitStats(t, ln, SplitStats{FallbackClosed: 1}) // a1 left unread
 	})
 
 	t.Run("ReleasedOnceClosed", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 		writeFrom(t, client, a, "a1")
 		writeFrom(t, client, b, "b1") // Read after a1, as there is a single read loop
-		conn := acceptInletConn(t, ln)
-		_ = acceptInletConn(t, ln) // So a1 is queued on conn
+		conn := acceptSplitConn(t, ln)
+		_ = acceptSplitConn(t, ln) // So a1 is queued on conn
 		if err := ln.Fallback().Close(); err != nil {
 			t.Fatalf("Close() = %v, want nil", err)
 		}
 		if err := conn.Release(); err != nil {
 			t.Fatalf("Release() = %v, want nil", err)
 		}
-		waitInletStats(t, ln, InletStats{NoFallback: 1}) // a1, moved to the closed fallback connection
+		waitSplitStats(t, ln, SplitStats{NoFallback: 1}) // a1, moved to the closed fallback connection
 
 		writeFrom(t, client, a, "a2") // A new flow, as the flow released has ended straight away
-		if got := readInletConn(t, acceptInletConn(t, ln)); strings.Join(got, " ") != "a2" {
+		if got := readSplitConn(t, acceptSplitConn(t, ln)); strings.Join(got, " ") != "a2" {
 			t.Errorf("packets read = %q, want the latest one only", got)
 		}
 	})
 }
 
-// testInletConnCloseDrops ensures the packets left unread on an inlet connection are dropped and counted
+// testSplitConnCloseDrops ensures the packets left unread on a split connection are dropped and counted
 // once it's closed by its handler or expires.
-func testInletConnCloseDrops(t *testing.T) {
+func testSplitConnCloseDrops(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
 	// queue writes packets of a and accepts the connection of a, then of b, once the packets of a are queued
-	queue := func(t *testing.T, client FromToPacketConn, ln InletListener) InletConn {
+	queue := func(t *testing.T, client FromToPacketConn, ln SplitListener) SplitConn {
 		for _, data := range []string{"a1", "a2", "a3"} {
 			writeFrom(t, client, a, data)
 		}
 		writeFrom(t, client, b, "b1") // Read after those of a, as there is a single read loop
-		conn := acceptInletConn(t, ln)
-		_ = acceptInletConn(t, ln)
+		conn := acceptSplitConn(t, ln)
+		_ = acceptSplitConn(t, ln)
 		return conn
 	}
 
 	t.Run("Closed", func(t *testing.T) {
-		client, ln := inletTrunk(t, nil)
+		client, ln := splitTrunk(t, nil)
 		conn := queue(t, client, ln)
 		_ = conn.Close()
 		writeFrom(t, client, b, "b2") // The read loop deletes closed connections after reading
-		waitInletStats(t, ln, InletStats{ConnClosed: 3})
+		waitSplitStats(t, ln, SplitStats{ConnClosed: 3})
 	})
 
 	t.Run("Expired", func(t *testing.T) {
 		const idle = 50 * time.Millisecond
-		client, ln := inletTrunk(t, &InletConfig{IdleTimeout: idle})
+		client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: idle})
 		conn := queue(t, client, ln)
 		time.Sleep(2 * idle)
-		if !isClosedInletConn(conn) {
+		if !isClosedSplitConn(conn) {
 			t.Fatalf("connection open after the idle timeout, want closed")
 		}
 		writeFrom(t, client, b, "b2")
-		waitInletStats(t, ln, InletStats{ConnClosed: 4}) // b1 too, as the connection of b has expired as well
+		waitSplitStats(t, ln, SplitStats{ConnClosed: 4}) // b1 too, as the connection of b has expired as well
 	})
 }
 
-// testInletClosedErrors ensures an inlet connection and the fallback connection report closing as a trunk does,
+// testSplitClosedErrors ensures a split connection and the fallback connection report closing as a trunk does,
 // and so a UDP connection: as net.ErrClosed, wrapped in net.OpError with the operation and the addresses.
-func testInletClosedErrors(t *testing.T) {
+func testSplitClosedErrors(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
-	conn, fb := acceptInletConn(t, ln), ln.Fallback()
+	conn, fb := acceptSplitConn(t, ln), ln.Fallback()
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close() = %v, want nil", err)
 	}
@@ -212,13 +212,13 @@ func testInletClosedErrors(t *testing.T) {
 	}
 }
 
-// testInletDeadlines ensures the read and write deadlines of inlet connections and of the fallback connection.
-func testInletDeadlines(t *testing.T) {
+// testSplitDeadlines ensures the read and write deadlines of split connections and of the fallback connection.
+func testSplitDeadlines(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
-	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
-	conn := acceptInletConn(t, ln)
-	_ = readInletConn(t, conn)
+	conn := acceptSplitConn(t, ln)
+	_ = readSplitConn(t, conn)
 
 	past := time.Now().Add(-time.Second)
 	b := make([]byte, 8)
@@ -253,9 +253,9 @@ func testInletDeadlines(t *testing.T) {
 	}
 }
 
-// testInletConcurrentReads ensures reads of an inlet connection and of the fallback connection needn't be
+// testSplitConcurrentReads ensures reads of a split connection and of the fallback connection needn't be
 // serialized: each packet is read once.
-func testInletConcurrentReads(t *testing.T) {
+func testSplitConcurrentReads(t *testing.T) {
 	const count = 1000
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	write := func(client FromToPacketConn, from int) {
@@ -267,35 +267,35 @@ func testInletConcurrentReads(t *testing.T) {
 	}
 
 	t.Run("Conn", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{ReadQueueSize: count})
+		client, ln := splitTrunk(t, &SplitConfig{ReadQueueSize: count})
 		writeFrom(t, client, a, "p0")
-		conn := acceptInletConn(t, ln)
+		conn := acceptSplitConn(t, ln)
 		go write(client, 1)
 		readConcurrently(t, conn, 8, count)
-		waitInletStats(t, ln, InletStats{})
+		waitSplitStats(t, ln, SplitStats{})
 	})
 
 	t.Run("Fallback", func(t *testing.T) {
-		client, ln := inletTrunk(t, &InletConfig{FallbackConn: true, FallbackQueueSize: count})
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true, FallbackQueueSize: count})
 		writeFrom(t, client, a, "p0")
-		releaseInletConn(t, ln)
+		releaseSplitConn(t, ln)
 		go write(client, 1)
 		readConcurrently(t, ln.Fallback(), 8, count)
-		waitInletStats(t, ln, InletStats{})
+		waitSplitStats(t, ln, SplitStats{})
 	})
 }
 
-// testInletShortBuffer ensures a packet longer than the buffer of a read is read in part, with
-// io.ErrShortBuffer, and the rest of it dropped, from an inlet connection and the fallback connection.
-func testInletShortBuffer(t *testing.T) {
+// testSplitShortBuffer ensures a packet longer than the buffer of a read is read in part, with
+// io.ErrShortBuffer, and the rest of it dropped, from a split connection and the fallback connection.
+func testSplitShortBuffer(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 	writeFrom(t, client, a, "abcdef")
 	writeFrom(t, client, a, "g")
-	conn := acceptInletConn(t, ln)
+	conn := acceptSplitConn(t, ln)
 	writeFrom(t, client, b, "hijklm")
 	writeFrom(t, client, b, "n")
-	releaseInletConn(t, ln)
+	releaseSplitConn(t, ln)
 
 	for _, test := range []struct {
 		name     string
@@ -322,19 +322,19 @@ func testInletShortBuffer(t *testing.T) {
 	}
 }
 
-// testInletReadCopiesAddrs ensures reads of an inlet connection and of the fallback connection return
+// testSplitReadCopiesAddrs ensures reads of a split connection and of the fallback connection return
 // addresses the caller may change, as trunks and UDP do, without changing those the flow is written to.
-func testInletReadCopiesAddrs(t *testing.T) {
+func testSplitReadCopiesAddrs(t *testing.T) {
 	a, c := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 3), Port: 3}
 	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
-	client, ln := inletTrunk(t, &InletConfig{FallbackConn: true})
+	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 	for _, src := range []net.Addr{a, c} {
 		if _, err := client.WriteToFrom([]byte("x"), local, src, 3); err != nil {
 			t.Fatal(err)
 		}
 	}
-	conn := acceptInletConn(t, ln)
-	releaseInletConn(t, ln) // The flow of c, read by the fallback connection
+	conn := acceptSplitConn(t, ln)
+	releaseSplitConn(t, ln) // The flow of c, read by the fallback connection
 
 	change := func(addrs ...net.Addr) {
 		for _, addr := range addrs {
@@ -372,18 +372,18 @@ func testInletReadCopiesAddrs(t *testing.T) {
 	}
 }
 
-// testInletConnWriteToConnected ensures an inlet connection writes to the remote address of its flow only,
+// testSplitConnWriteToConnected ensures a split connection writes to the remote address of its flow only,
 // from its local address, failing with net.ErrWriteToConnected otherwise, as a connected UDP socket does,
 // and that an IPv4 address matches whether it's written in 4 bytes or 16.
-func testInletConnWriteToConnected(t *testing.T) {
+func testSplitConnWriteToConnected(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	local := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
 	other := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	client, ln := inletTrunk(t, nil)
+	client, ln := splitTrunk(t, nil)
 	if _, err := client.WriteToFrom([]byte("x"), local, a, 0); err != nil {
 		t.Fatal(err)
 	}
-	conn := acceptInletConn(t, ln)
+	conn := acceptSplitConn(t, ln)
 	a4, local4 := &net.UDPAddr{IP: a.IP.To4(), Port: a.Port}, &net.UDPAddr{IP: local.IP.To4(), Port: local.Port}
 
 	for _, test := range []struct {
@@ -406,16 +406,16 @@ func testInletConnWriteToConnected(t *testing.T) {
 	}
 }
 
-// testInletConnCloseAfterStop ensures closing an inlet connection once the inlet has stopped drops and counts
+// testSplitConnCloseAfterStop ensures closing a split connection once the splitter has stopped drops and counts
 // the packets left unread, though there is no read loop to report the connection to.
-func testInletConnCloseAfterStop(t *testing.T) {
+func testSplitConnCloseAfterStop(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
-	client, ln := inletTrunk(t, nil)
+	client, ln := splitTrunk(t, nil)
 	writeFrom(t, client, a, "a1")
 	writeFrom(t, client, a, "a2")
 	writeFrom(t, client, b, "b1") // Read after those of a, as there is a single read loop
-	conn := acceptInletConn(t, ln)
-	_ = acceptInletConn(t, ln)
+	conn := acceptSplitConn(t, ln)
+	_ = acceptSplitConn(t, ln)
 
 	if err := ln.Close(); err != nil {
 		t.Fatalf("Close() = %v, want nil", err)
@@ -423,7 +423,7 @@ func testInletConnCloseAfterStop(t *testing.T) {
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close() of the connection = %v, want nil", err)
 	}
-	if got, want := ln.Stats(), (InletStats{ConnClosed: 2}); got != want {
+	if got, want := ln.Stats(), (SplitStats{ConnClosed: 2}); got != want {
 		t.Errorf("Stats() = %+v, want %+v", got, want)
 	}
 }
