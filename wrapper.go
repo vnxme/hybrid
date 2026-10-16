@@ -26,8 +26,10 @@ import (
 // A wrapper changes a single aspect of a connection, e.g. its addresses or its lifetime, or adapts it to another
 // interface, e.g. a PacketConn to a StreamConn, and Unwrap returns the connection as given. A wrapper embeds
 // the interface it wraps, so it has the methods of that interface only, and hides any other methods of the
-// connection, e.g. those of FromToPacketConn or UDPConn: a splitter over a wrapped *net.UDPConn can't enable
-// packet info, as it can't reach the socket.
+// connection, e.g. those of FromToPacketConn or UDPConn, as forwarding them would bypass the aspect it changes.
+// Hence, a wrapper goes on top: anything that needs such methods, e.g. to enable packet info on a UDPConn,
+// should be given the connection before it's wrapped, and a method unrelated to the aspect changed, e.g.
+// SyscallConn, may still be reached through Unwrap.
 
 // fakeAddressPacketConn is a PacketConn wrapper that has
 // customizable local and remote addresses.
