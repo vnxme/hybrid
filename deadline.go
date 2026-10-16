@@ -30,6 +30,26 @@ import (
 	"time"
 )
 
+// Deadline design.
+//
+// A deadline is a channel closed once a point in time has passed, which a blocking select waits on along with
+// its other cases, e.g. in every read and write of a pipe, a trunk or a split connection, each of which has
+// a read deadline and a write deadline of its own. It's based on the deadline of net.Pipe, as a reference
+// implementation: Set stops the timer of the time set before, waiting for the timer to close the channel if it
+// has fired already, and then either keeps the channel open, replacing it if closed, for a zero time; or does
+// the same and sets up a timer to close the channel for a time in the future; or closes the channel at once for
+// a time in the past. So a deadline may be exceeded, extended and cleared any number of times, and Wait returns
+// the channel of the time set latest.
+//
+// Differences from net.Pipe. Wait takes no lock: the channel is held in an atomic.Value, which only Set replaces,
+// under its mutex, so that checking a deadline before every read and write costs a single atomic load. The channel
+// is created on first use rather than by the constructor, so that makeDeadline allocates nothing, and a deadline
+// is embedded by value in the struct using it, with no allocation of its own. A deadline is generic over a hook,
+// which its timer runs before closing the channel, so that every goroutine woken by the channel observes what
+// the hook has done; as Set waits for the channel to be closed, it waits for a running hook to return as well.
+// The internal types use noHook, which is zero-sized and adds nothing to a deadline, while SimpleDeadline and
+// HookDeadline return a deadline as a Deadline for use outside the package, without a hook or with one.
+
 // deadlineHook is run by a deadline when its timer fires, before its channel is closed.
 type deadlineHook interface {
 	run()
