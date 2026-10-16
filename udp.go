@@ -26,6 +26,39 @@ import (
 	"github.com/vnxme/hybrid/internal/pktinfo"
 )
 
+// Packet info design.
+//
+// A UDP socket bound to an unspecified address, i.e. 0.0.0.0 or ::, receives the packets sent to any address
+// of the host, while ReadFrom tells only the address a packet comes from, and WriteTo leaves the address a reply
+// goes from to the system. So a reply may go from another address than the one its client sent to, e.g. on a host
+// with several addresses, and the client drops it. Packet info closes the gap: once it's enabled on a socket, each
+// packet read comes with a control message carrying the local address it came to and the index of the interface
+// it came through, and a packet written with such a message goes from the address and through the interface given.
+// PacketInfoUDPConn enables it and wraps a UDPConn as a FromToUDPConn, which reads and writes the control messages
+// with ReadMsgUDPAddrPort and WriteMsgUDPAddrPort, while the internal pktinfo package deals with the options and
+// messages of each platform. NeedPacketInfoUDPConn tells whether a connection needs it, and ControlUDPPacketInfo
+// enables it as a socket is created, e.g. by net.ListenConfig.
+//
+// Sockets. PacketInfoUDPConn tells an IPv4-only socket, an IPv6-only one and a dual-stack one apart once, from
+// the local address and, for an IPv6 socket bound to ::, from IPV6_V6ONLY, so as to enable packet info for each
+// IP version the socket accepts, and to reject a write of a version it doesn't. As a dual-stack socket reports
+// the source addresses of IPv4 packets as IPv4-mapped IPv6 ones, reads return IPv4 addresses unmapped, so that
+// source and destination addresses are in the same form on every platform, while writes take either form.
+// Packet info carries no port: the local port of every packet read is that of the socket, which must have one.
+//
+// Reading. A read takes a pooled buffer for control messages, of the size that holds packet info of either IP
+// version. Other socket options may add messages of their own, which truncate packet info: then the read returns
+// no local address and index (or fails on Windows, as ReadMsgUDPAddrPort does), and the buffers grow for the reads
+// after it, up to 64 KiB. A read without packet info returns no local address and index rather than failing.
+//
+// Writing. A write without a source address and an index goes as by WriteTo, so that the system chooses both,
+// and no control message is needed. Otherwise, it marshals packet info into a pooled buffer, and with an index
+// alone, the system chooses the source address on the interface, except on Windows, which would send from
+// the unspecified address: there, a write without a source address always goes as by WriteTo.
+//
+// Unwrapping. Unwrap returns the UDPConn as given, with packet info still enabled on its socket: reads that don't
+// ask for control messages, e.g. ReadFrom, ignore it.
+
 // packetInfoUDPConn is a FromToUDPConn wrapping a UDPConn with packet info enabled for every IP version it accepts.
 type packetInfoUDPConn struct {
 	UDPConn
