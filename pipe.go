@@ -32,6 +32,32 @@ import (
 	"time"
 )
 
+// Pipe design.
+//
+// A pipe is a pair of in-memory StreamConn ends, connected to each other, for testing stream-oriented code
+// without sockets. It's deliberately based on net.Pipe, as a reference implementation: its code is derived
+// from that of net.Pipe, and its tests run against net.Pipe as well, so that a pipe differs from net.Pipe
+// only where it says so. Like with net.Pipe, each end receives the chunks written by the other end over
+// a channel, acknowledges the bytes it takes over another one unless the pipe is buffered, and has a done
+// channel, closed by Close, which the other end waits on too.
+//
+// Modes. A sync pipe, made by UnbufferedPipe(false), works the way net.Pipe does: a read is matched with
+// a write, copies the bytes it can straight from the write buffer, and acknowledges them, so that the write
+// sends the rest again, and returns once all of its bytes have been read. A semi-sync pipe, made by
+// UnbufferedPipe(true), matches a read with a write as well, but the read retains the bytes it can't copy,
+// and acknowledges the whole write, so that the write returns at once, and the next write waits until
+// the bytes retained have been read. An async pipe, made by BufferedPipe, queues a copy of each write and
+// returns, waiting only while the queue is full: a read takes the bytes of a write left by the previous read
+// first. Writes are serialized, so that the bytes of a write are read together, and so are reads, as they
+// share the bytes retained. A copy is held in a pooled buffer, which is returned once all its bytes are read.
+//
+// Differences from net.Pipe. Where net.Pipe departs from TCP, a pipe behaves the way TCP does: using an end
+// closed, or closing it again, fails with net.ErrClosed rather than io.ErrClosedPipe; writing after the other
+// end is closed fails with EPIPE (io.ErrClosedPipe on Plan 9); reading after the other end is closed returns
+// the bytes retained or queued, then io.EOF; a deadline may be set until the local end is closed, and an exceeded
+// read deadline prevails over io.EOF; a zero-length write sends nothing, so that no read returns 0 and nil.
+// Errors other than io.EOF are wrapped in net.OpError, the same way as by TCP.
+
 // pipeAddr implements the net.Addr interface for the pipe network type.
 type pipeAddr struct{}
 

@@ -32,6 +32,35 @@ import (
 	"time"
 )
 
+// Trunk design.
+//
+// A trunk is a pair of in-memory FromToPacketConn ends, connected to each other, for testing packet-oriented
+// code, e.g. a splitter, without sockets. It's based on pipes, and so on net.Pipe in turn: it has the same
+// channels, deadlines and closing, but carries whole packets with their addresses, the way UDP does,
+// rather than a stream of bytes.
+//
+// Modes. An unbuffered trunk, made by UnbufferedTrunk, is synchronous like a sync pipe: a read is matched
+// with a write, copies the packet straight from the write buffer, and acknowledges it, so that the write
+// returns once its packet has been copied. A buffered trunk, made by BufferedTrunk, is asynchronous like
+// an async pipe: a write queues a copy of its packet in a pooled buffer and returns, waiting only while
+// the queue is full. There is no semi-sync trunk, as a read never leaves bytes of a packet for the next one.
+//
+// Packets. Unlike a pipe, a trunk keeps the boundaries of writes: a read takes a single whole packet, and if
+// its buffer is shorter, it returns the bytes copied with io.ErrShortBuffer, and drops the rest. As no read
+// leaves anything for the next one, reads needn't be serialized, while writes still are, so that each
+// acknowledgement of an unbuffered trunk matches its write. An empty packet is carried like any other, as by UDP.
+//
+// Addresses. A packet carries the source and destination addresses and the interface index its writer gives,
+// cloned, as the writer and the reader may change them. A packet goes to the other end whatever its destination
+// address is, so that many flows can share a trunk, told apart by their addresses, as by a splitter. An end
+// writing a packet without a source address gives its own local address, and an end reading a packet without
+// a destination address gives its own too.
+//
+// Errors. A trunk reports errors the way a UDP connection does, rather than TCP: using it once either end
+// is closed fails with net.ErrClosed, except that a read returns the packets queued first; a deadline may be set
+// until the local end is closed, and an exceeded read deadline prevails over the packets queued. Every error is
+// wrapped in net.OpError, with the local address as the source and the remote address, if any, as the address.
+
 // trunkAddr implements the net.Addr interface for the trunk network type.
 type trunkAddr struct{}
 
