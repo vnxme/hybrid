@@ -22,6 +22,7 @@ import (
 )
 
 // ConnectedPacketConn is a generic packet-oriented network connection serving a single remote address.
+// Any *net.UDPConn, *net.IPConn or *net.UnixConn satisfies it, but serves a single remote address only if dialed.
 type ConnectedPacketConn interface {
 	PacketConn
 	// RemoteAddr returns the remote network address.
@@ -150,3 +151,8 @@ type UDPConn interface {
 	WriteMsgUDP(b []byte, oob []byte, addr *net.UDPAddr) (n int, oobn int, err error)
 	WriteMsgUDPAddrPort(b []byte, oob []byte, addr netip.AddrPort) (n int, oobn int, err error)
 }
+
+// Interface guards of the types of the standard library
+var (
+	_ UDPConn = (*net.UDPConn)(nil)
+)

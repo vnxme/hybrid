@@ -258,8 +258,6 @@ func isNilUDPConn(conn UDPConn) bool {
 var (
 	_ FromToUDPConn     = (*packetInfoUDPConn)(nil)
 	_ PacketConnWrapper = (*packetInfoUDPConn)(nil)
-
-	_ UDPConn = (*net.UDPConn)(nil)
 )
 
 // ControlUDPPacketInfo enables packet info on a UDP socket for every IP version it accepts.
