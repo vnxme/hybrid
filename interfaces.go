@@ -21,48 +21,6 @@ import (
 	"time"
 )
 
-// Deadline is an abstraction for handling timeouts.
-type Deadline interface {
-	// Set sets the point in time when the deadline will time out.
-	// A timeout event is signaled by closing the channel returned by Wait.
-	// Once a timeout has occurred, the deadline can be refreshed by specifying
-	// a time value in the future. A zero time value prevents timeout.
-	Set(t time.Time)
-	// Wait returns a channel that is closed when the deadline is exceeded.
-	Wait() <-chan struct{}
-}
-
-type DataPacket interface {
-	Cap() int
-	Len() int
-
-	ReadableBuffer() []byte
-	WritableBuffer() []byte
-
-	Reset()
-}
-
-type NetworkPacket interface {
-	DataPacket
-
-	Data() DataPacket
-
-	LocalIfIdx() int
-
-	LocalAddr() net.Addr
-	RemoteAddr() net.Addr
-
-	Reset()
-}
-
-// PacketConn is an alias for net.PacketConn, i.e. a generic packet-oriented network connection.
-type PacketConn = net.PacketConn
-
-// PacketConnWrapper can unwrap the underlying PacketConn.
-type PacketConnWrapper interface {
-	Unwrap() PacketConn
-}
-
 // ConnectedPacketConn is a generic packet-oriented network connection serving a single remote address.
 type ConnectedPacketConn interface {
 	PacketConn
@@ -70,36 +28,18 @@ type ConnectedPacketConn interface {
 	RemoteAddr() net.Addr
 }
 
-// PacketListener is a generic network listener for packet-oriented protocols, similar to StreamListener,
-// accepting connections of type C.
-type PacketListener[C PacketConn] interface {
-	// Accept waits for and returns the next connection to the listener.
-	Accept() (C, error)
-	// Close closes the listener. Any operations blocked by Accept will be unblocked and return errors.
-	Close() error
-	// Addr returns the listener's network address.
-	Addr() net.Addr
-}
-
-// PacketListenerWrapper can unwrap the underlying PacketListener of connections of type C.
-type PacketListenerWrapper[C PacketConn] interface {
-	Unwrap() PacketListener[C]
-}
-
-// FromToReader is a capability of a generic packet-oriented network connection
-// to return the local address and the local interface index in addition to the
-// remote address while reading packets.
-type FromToReader interface {
-	// ReadFromTo reads a packet from the connection, copying the payload into p.
-	// It returns the number of bytes copied into p, the return address that was
-	// on the packet, the local address the packet came to and the local interface
-	// index. It returns the number of bytes read (0 <= n <= len(p)) and any error
-	// encountered. Callers should always process the n > 0 bytes returned before
-	// considering the error err.
-	//
-	// ReadFromTo can be made to time out and return an error after a fixed time limit;
-	// see [net.PacketConn.SetDeadline] and [net.PacketConn.SetReadDeadline].
-	ReadFromTo(p []byte) (n int, src, dst net.Addr, idx int, err error)
+// Deadline signals that a point in time has passed by closing a channel, which a select may wait on
+// along with its other cases. [SimpleDeadline] and [HookDeadline] return implementations of it.
+type Deadline interface {
+	// Set sets the point in time when the deadline will time out.
+	// A timeout event is signaled by closing the channel returned by Wait.
+	// Once a timeout has occurred, the deadline can be refreshed by specifying
+	// a time value in the future. A zero time value prevents timeout.
+	Set(t time.Time)
+	// Wait returns a channel that is closed when the deadline is exceeded. As Set replaces
+	// a closed channel with a new one, Wait should be called again after Set, rather than
+	// its channel kept.
+	Wait() <-chan struct{}
 }
 
 // FromToPacketConn is a generic packet-oriented network connection that
@@ -111,8 +51,28 @@ type FromToPacketConn interface {
 	FromToWriter
 }
 
+// FromToReader is a capability of a generic packet-oriented network connection
+// to return the local address and the local interface index in addition to the
+// remote address while reading packets.
+type FromToReader interface {
+	// ReadFromTo reads a packet from the connection, copying the payload into p.
+	// It returns the number of bytes copied into p (0 <= n <= len(p)), the return
+	// address that was on the packet, the local address the packet came to,
+	// the local interface index, and any error encountered. The local address
+	// is nil and the index is zero if the connection doesn't know them, e.g. a UDP
+	// connection without packet info. Callers should always process the n > 0 bytes
+	// returned before considering the error err.
+	//
+	// ReadFromTo can be made to time out and return an error after a fixed time limit;
+	// see [net.PacketConn.SetDeadline] and [net.PacketConn.SetReadDeadline].
+	ReadFromTo(p []byte) (n int, src, dst net.Addr, idx int, err error)
+}
+
 // FromToUDPConn is a UDP connection that is aware of the local addresses
 // and the local interface indices when it comes to reading and writing packets.
+// Its UDP-specific methods work the same way as ReadFromTo and WriteToFrom,
+// with a nil *net.UDPAddr or an invalid netip.AddrPort for an address unknown
+// on read, or left to the system on write.
 type FromToUDPConn interface {
 	UDPConn
 	FromToReader
@@ -122,6 +82,45 @@ type FromToUDPConn interface {
 	ReadFromToUDPAddrPort(b []byte) (n int, src netip.AddrPort, dst netip.AddrPort, idx int, err error)
 	WriteToFromUDP(b []byte, dst, src *net.UDPAddr, idx int) (n int, err error)
 	WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error)
+}
+
+// FromToWriter is a capability of a generic packet-oriented network connection
+// to consider the local address and the local interface index in addition to the
+// remote address while writing packets.
+type FromToWriter interface {
+	// WriteToFrom writes a packet with payload p to the remote address dst from
+	// the local address src through the local interface with index idx. A nil src
+	// and a zero idx leave them to the system. A connection that can't choose them,
+	// e.g. one made by [PacketToFromToPacketConn] without packet info, ignores them.
+	//
+	// WriteToFrom can be made to time out and return an error after a fixed time limit;
+	// see [net.PacketConn.SetDeadline] and [net.PacketConn.SetWriteDeadline].
+	// On packet-oriented connections, write timeouts are rare.
+	WriteToFrom(p []byte, dst, src net.Addr, idx int) (n int, err error)
+}
+
+// PacketConn is an alias for net.PacketConn, i.e. a generic packet-oriented network connection.
+type PacketConn = net.PacketConn
+
+// PacketConnWrapper can unwrap the underlying PacketConn.
+type PacketConnWrapper interface {
+	Unwrap() PacketConn
+}
+
+// PacketListener is a generic network listener for packet-oriented protocols, similar to StreamListener,
+// accepting connections of type C.
+type PacketListener[C PacketConn] interface {
+	// Accept waits for and returns the next connection to the listener.
+	Accept() (C, error)
+	// Close closes the listener. Any blocked Accept operations will be unblocked and return errors.
+	Close() error
+	// Addr returns the listener's network address.
+	Addr() net.Addr
+}
+
+// PacketListenerWrapper can unwrap the underlying PacketListener of connections of type C.
+type PacketListenerWrapper[C PacketConn] interface {
+	Unwrap() PacketListener[C]
 }
 
 // StreamConn is an alias for net.Conn, i.e. a generic stream-oriented network connection.
@@ -150,17 +149,4 @@ type UDPConn interface {
 	ReadMsgUDPAddrPort(b []byte, oob []byte) (n int, oobn int, flags int, addr netip.AddrPort, err error)
 	WriteMsgUDP(b []byte, oob []byte, addr *net.UDPAddr) (n int, oobn int, err error)
 	WriteMsgUDPAddrPort(b []byte, oob []byte, addr netip.AddrPort) (n int, oobn int, err error)
-}
-
-// FromToWriter is a capability of a generic packet-oriented network connection
-// to consider the local address and the local interface index in addition to the
-// remote address while writing packets.
-type FromToWriter interface {
-	// WriteToFrom writes a packet with payload p to the remote address from
-	// the local address assigned to the local interface with the given index.
-	//
-	// WriteToFrom can be made to time out and return an Error after a fixed time limit;
-	// see [net.PacketConn.SetDeadline] and [net.PacketConn.SetWriteDeadline].
-	// On packet-oriented connections, write timeouts are rare.
-	WriteToFrom(p []byte, dst, src net.Addr, idx int) (n int, err error)
 }
