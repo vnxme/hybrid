@@ -207,7 +207,7 @@ type SplitListener interface {
 
 	// Stop stops the splitter like Close does, but leaves the underlying PacketConn open, with no deadlines,
 	// for the caller to take it over, e.g. with Unwrap.
-	Stop() error
+	Stopper
 }
 
 // SplitStats counts the packets a splitter has dropped, by reason.

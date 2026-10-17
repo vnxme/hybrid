@@ -220,7 +220,7 @@ func testWrapperFakeClose(t *testing.T) {
 
 // testWrapperIdleTimeout ensures IdleTimeoutPacketConn and IdleTimeoutStreamConn close the underlying connection
 // once idle for the timeout, kept open by reads and by writes, never with a timeout that isn't positive, and
-// never once Close or Unwrap has stopped the timer, even if the wrapper is still used.
+// never once Close or Stop has stopped the timer, even if the wrapper is still used, while Unwrap stops nothing.
 func testWrapperIdleTimeout(t *testing.T) {
 	const idle = 200 * time.Millisecond // Long enough for the scheduling stalls of a busy machine
 
@@ -284,6 +284,9 @@ func testWrapperIdleTimeout(t *testing.T) {
 				if got := s.closes.Load(); got != 1 {
 					t.Fatalf("closures of an idle connection = %d, want 1", got)
 				}
+				if err := s.w.(Stopper).Stop(); !errors.Is(err, net.ErrClosed) {
+					t.Errorf("Stop() = %v, want net.ErrClosed, as the timer has closed the connection", err)
+				}
 				if err := s.w.Close(); !errors.Is(err, net.ErrClosed) {
 					t.Errorf("Close() = %v, want net.ErrClosed, as the timer has closed the connection", err)
 				}
@@ -336,17 +339,35 @@ func testWrapperIdleTimeout(t *testing.T) {
 				}
 			})
 
-			t.Run("StoppedByUnwrap", func(t *testing.T) {
+			t.Run("StoppedByStop", func(t *testing.T) {
 				s := kind.ctor(t, idle)
-				if got := s.unwrap(); got != s.under {
-					t.Fatalf("Unwrap() = %v, want the underlying connection", got)
+				stopper := s.w.(Stopper)
+				if err := stopper.Stop(); err != nil {
+					t.Fatalf("Stop() = %v, want nil", err)
 				}
-				if err := s.write(); err != nil { // Using the wrapper after Unwrap mustn't restart the timer
+				if err := s.write(); err != nil { // Using the wrapper after Stop mustn't restart the timer
 					t.Fatalf("write: %v", err)
 				}
 				time.Sleep(2 * idle)
 				if got := s.closes.Load(); got != 0 {
-					t.Errorf("closures of an unwrapped connection = %d, want 0", got)
+					t.Errorf("closures of a connection with a stopped timer = %d, want 0", got)
+				}
+				if err := stopper.Stop(); !errors.Is(err, net.ErrClosed) {
+					t.Errorf("Stop() again = %v, want net.ErrClosed", err)
+				}
+				if err := s.w.Close(); err != nil || s.closes.Load() != 1 {
+					t.Errorf("Close() after Stop() = %v with %d closures, want nil with 1", err, s.closes.Load())
+				}
+			})
+
+			t.Run("KeptByUnwrap", func(t *testing.T) {
+				s := kind.ctor(t, idle)
+				if got := s.unwrap(); got != s.under {
+					t.Fatalf("Unwrap() = %v, want the underlying connection", got)
+				}
+				time.Sleep(2 * idle)
+				if got := s.closes.Load(); got != 1 {
+					t.Errorf("closures of an idle connection unwrapped = %d, want 1, as Unwrap stops nothing", got)
 				}
 			})
 		})

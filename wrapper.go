@@ -218,12 +218,16 @@ func (t *idleTimer) fire() {
 	}
 }
 
-// stop disarms the timer for good, so that it never closes the connection afterwards,
-// unless it has done so already.
-func (t *idleTimer) stop() {
-	if t.timeout > 0 && t.stopped.CompareAndSwap(false, true) {
+// stop disarms the timer for good, so that it never closes the connection afterwards. It reports whether
+// it has done so, i.e. neither the timer has closed the connection nor stop has been called before.
+func (t *idleTimer) stop() bool {
+	if !t.stopped.CompareAndSwap(false, true) {
+		return false
+	}
+	if t.timer != nil {
 		t.timer.Stop()
 	}
+	return true
 }
 
 // idleTimeoutPacketConn is a PacketConn wrapper that closes
@@ -241,8 +245,8 @@ type idleTimeoutPacketConn struct {
 // read and write operation, i.e. when n > 0 or err == nil.
 //
 // The idle time starts when the underlying connection is wrapped, i.e. before this function
-// returns, and the timer stops for good when the underlying connection is returned by Unwrap,
-// or closed by Close, or closed by the timer itself.
+// returns, and the timer stops for good once Stop is called, which leaves the underlying connection
+// open, or the underlying connection is closed by Close or by the timer itself.
 func IdleTimeoutPacketConn(pc PacketConn, timeout time.Duration) PacketConn {
 	w := &idleTimeoutPacketConn{PacketConn: pc}
 	w.idle.init(timeout, pc.Close)
@@ -273,12 +277,17 @@ func (w *idleTimeoutPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err err
 	return
 }
 
-// Unwrap stops the timer and returns the underlying PacketConn,
-// which is closed if the timer has closed it already.
-func (w *idleTimeoutPacketConn) Unwrap() PacketConn {
-	w.idle.stop()
-	return w.PacketConn
+// Stop stops the timer for good, leaving the underlying PacketConn open. It returns net.ErrClosed if the timer
+// has stopped already, by Close or Stop, or by closing the underlying PacketConn.
+func (w *idleTimeoutPacketConn) Stop() error {
+	if !w.idle.stop() {
+		return net.ErrClosed
+	}
+	return nil
 }
+
+// Unwrap returns the underlying PacketConn, which the timer closes once idle, unless stopped.
+func (w *idleTimeoutPacketConn) Unwrap() PacketConn { return w.PacketConn }
 
 // idleTimeoutStreamConn is a StreamConn wrapper that closes
 // the underlying connection when its idle timeout has occurred.
@@ -295,8 +304,8 @@ type idleTimeoutStreamConn struct {
 // read and write operation, i.e. when n > 0 or err == nil.
 //
 // The idle time starts when the underlying connection is wrapped, i.e. before this function
-// returns, and the timer stops for good when the underlying connection is returned by Unwrap,
-// or closed by Close, or closed by the timer itself.
+// returns, and the timer stops for good once Stop is called, which leaves the underlying connection
+// open, or the underlying connection is closed by Close or by the timer itself.
 func IdleTimeoutStreamConn(sc StreamConn, timeout time.Duration) StreamConn {
 	w := &idleTimeoutStreamConn{StreamConn: sc}
 	w.idle.init(timeout, sc.Close)
@@ -327,12 +336,17 @@ func (w *idleTimeoutStreamConn) Write(b []byte) (n int, err error) {
 	return
 }
 
-// Unwrap stops the timer and returns the underlying StreamConn,
-// which is closed if the timer has closed it already.
-func (w *idleTimeoutStreamConn) Unwrap() StreamConn {
-	w.idle.stop()
-	return w.StreamConn
+// Stop stops the timer for good, leaving the underlying StreamConn open. It returns net.ErrClosed if the timer
+// has stopped already, by Close or Stop, or by closing the underlying StreamConn.
+func (w *idleTimeoutStreamConn) Stop() error {
+	if !w.idle.stop() {
+		return net.ErrClosed
+	}
+	return nil
 }
+
+// Unwrap returns the underlying StreamConn, which the timer closes once idle, unless stopped.
+func (w *idleTimeoutStreamConn) Unwrap() StreamConn { return w.StreamConn }
 
 // packetToFromToPacketConn is a Wrapper[PacketConn] that implements FromToPacketConn.
 type packetToFromToPacketConn struct {
@@ -479,6 +493,9 @@ var (
 	_ PacketConn = (*fakeClosePacketConn)(nil)
 	_ PacketConn = (*idleTimeoutPacketConn)(nil)
 	_ PacketConn = (*streamToPacketConn)(nil)
+
+	_ Stopper = (*idleTimeoutPacketConn)(nil)
+	_ Stopper = (*idleTimeoutStreamConn)(nil)
 
 	_ StreamConn = (*fakeAddressStreamConn)(nil)
 	_ StreamConn = (*fakeCloseStreamConn)(nil)

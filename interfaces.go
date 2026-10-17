@@ -124,6 +124,14 @@ type PacketListener[C Conn] interface {
 	Addr() net.Addr
 }
 
+// Stopper can stop what a wrapper or a splitter does on its own, e.g. closing an idle connection or reading
+// packets from it, leaving the underlying connection open.
+type Stopper interface {
+	// Stop stops it for good. It returns net.ErrClosed if it has stopped already, or another error
+	// if it has failed to stop.
+	Stop() error
+}
+
 // StreamConn is an alias for net.Conn, i.e. a generic stream-oriented network connection.
 type StreamConn = net.Conn
 
