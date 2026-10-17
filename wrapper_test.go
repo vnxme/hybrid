@@ -28,6 +28,7 @@ import (
 func TestWrapper(t *testing.T) {
 	t.Run(testWrapperFakeAddressPacketConnName, testWrapperFakeAddressPacketConn)
 	t.Run(testWrapperFakeAddressStreamConnName, testWrapperFakeAddressStreamConn)
+	t.Run(testWrapperFakeCloseName, testWrapperFakeClose)
 	t.Run(testWrapperIdleTimeoutName, testWrapperIdleTimeout)
 	t.Run(testWrapperPacketToFromToPacketConnName, testWrapperPacketToFromToPacketConn)
 	t.Run(testWrapperPacketToStreamConnName, testWrapperPacketToStreamConn)
@@ -114,6 +115,104 @@ func testWrapperFakeAddressStreamConn(t *testing.T) {
 			}
 			if got := w.(StreamConnWrapper).Unwrap(); got != c1 {
 				t.Errorf("Unwrap() = %v, want the pipe end", got)
+			}
+		})
+	}
+}
+
+// testWrapperFakeClose ensures FakeClosePacketConn and FakeCloseStreamConn call the close function given, if any,
+// on every Close instead of closing the underlying connection, which goes on working, and return its error.
+func testWrapperFakeClose(t *testing.T) {
+	type subject struct {
+		w         io.Closer
+		closes    *atomic.Int32 // Closings of the underlying connection
+		unwrap    func() any
+		under     any
+		roundTrip func() error // Sends a byte through the wrapper, and then the other way
+	}
+
+	for _, kind := range []struct {
+		name string
+		ctor func(t *testing.T, closeFunc func() error) subject
+	}{
+		{"PacketConn", func(t *testing.T, closeFunc func() error) subject {
+			c1, c2 := BufferedTrunk(4, nil, nil)
+			t.Cleanup(func() { _, _ = c1.Close(), c2.Close() })
+			u := &closeCountingPacketConn{PacketConn: c1}
+			w := FakeClosePacketConn(u, closeFunc)
+			b := make([]byte, 8)
+			return subject{w, &u.closes, func() any { return w.(PacketConnWrapper).Unwrap() }, u, func() error {
+				if _, err := w.WriteTo([]byte{1}, nil); err != nil {
+					return err
+				}
+				if _, _, err := c2.ReadFrom(b); err != nil {
+					return err
+				}
+				if _, err := c2.WriteTo([]byte{2}, nil); err != nil {
+					return err
+				}
+				_, _, err := w.ReadFrom(b)
+				return err
+			}}
+		}},
+		{"StreamConn", func(t *testing.T, closeFunc func() error) subject {
+			c1, c2 := BufferedPipe(4)
+			t.Cleanup(func() { _, _ = c1.Close(), c2.Close() })
+			u := &closeCountingStreamConn{StreamConn: c1}
+			w := FakeCloseStreamConn(u, closeFunc)
+			b := make([]byte, 8)
+			return subject{w, &u.closes, func() any { return w.(StreamConnWrapper).Unwrap() }, u, func() error {
+				if _, err := w.Write([]byte{1}); err != nil {
+					return err
+				}
+				if _, err := c2.Read(b); err != nil {
+					return err
+				}
+				if _, err := c2.Write([]byte{2}); err != nil {
+					return err
+				}
+				_, err := w.Read(b)
+				return err
+			}}
+		}},
+	} {
+		t.Run(kind.name, func(t *testing.T) {
+			errHook := errors.New("hook")
+			for _, test := range []struct {
+				name  string
+				hook  bool
+				calls int   // Wanted calls of the hook after two closings
+				err   error // Wanted error of each closing
+			}{
+				{"NilHook", false, 0, nil},
+				{"Hook", true, 2, errHook},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					var calls int
+					var closeFunc func() error
+					if test.hook {
+						closeFunc = func() error { calls++; return errHook }
+					}
+					s := kind.ctor(t, closeFunc)
+
+					for i := range 2 {
+						if err := s.w.Close(); !errors.Is(err, test.err) {
+							t.Errorf("Close() #%d = %v, want %v", i+1, err, test.err)
+						}
+					}
+					if calls != test.calls {
+						t.Errorf("calls of the hook = %d, want %d", calls, test.calls)
+					}
+					if n := s.closes.Load(); n != 0 {
+						t.Errorf("closures of the underlying connection = %d, want 0", n)
+					}
+					if err := s.roundTrip(); err != nil {
+						t.Errorf("round trip after Close() = %v, want nil", err)
+					}
+					if got := s.unwrap(); got != s.under {
+						t.Errorf("Unwrap() = %v, want the connection given", got)
+					}
+				})
 			}
 		})
 	}
@@ -467,6 +566,7 @@ func (l *sliceListener[C]) Close() error { return nil }
 const (
 	testWrapperFakeAddressPacketConnName    = "FakeAddressPacketConn"
 	testWrapperFakeAddressStreamConnName    = "FakeAddressStreamConn"
+	testWrapperFakeCloseName                = "FakeClose"
 	testWrapperIdleTimeoutName              = "IdleTimeout"
 	testWrapperPacketToFromToPacketConnName = "PacketToFromToPacketConn"
 	testWrapperPacketToStreamConnName       = "PacketToStreamConn"

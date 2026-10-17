@@ -118,6 +118,62 @@ func (w *fakeAddressStreamConn) RemoteAddr() net.Addr {
 // Unwrap returns the underlying StreamConn.
 func (w *fakeAddressStreamConn) Unwrap() StreamConn { return w.StreamConn }
 
+// fakeClosePacketConn is a PacketConn wrapper that has a customizable Close.
+type fakeClosePacketConn struct {
+	PacketConn
+
+	closeFunc func() error
+}
+
+// FakeClosePacketConn returns a PacketConn implementation that shadows Close.
+//
+// Unless closeFunc is nil, Close calls it instead of closing the underlying PacketConn,
+// and returns its error. Otherwise, Close does nothing and returns nil. Either way, the underlying
+// PacketConn stays open: reads and writes go on, and Close neither unblocks them nor makes them fail,
+// so whoever owns the PacketConn closes it, e.g. after Unwrap.
+func FakeClosePacketConn(pc PacketConn, closeFunc func() error) PacketConn {
+	return &fakeClosePacketConn{pc, closeFunc}
+}
+
+// Close calls the close function given, if any, leaving the underlying PacketConn open.
+func (w *fakeClosePacketConn) Close() error {
+	if w.closeFunc == nil {
+		return nil
+	}
+	return w.closeFunc()
+}
+
+// Unwrap returns the underlying PacketConn.
+func (w *fakeClosePacketConn) Unwrap() PacketConn { return w.PacketConn }
+
+// fakeCloseStreamConn is a StreamConn wrapper that has a customizable Close.
+type fakeCloseStreamConn struct {
+	StreamConn
+
+	closeFunc func() error
+}
+
+// FakeCloseStreamConn returns a StreamConn implementation that shadows Close.
+//
+// Unless closeFunc is nil, Close calls it instead of closing the underlying StreamConn,
+// and returns its error. Otherwise, Close does nothing and returns nil. Either way, the underlying
+// StreamConn stays open: reads and writes go on, and Close neither unblocks them nor makes them fail,
+// so whoever owns the StreamConn closes it, e.g. after Unwrap.
+func FakeCloseStreamConn(sc StreamConn, closeFunc func() error) StreamConn {
+	return &fakeCloseStreamConn{sc, closeFunc}
+}
+
+// Close calls the close function given, if any, leaving the underlying StreamConn open.
+func (w *fakeCloseStreamConn) Close() error {
+	if w.closeFunc == nil {
+		return nil
+	}
+	return w.closeFunc()
+}
+
+// Unwrap returns the underlying StreamConn.
+func (w *fakeCloseStreamConn) Unwrap() StreamConn { return w.StreamConn }
+
 // idleTimer closes a connection once it has been idle for its timeout. Reads and writes only record the time
 // of their activity, which the timer checks when it fires: it closes the connection, or fires again once
 // the timeout will have passed since the latest activity, so that activity costs no reset of the timer.
@@ -418,10 +474,12 @@ func (w *streamToPacketConn) Unwrap() StreamConn { return w.StreamConn }
 // Interface guards
 var (
 	_ PacketConn = (*fakeAddressPacketConn)(nil)
+	_ PacketConn = (*fakeClosePacketConn)(nil)
 	_ PacketConn = (*idleTimeoutPacketConn)(nil)
 	_ PacketConn = (*streamToPacketConn)(nil)
 
 	_ PacketConnWrapper = (*fakeAddressPacketConn)(nil)
+	_ PacketConnWrapper = (*fakeClosePacketConn)(nil)
 	_ PacketConnWrapper = (*idleTimeoutPacketConn)(nil)
 	_ PacketConnWrapper = (*packetToFromToPacketConn)(nil)
 	_ PacketConnWrapper = (*packetToStreamConn)(nil)
@@ -431,10 +489,12 @@ var (
 	_ FromToPacketConn = (*packetToFromToPacketConn)(nil)
 
 	_ StreamConn = (*fakeAddressStreamConn)(nil)
+	_ StreamConn = (*fakeCloseStreamConn)(nil)
 	_ StreamConn = (*idleTimeoutStreamConn)(nil)
 	_ StreamConn = (*packetToStreamConn)(nil)
 
 	_ StreamConnWrapper = (*fakeAddressStreamConn)(nil)
+	_ StreamConnWrapper = (*fakeCloseStreamConn)(nil)
 	_ StreamConnWrapper = (*idleTimeoutStreamConn)(nil)
 	_ StreamConnWrapper = (*streamToPacketConn)(nil)
 
