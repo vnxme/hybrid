@@ -195,8 +195,8 @@ type SplitListener interface {
 	// of the underlying PacketConn, and Close closes it and stops the splitter.
 	PacketListener[SplitConn]
 
-	// Unwrap stops the splitter like Close does, but leaves the underlying PacketConn open, and returns it
-	// as given to Split, with no deadlines.
+	// Unwrap returns the underlying PacketConn as given to Split, which the splitter reads from and writes to
+	// until it's stopped by Close or Stop.
 	Wrapper[PacketConn]
 
 	// Fallback returns the fallback connection of the splitter, or nil if it has none.
@@ -204,6 +204,10 @@ type SplitListener interface {
 
 	// Stats returns the numbers of packets dropped so far, by reason.
 	Stats() SplitStats
+
+	// Stop stops the splitter like Close does, but leaves the underlying PacketConn open, with no deadlines,
+	// for the caller to take it over, e.g. with Unwrap.
+	Stop() error
 }
 
 // SplitStats counts the packets a splitter has dropped, by reason.
@@ -270,7 +274,7 @@ type splitter struct {
 }
 
 // Split returns a SplitListener for the given PacketConn, configured by config, which may be nil for the defaults,
-// and starts its internal loops. It takes pc over, clearing its deadlines, until Close or Unwrap.
+// and starts its internal loops. It takes pc over, clearing its deadlines, until Close or Stop.
 func Split(pc PacketConn, config *SplitConfig) SplitListener {
 	cfg := config.resolve()
 
@@ -290,7 +294,7 @@ func Split(pc PacketConn, config *SplitConfig) SplitListener {
 		s.fallback = s.newFallback()
 	}
 
-	// Clear the deadlines the underlying PacketConn may have, as Unwrap does, since a deadline passed would make
+	// Clear the deadlines the underlying PacketConn may have, as Stop does, since a deadline passed would make
 	// the read loop spin on timeouts without reading a packet, and fail every write without a write timeout
 	_ = s.pc.SetDeadline(time.Time{})
 
@@ -354,16 +358,27 @@ func (s *splitter) Stats() SplitStats {
 	}
 }
 
-// Unwrap stops the splitter and returns the underlying PacketConn, as given to Split.
-func (s *splitter) Unwrap() PacketConn {
+// Stop stops the internal goroutines like Close does, but leaves the underlying PacketConn open, with no deadlines.
+// It returns the error of interrupting the underlying PacketConn, or net.ErrClosed if the splitter has stopped.
+func (s *splitter) Stop() error {
 	// Interrupt the read and write in progress with deadlines rather than by closing, so that the underlying
-	// PacketConn stays open, unless it has been closed otherwise. Ignore errors if any.
-	_ = s.stop(func() error { return s.pc.SetDeadline(time.Unix(1, 0)) })
+	// PacketConn stays open, unless it has been closed otherwise
+	var stopping bool
+	err := s.stop(func() error {
+		stopping = true
+		return s.pc.SetDeadline(time.Unix(1, 0))
+	})
 
-	// Clear the deadlines that have interrupted the loops, which have returned by now
-	_ = s.orig.SetDeadline(time.Time{})
-	return s.orig
+	// Clear the deadlines that have interrupted the loops, which have returned by now, unless the splitter
+	// had stopped before, so as to keep any deadlines the caller has set since
+	if stopping {
+		_ = s.orig.SetDeadline(time.Time{})
+	}
+	return err
 }
+
+// Unwrap returns the underlying PacketConn, as given to Split.
+func (s *splitter) Unwrap() PacketConn { return s.orig }
 
 // logError would log an unexpected error of reading from or writing to the underlying PacketConn,
 // had the splitter a logger.

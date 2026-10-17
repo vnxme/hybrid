@@ -22,6 +22,7 @@ import (
 	mathrand "math/rand/v2"
 	"net"
 	"net/netip"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -58,6 +59,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitReleaseName, testSplitRelease)
 	t.Run(testSplitReleaseWithoutFallbackName, testSplitReleaseWithoutFallback)
 	t.Run(testSplitShortBufferName, testSplitShortBuffer)
+	t.Run(testSplitStopName, testSplitStop)
 	t.Run(testSplitStreamListenerName, testSplitStreamListener)
 	t.Run(testSplitTrunkFlowsName, testSplitTrunkFlows)
 	t.Run(testSplitUDPSocketFlowsName, testSplitUDPSocketFlows)
@@ -597,24 +599,65 @@ func testSplitBlockedReads(t *testing.T) {
 	}
 }
 
-// testSplitUnwrap ensures Unwrap stops the splitter, but leaves the underlying connection open.
-func testSplitUnwrap(t *testing.T) {
+// testSplitStop ensures Stop stops the splitter, but leaves the underlying connection open with no deadlines,
+// and that stopping it again, or closing it, fails with net.ErrClosed and leaves the connection as it is.
+func testSplitStop(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := splitTrunk(t, nil)
-	pc := ln.Unwrap()
+	if err := ln.Stop(); err != nil {
+		t.Fatalf("Stop() = %v, want nil", err)
+	}
 	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("Accept() = %v, want net.ErrClosed", err)
 	}
 
-	writeFrom(t, client, a, "a1") // Read by nothing but the caller of Unwrap
+	pc := ln.Unwrap()
+	writeFrom(t, client, a, "a1") // Read by nothing but the caller of Stop
 	b := make([]byte, 8)          // Read with no deadline set, which a deadline in the past would fail
 	if n, addr, err := pc.ReadFrom(b); err != nil || string(b[:n]) != "a1" || addr.String() != a.String() {
 		t.Errorf("ReadFrom() of the unwrapped connection = %q, %v, %v, want %q, %s, nil", b[:n], addr, err, "a1", a)
 	}
+
+	// A deadline set by the caller since is kept, rather than cleared, as the splitter has stopped already
+	if err := pc.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	for name, stop := range map[string]func() error{"Stop": ln.Stop, "Close": ln.Close} {
+		if err := stop(); !errors.Is(err, net.ErrClosed) {
+			t.Errorf("%s() after Stop() = %v, want net.ErrClosed", name, err)
+		}
+	}
+	unblock := time.AfterFunc(2*time.Second, func() { _ = client.Close() }) // Rather than hang if cleared
+	defer unblock.Stop()
+	if _, _, err := pc.ReadFrom(b); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("ReadFrom() of the unwrapped connection = %v, want os.ErrDeadlineExceeded", err)
+	}
+}
+
+// testSplitUnwrap ensures Unwrap returns the underlying connection as given to Split, and leaves the splitter
+// running.
+func testSplitUnwrap(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, server := BufferedTrunk(16, nil, nil)
+	defer func() { _ = client.Close() }()
+	ln := Split(server, nil)
+	defer func() { _ = ln.Close() }()
+
+	if got := ln.Unwrap(); got != server {
+		t.Errorf("Unwrap() = %v, want the trunk end given", got)
+	}
+
+	writeFrom(t, client, a, "a1") // Read by the splitter still running
+	conn := acceptSplitConn(t, ln)
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	b := make([]byte, 8)
+	if n, err := conn.Read(b); err != nil || string(b[:n]) != "a1" {
+		t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, "a1")
+	}
 }
 
 // testSplitUnwrapUDP ensures Unwrap returns the UDP connection given to Split, rather than the wrapper
-// the splitter reads and writes through, with packet info or without.
+// the splitter reads and writes through, with packet info or without, and Stop leaves it open with no deadlines.
 func testSplitUnwrapUDP(t *testing.T) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
@@ -628,8 +671,12 @@ func testSplitUnwrapUDP(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = pc.Close() }()
-			if got := Split(pc, &SplitConfig{PacketInfo: info}).Unwrap(); got != pc {
+			ln := Split(pc, &SplitConfig{PacketInfo: info})
+			if got := ln.Unwrap(); got != pc {
 				t.Errorf("Unwrap() = %T, want the %T given", got, pc)
+			}
+			if err := ln.Stop(); err != nil {
+				t.Fatalf("Stop() = %v, want nil", err)
 			}
 
 			// Write to itself and read back with no deadlines set, which deadlines in the past would fail
@@ -789,6 +836,7 @@ const (
 	testSplitReleaseName                   = "Release"
 	testSplitReleaseWithoutFallbackName    = "ReleaseWithoutFallback"
 	testSplitShortBufferName               = "ShortBuffer"
+	testSplitStopName                      = "Stop"
 	testSplitStreamListenerName            = "StreamListener"
 	testSplitTrunkFlowsName                = "TrunkFlows"
 	testSplitUDPSocketFlowsName            = "UDPSocketFlows"
