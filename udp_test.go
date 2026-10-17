@@ -191,7 +191,7 @@ func TestPacketInfoUDPConn(t *testing.T) {
 		if got, err := PacketInfoUDPConn(c); got != c || err != nil {
 			t.Errorf("PacketInfoUDPConn() of a wrapped conn = %v, %v, want %v, nil", got, err, c)
 		}
-		if got := c.(PacketConnWrapper).Unwrap(); got != pc {
+		if got := c.(Wrapper[PacketConn]).Unwrap(); got != pc {
 			t.Errorf("Unwrap() = %T, want the %T given", got, pc)
 		}
 	})

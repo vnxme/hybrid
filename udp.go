@@ -289,8 +289,8 @@ func isNilUDPConn(conn UDPConn) bool {
 
 // Interface guards
 var (
-	_ FromToUDPConn     = (*packetInfoUDPConn)(nil)
-	_ PacketConnWrapper = (*packetInfoUDPConn)(nil)
+	_ FromToUDPConn       = (*packetInfoUDPConn)(nil)
+	_ Wrapper[PacketConn] = (*packetInfoUDPConn)(nil)
 )
 
 // ControlUDPPacketInfo enables packet info on a UDP socket for every IP version it accepts.

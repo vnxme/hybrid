@@ -334,7 +334,7 @@ func (w *idleTimeoutStreamConn) Unwrap() StreamConn {
 	return w.StreamConn
 }
 
-// packetToFromToPacketConn is a PacketConnWrapper that implements FromToPacketConn.
+// packetToFromToPacketConn is a Wrapper[PacketConn] that implements FromToPacketConn.
 type packetToFromToPacketConn struct {
 	PacketConn
 }
@@ -380,7 +380,7 @@ func (w *packetToFromToPacketConn) Unwrap() PacketConn {
 	return w.PacketConn
 }
 
-// packetToStreamConn is a PacketConnWrapper that implements StreamConn.
+// packetToStreamConn is a Wrapper[PacketConn] that implements StreamConn.
 type packetToStreamConn struct {
 	PacketConn
 
@@ -416,7 +416,7 @@ func (w *packetToStreamConn) RemoteAddr() net.Addr { return w.remote }
 // Unwrap returns the underlying PacketConn.
 func (w *packetToStreamConn) Unwrap() PacketConn { return w.PacketConn }
 
-// packetToStreamListener is a PacketListenerWrapper that implements StreamListener.
+// packetToStreamListener is a Wrapper[PacketListener[C]] that implements StreamListener.
 type packetToStreamListener[C Conn] struct {
 	PacketListener[C]
 }
@@ -440,7 +440,7 @@ func (w *packetToStreamListener[C]) Accept() (StreamConn, error) {
 // Unwrap returns the underlying PacketListener.
 func (w *packetToStreamListener[C]) Unwrap() PacketListener[C] { return w.PacketListener }
 
-// streamToPacketConn is a StreamConnWrapper that implements PacketConn.
+// streamToPacketConn is a Wrapper[StreamConn] that implements PacketConn.
 type streamToPacketConn struct {
 	StreamConn
 }
@@ -473,30 +473,30 @@ func (w *streamToPacketConn) Unwrap() StreamConn { return w.StreamConn }
 
 // Interface guards
 var (
+	_ FromToPacketConn = (*packetToFromToPacketConn)(nil)
+
 	_ PacketConn = (*fakeAddressPacketConn)(nil)
 	_ PacketConn = (*fakeClosePacketConn)(nil)
 	_ PacketConn = (*idleTimeoutPacketConn)(nil)
 	_ PacketConn = (*streamToPacketConn)(nil)
-
-	_ PacketConnWrapper = (*fakeAddressPacketConn)(nil)
-	_ PacketConnWrapper = (*fakeClosePacketConn)(nil)
-	_ PacketConnWrapper = (*idleTimeoutPacketConn)(nil)
-	_ PacketConnWrapper = (*packetToFromToPacketConn)(nil)
-	_ PacketConnWrapper = (*packetToStreamConn)(nil)
-
-	_ PacketListenerWrapper[Conn] = (*packetToStreamListener[Conn])(nil)
-
-	_ FromToPacketConn = (*packetToFromToPacketConn)(nil)
 
 	_ StreamConn = (*fakeAddressStreamConn)(nil)
 	_ StreamConn = (*fakeCloseStreamConn)(nil)
 	_ StreamConn = (*idleTimeoutStreamConn)(nil)
 	_ StreamConn = (*packetToStreamConn)(nil)
 
-	_ StreamConnWrapper = (*fakeAddressStreamConn)(nil)
-	_ StreamConnWrapper = (*fakeCloseStreamConn)(nil)
-	_ StreamConnWrapper = (*idleTimeoutStreamConn)(nil)
-	_ StreamConnWrapper = (*streamToPacketConn)(nil)
-
 	_ StreamListener = (*packetToStreamListener[Conn])(nil)
+
+	_ Wrapper[PacketConn] = (*fakeAddressPacketConn)(nil)
+	_ Wrapper[PacketConn] = (*fakeClosePacketConn)(nil)
+	_ Wrapper[PacketConn] = (*idleTimeoutPacketConn)(nil)
+	_ Wrapper[PacketConn] = (*packetToFromToPacketConn)(nil)
+	_ Wrapper[PacketConn] = (*packetToStreamConn)(nil)
+
+	_ Wrapper[PacketListener[Conn]] = (*packetToStreamListener[Conn])(nil)
+
+	_ Wrapper[StreamConn] = (*fakeAddressStreamConn)(nil)
+	_ Wrapper[StreamConn] = (*fakeCloseStreamConn)(nil)
+	_ Wrapper[StreamConn] = (*idleTimeoutStreamConn)(nil)
+	_ Wrapper[StreamConn] = (*streamToPacketConn)(nil)
 )

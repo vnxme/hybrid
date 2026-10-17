@@ -77,7 +77,7 @@ func testWrapperFakeAddressPacketConn(t *testing.T) {
 				t.Errorf("ReadFrom() = %q from %v, %v, want %q from %v, nil", b[:n], src, err, "pong", test.wantFrom)
 			}
 
-			if got := w.(PacketConnWrapper).Unwrap(); got != c1 {
+			if got := w.(Wrapper[PacketConn]).Unwrap(); got != c1 {
 				t.Errorf("Unwrap() = %v, want the trunk end", got)
 			}
 
@@ -113,7 +113,7 @@ func testWrapperFakeAddressStreamConn(t *testing.T) {
 			if got := w.RemoteAddr(); got != test.wantRemote {
 				t.Errorf("RemoteAddr() = %v, want %v", got, test.wantRemote)
 			}
-			if got := w.(StreamConnWrapper).Unwrap(); got != c1 {
+			if got := w.(Wrapper[StreamConn]).Unwrap(); got != c1 {
 				t.Errorf("Unwrap() = %v, want the pipe end", got)
 			}
 		})
@@ -141,7 +141,7 @@ func testWrapperFakeClose(t *testing.T) {
 			u := &closeCountingPacketConn{PacketConn: c1}
 			w := FakeClosePacketConn(u, closeFunc)
 			b := make([]byte, 8)
-			return subject{w, &u.closes, func() any { return w.(PacketConnWrapper).Unwrap() }, u, func() error {
+			return subject{w, &u.closes, func() any { return w.(Wrapper[PacketConn]).Unwrap() }, u, func() error {
 				if _, err := w.WriteTo([]byte{1}, nil); err != nil {
 					return err
 				}
@@ -161,7 +161,7 @@ func testWrapperFakeClose(t *testing.T) {
 			u := &closeCountingStreamConn{StreamConn: c1}
 			w := FakeCloseStreamConn(u, closeFunc)
 			b := make([]byte, 8)
-			return subject{w, &u.closes, func() any { return w.(StreamConnWrapper).Unwrap() }, u, func() error {
+			return subject{w, &u.closes, func() any { return w.(Wrapper[StreamConn]).Unwrap() }, u, func() error {
 				if _, err := w.Write([]byte{1}); err != nil {
 					return err
 				}
@@ -245,7 +245,7 @@ func testWrapperIdleTimeout(t *testing.T) {
 			w := IdleTimeoutPacketConn(u, timeout)
 			b := make([]byte, 8)
 			return subject{w, u, &u.closes,
-				func() any { return w.(PacketConnWrapper).Unwrap() },
+				func() any { return w.(Wrapper[PacketConn]).Unwrap() },
 				func() error {
 					if _, err := c2.WriteTo([]byte{1}, nil); err != nil {
 						return err
@@ -263,7 +263,7 @@ func testWrapperIdleTimeout(t *testing.T) {
 			w := IdleTimeoutStreamConn(u, timeout)
 			b := make([]byte, 8)
 			return subject{w, u, &u.closes,
-				func() any { return w.(StreamConnWrapper).Unwrap() },
+				func() any { return w.(Wrapper[StreamConn]).Unwrap() },
 				func() error {
 					if _, err := c2.Write([]byte{1}); err != nil {
 						return err
@@ -395,7 +395,7 @@ func testWrapperPacketToFromToPacketConn(t *testing.T) {
 				b[:n], from, to, idx, err, "pong", a1, dst)
 		}
 
-		if got := w.(PacketConnWrapper).Unwrap(); got != pc {
+		if got := w.(Wrapper[PacketConn]).Unwrap(); got != pc {
 			t.Errorf("Unwrap() = %v, want the PacketConn given", got)
 		}
 	})
@@ -412,7 +412,7 @@ func testWrapperPacketToFromToPacketConn(t *testing.T) {
 				t.Errorf("PacketToFromToPacketConn(%v) is a FromToUDPConn = %v, want %v, as PacketInfoUDPConn() = %v",
 					try, ok, !ok, unsupported)
 			}
-			if got := w.(PacketConnWrapper).Unwrap(); got != conn {
+			if got := w.(Wrapper[PacketConn]).Unwrap(); got != conn {
 				t.Errorf("PacketToFromToPacketConn(%v).Unwrap() = %v, want the UDPConn given", try, got)
 			}
 			_ = conn.Close()
@@ -454,7 +454,7 @@ func testWrapperPacketToStreamConn(t *testing.T) {
 		t.Errorf("Read() = %q, %v, want %q, io.ErrShortBuffer", b[:n], err, "trun")
 	}
 
-	if got := w.(PacketConnWrapper).Unwrap(); got != c1 {
+	if got := w.(Wrapper[PacketConn]).Unwrap(); got != c1 {
 		t.Errorf("Unwrap() = %v, want the trunk end", got)
 	}
 }
@@ -488,7 +488,7 @@ func testWrapperPacketToStreamListener(t *testing.T) {
 		t.Errorf("Accept() = %#v, %v, want nil, net.ErrClosed", sc, err)
 	}
 
-	if got := ln.(PacketListenerWrapper[*packetToStreamConn]).Unwrap(); got != pl {
+	if got := ln.(Wrapper[PacketListener[*packetToStreamConn]]).Unwrap(); got != pl {
 		t.Errorf("Unwrap() = %v, want the PacketListener given", got)
 	}
 }
@@ -515,7 +515,7 @@ func testWrapperStreamToPacketConn(t *testing.T) {
 		t.Errorf("ReadFrom() = %q from %v, %v, want %q from %v, nil", b[:n], from, err, "pong", c1.RemoteAddr())
 	}
 
-	if got := w.(StreamConnWrapper).Unwrap(); got != c1 {
+	if got := w.(Wrapper[StreamConn]).Unwrap(); got != c1 {
 		t.Errorf("Unwrap() = %v, want the pipe end", got)
 	}
 }

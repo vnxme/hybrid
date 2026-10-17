@@ -683,7 +683,7 @@ func testSplitStreamListener(t *testing.T) {
 		t.Errorf("ReadFromTo() = %q to %v, %v, want %q to %s, nil", b[:n], dst, err, "x", a)
 	}
 
-	if got := sl.(PacketListenerWrapper[SplitConn]).Unwrap(); got != ln {
+	if got := sl.(Wrapper[PacketListener[SplitConn]]).Unwrap(); got != ln {
 		t.Errorf("Unwrap() = %v, want the splitter", got)
 	}
 	if err := sl.Close(); err != nil {

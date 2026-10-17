@@ -112,11 +112,6 @@ type FromToWriter interface {
 // PacketConn is an alias for net.PacketConn, i.e. a generic packet-oriented network connection.
 type PacketConn = net.PacketConn
 
-// PacketConnWrapper can unwrap the underlying PacketConn.
-type PacketConnWrapper interface {
-	Unwrap() PacketConn
-}
-
 // PacketListener is a generic network listener for packet-oriented protocols, similar to StreamListener,
 // accepting connections of type C, each serving a single remote address. [PacketToStreamListener] makes
 // a StreamListener of it.
@@ -129,18 +124,8 @@ type PacketListener[C Conn] interface {
 	Addr() net.Addr
 }
 
-// PacketListenerWrapper can unwrap the underlying PacketListener of connections of type C.
-type PacketListenerWrapper[C Conn] interface {
-	Unwrap() PacketListener[C]
-}
-
 // StreamConn is an alias for net.Conn, i.e. a generic stream-oriented network connection.
 type StreamConn = net.Conn
-
-// StreamConnWrapper can unwrap the underlying StreamConn.
-type StreamConnWrapper interface {
-	Unwrap() StreamConn
-}
 
 // StreamListener is an alias for net.Listener, i.e. a generic network listener for stream-oriented protocols.
 type StreamListener = net.Listener
@@ -160,6 +145,13 @@ type UDPConn interface {
 	ReadMsgUDPAddrPort(b []byte, oob []byte) (n int, oobn int, flags int, addr netip.AddrPort, err error)
 	WriteMsgUDP(b []byte, oob []byte, addr *net.UDPAddr) (n int, oobn int, err error)
 	WriteMsgUDPAddrPort(b []byte, oob []byte, addr netip.AddrPort) (n int, oobn int, err error)
+}
+
+// Wrapper can unwrap the underlying value of type T, e.g. a PacketConn, a StreamConn or a PacketListener.
+// T must be the very type Unwrap returns, e.g. a wrapper returning a FromToPacketConn isn't a Wrapper[PacketConn].
+type Wrapper[T any] interface {
+	// Unwrap returns the underlying value as given to the wrapper.
+	Unwrap() T
 }
 
 // Interface guards

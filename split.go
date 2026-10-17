@@ -197,7 +197,7 @@ type SplitListener interface {
 
 	// Unwrap stops the splitter like Close does, but leaves the underlying PacketConn open, and returns it
 	// as given to Split, with no deadlines.
-	PacketConnWrapper
+	Wrapper[PacketConn]
 
 	// Fallback returns the fallback connection of the splitter, or nil if it has none.
 	Fallback() FromToPacketConn
