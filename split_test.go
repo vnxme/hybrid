@@ -72,8 +72,8 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitWriteUnsentName, testSplitWriteUnsent)
 }
 
-// testSplitPayloadSizes ensures a splitter over each kind of pipe and over UDP sockets reads the packets written
-// to it, with payloads from the smallest size to the largest, and counts those it drops.
+// testSplitPayloadSizes ensures a splitter over each kind of pipe and trunk and over UDP sockets reads the packets
+// written to it, with payloads from the smallest size to the largest, and counts those it drops.
 func testSplitPayloadSizes(t *testing.T) {
 	packetCount := 1 << 13
 
@@ -100,6 +100,13 @@ func testSplitPayloadSizes(t *testing.T) {
 			c1, c2 := BufferedPipe(10)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: 1, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
+		// Unlike our pipes, trunks keep empty packets, as UDP does, and the splitter reads them as FromToPacketConns
+		{name: "HybridUnbufferedTrunk", ctor: func() (PacketConn, PacketConn) {
+			return UnbufferedTrunk(nil, nil)
+		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
+		{name: "HybridBufferedTrunk", ctor: func() (PacketConn, PacketConn) {
+			return BufferedTrunk(10, nil, nil)
+		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		{name: "LocalUDP4Socket", ctor: func() (PacketConn, PacketConn) {
 			return newLocalPacketListeners("udp4")
 		}, minWBS: udp4PayloadSizeMin, minSafeWBS: udp4PayloadSizeMinSafe, maxSafeWBS: udp4PayloadSizeMaxSafe, maxWBS: udp4PayloadSizeMax},
