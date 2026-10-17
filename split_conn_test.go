@@ -190,7 +190,9 @@ func testSplitClosedErrors(t *testing.T) {
 		op           string
 		source, addr net.Addr
 	}{
+		{"Read", func() error { _, err := conn.Read(b); return err }(), "read", conn.LocalAddr(), a},
 		{"ReadFrom", func() error { _, _, err := conn.ReadFrom(b); return err }(), "read", conn.LocalAddr(), a},
+		{"Write", func() error { _, err := conn.Write(b); return err }(), "write", conn.LocalAddr(), a},
 		{"WriteTo", func() error { _, err := conn.WriteTo(b, a); return err }(), "write", conn.LocalAddr(), a},
 		{"Close", conn.Close(), "close", conn.LocalAddr(), a},
 		{"Release", conn.Release(), "release", conn.LocalAddr(), a},
@@ -225,6 +227,8 @@ func testSplitDeadlines(t *testing.T) {
 	for name, err := range map[string]error{
 		"ReadFrom":         func() error { _ = conn.SetDeadline(past); _, _, err := conn.ReadFrom(b); return err }(),
 		"WriteTo":          func() error { _, err := conn.WriteTo(b, conn.RemoteAddr()); return err }(),
+		"Read":             func() error { _, err := conn.Read(b); return err }(),
+		"Write":            func() error { _, err := conn.Write(b); return err }(),
 		"FallbackReadFrom": func() error { _ = ln.Fallback().SetDeadline(past); _, _, err := ln.Fallback().ReadFrom(b); return err }(),
 		"FallbackWriteTo": func() error {
 			_ = ln.Fallback().SetWriteDeadline(past)

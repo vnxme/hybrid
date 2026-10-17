@@ -365,22 +365,20 @@ type packetToStreamListener[C ConnectedPacketConn] struct {
 	PacketListener[C]
 }
 
-// PacketToStreamListener wraps pl as a StreamListener, accepting each connection as a StreamConn:
-// as is if it implements StreamConn already, or wrapped with PacketToStreamConn otherwise.
+// PacketToStreamListener wraps pl as a StreamListener, accepting each connection as is,
+// since a ConnectedPacketConn is a StreamConn.
 func PacketToStreamListener[C ConnectedPacketConn](pl PacketListener[C]) StreamListener {
 	return &packetToStreamListener[C]{pl}
 }
 
-// Accept accepts the next connection of the underlying PacketListener as a StreamConn.
+// Accept accepts the next connection of the underlying PacketListener as a StreamConn,
+// which is nil on error rather than a nil C in a non-nil StreamConn.
 func (w *packetToStreamListener[C]) Accept() (StreamConn, error) {
 	c, err := w.PacketListener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	if sc, ok := any(c).(StreamConn); ok {
-		return sc, nil
-	}
-	return PacketToStreamConn(c, c.RemoteAddr()), nil
+	return c, nil
 }
 
 // Unwrap returns the underlying PacketListener.

@@ -638,7 +638,7 @@ func testSplitUnwrapUDP(t *testing.T) {
 }
 
 // testSplitStreamListener ensures a splitter wrapped with PacketToStreamListener accepts its split connections
-// as StreamConns, which read and write the packets of their flows, and unwraps to the splitter.
+// as is, which read and write the packets of their flows as StreamConns, and unwraps to the splitter.
 func testSplitStreamListener(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := splitTrunk(t, nil)
@@ -652,13 +652,21 @@ func testSplitStreamListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Accept() = %v, want nil", err)
 	}
+	if _, ok := conn.(SplitConn); !ok {
+		t.Errorf("Accept() = %T, want the SplitConn as is", conn)
+	}
 	if conn.RemoteAddr().String() != a.String() {
 		t.Errorf("RemoteAddr() = %v, want %s", conn.RemoteAddr(), a)
 	}
+	writeFrom(t, client, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}, "b1") // Of another flow
+	writeFrom(t, client, a, "abcdef")
 	b := make([]byte, 8)
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 	if n, err := conn.Read(b); err != nil || string(b[:n]) != "a1" {
 		t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, "a1")
+	}
+	if n, err := conn.Read(b[:3]); !errors.Is(err, io.ErrShortBuffer) || string(b[:n]) != "abc" {
+		t.Errorf("Read() = %q, %v, want %q, io.ErrShortBuffer, unlike a connected UDP socket", b[:n], err, "abc")
 	}
 	if _, err := conn.Write([]byte("x")); err != nil {
 		t.Fatalf("Write() = %v, want nil", err)

@@ -156,6 +156,13 @@ func (sc *splitConn) Close() error {
 // LocalIfIdx returns the index of the interface the latest packet of the flow came through, used for replies.
 func (sc *splitConn) LocalIfIdx() int { return int(sc.localIfIdx.Load()) }
 
+// Read reads a packet of the flow, as ReadFrom does. Unlike a connected UDP socket, which truncates a packet longer
+// than b silently, it returns io.ErrShortBuffer then.
+func (sc *splitConn) Read(b []byte) (int, error) {
+	n, _, _, _, err := sc.ReadFromTo(b)
+	return n, err
+}
+
 // ReadFrom reads a packet of the flow, and returns a copy of the remote address of the flow.
 func (sc *splitConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	n, addr, _, _, err := sc.ReadFromTo(b)
@@ -197,6 +204,9 @@ func (sc *splitConn) Release() error {
 
 // RemoteAddr returns the remote address of the flow.
 func (sc *splitConn) RemoteAddr() net.Addr { return sc.remoteAddr }
+
+// Write writes a packet to the remote address of the flow, as WriteToFrom does with no addresses.
+func (sc *splitConn) Write(b []byte) (int, error) { return sc.WriteToFrom(b, nil, nil, 0) }
 
 // WriteTo writes a packet to the remote address of the flow, as WriteToFrom does with no local address.
 func (sc *splitConn) WriteTo(b []byte, addr net.Addr) (int, error) {

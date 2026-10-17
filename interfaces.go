@@ -21,12 +21,12 @@ import (
 	"time"
 )
 
-// ConnectedPacketConn is a generic packet-oriented network connection serving a single remote address.
+// ConnectedPacketConn is a generic packet-oriented network connection serving a single remote address,
+// which it reads packets from with Read and writes packets to with Write, as a StreamConn does.
 // Any *net.UDPConn, *net.IPConn or *net.UnixConn satisfies it, but serves a single remote address only if dialed.
 type ConnectedPacketConn interface {
 	PacketConn
-	// RemoteAddr returns the remote network address.
-	RemoteAddr() net.Addr
+	StreamConn
 }
 
 // Deadline signals that a point in time has passed by closing a channel, which a select may wait on

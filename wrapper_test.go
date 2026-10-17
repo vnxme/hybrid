@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -359,40 +360,36 @@ func testWrapperPacketToStreamConn(t *testing.T) {
 	}
 }
 
-// testWrapperPacketToStreamListener ensures PacketToStreamListener accepts a connection that implements StreamConn
-// as is, wraps any other connection with PacketToStreamConn with its remote address, and fails as its listener does.
+// testWrapperPacketToStreamListener ensures PacketToStreamListener accepts connections as is, and fails as its
+// listener does, with a nil StreamConn rather than a nil connection of a concrete type in a non-nil one.
 func testWrapperPacketToStreamListener(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1}
 	remote := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 2}
 	c1, c2 := BufferedTrunk(4, nil, nil)
 	defer func() { _, _ = c1.Close(), c2.Close() }()
 
-	packet := &connectedPacketConn{PacketConn: c1, remote: remote} // Not a StreamConn
-	stream := PacketToStreamConn(c2, remote)                       // A StreamConn already
-	pl := &sliceListener{addr: addr, conns: []ConnectedPacketConn{packet, stream.(ConnectedPacketConn)}}
-	ln := PacketToStreamListener[ConnectedPacketConn](pl)
+	conns := []*packetToStreamConn{
+		PacketToStreamConn(c1, remote).(*packetToStreamConn),
+		PacketToStreamConn(c2, remote).(*packetToStreamConn),
+	}
+	pl := &sliceListener[*packetToStreamConn]{addr: addr, conns: slices.Clone(conns)}
+	ln := PacketToStreamListener(pl)
 
 	if got := ln.Addr(); got != addr {
 		t.Errorf("Addr() = %v, want %v", got, addr)
 	}
 
-	sc, err := ln.Accept()
-	if err != nil {
-		t.Fatalf("Accept() = %v, want nil", err)
-	}
-	if got := sc.(PacketConnWrapper).Unwrap(); got != packet || sc.RemoteAddr() != remote {
-		t.Errorf("Accept() = %v with remote address %v, want a wrapper of %v with %v", got, sc.RemoteAddr(), packet, remote)
+	for _, c := range conns {
+		if sc, err := ln.Accept(); err != nil || sc != c {
+			t.Errorf("Accept() = %v, %v, want %v as is, nil", sc, err, c)
+		}
 	}
 
-	if sc, err = ln.Accept(); err != nil || sc != stream {
-		t.Errorf("Accept() = %v, %v, want %v as is, nil", sc, err, stream)
+	if sc, err := ln.Accept(); !errors.Is(err, net.ErrClosed) || sc != nil {
+		t.Errorf("Accept() = %#v, %v, want nil, net.ErrClosed", sc, err)
 	}
 
-	if sc, err = ln.Accept(); !errors.Is(err, net.ErrClosed) || sc != nil {
-		t.Errorf("Accept() = %v, %v, want nil, net.ErrClosed", sc, err)
-	}
-
-	if got := ln.(PacketListenerWrapper[ConnectedPacketConn]).Unwrap(); got != pl {
+	if got := ln.(PacketListenerWrapper[*packetToStreamConn]).Unwrap(); got != pl {
 		t.Errorf("Unwrap() = %v, want the PacketListener given", got)
 	}
 }
@@ -446,32 +443,26 @@ func (c *closeCountingStreamConn) Close() error {
 	return c.StreamConn.Close()
 }
 
-// connectedPacketConn is a ConnectedPacketConn which isn't a StreamConn.
-type connectedPacketConn struct {
-	PacketConn
-	remote net.Addr
-}
-
-func (c *connectedPacketConn) RemoteAddr() net.Addr { return c.remote }
-
-// sliceListener is a PacketListener accepting the connections given, then failing with net.ErrClosed.
-type sliceListener struct {
+// sliceListener is a PacketListener accepting the connections given, then failing with net.ErrClosed
+// and a zero C.
+type sliceListener[C ConnectedPacketConn] struct {
 	addr  net.Addr
-	conns []ConnectedPacketConn
+	conns []C
 }
 
-func (l *sliceListener) Accept() (ConnectedPacketConn, error) {
+func (l *sliceListener[C]) Accept() (C, error) {
 	if len(l.conns) == 0 {
-		return nil, net.ErrClosed
+		var zero C
+		return zero, net.ErrClosed
 	}
 	c := l.conns[0]
 	l.conns = l.conns[1:]
 	return c, nil
 }
 
-func (l *sliceListener) Addr() net.Addr { return l.addr }
+func (l *sliceListener[C]) Addr() net.Addr { return l.addr }
 
-func (l *sliceListener) Close() error { return nil }
+func (l *sliceListener[C]) Close() error { return nil }
 
 const (
 	testWrapperFakeAddressPacketConnName    = "FakeAddressPacketConn"
