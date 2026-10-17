@@ -361,13 +361,13 @@ func (w *packetToStreamConn) RemoteAddr() net.Addr { return w.remote }
 func (w *packetToStreamConn) Unwrap() PacketConn { return w.PacketConn }
 
 // packetToStreamListener is a PacketListenerWrapper that implements StreamListener.
-type packetToStreamListener[C ConnectedPacketConn] struct {
+type packetToStreamListener[C Conn] struct {
 	PacketListener[C]
 }
 
 // PacketToStreamListener wraps pl as a StreamListener, accepting each connection as is,
-// since a ConnectedPacketConn is a StreamConn.
-func PacketToStreamListener[C ConnectedPacketConn](pl PacketListener[C]) StreamListener {
+// since a Conn is a StreamConn.
+func PacketToStreamListener[C Conn](pl PacketListener[C]) StreamListener {
 	return &packetToStreamListener[C]{pl}
 }
 
@@ -426,7 +426,7 @@ var (
 	_ PacketConnWrapper = (*packetToFromToPacketConn)(nil)
 	_ PacketConnWrapper = (*packetToStreamConn)(nil)
 
-	_ PacketListenerWrapper[ConnectedPacketConn] = (*packetToStreamListener[ConnectedPacketConn])(nil)
+	_ PacketListenerWrapper[Conn] = (*packetToStreamListener[Conn])(nil)
 
 	_ FromToPacketConn = (*packetToFromToPacketConn)(nil)
 
@@ -438,5 +438,5 @@ var (
 	_ StreamConnWrapper = (*idleTimeoutStreamConn)(nil)
 	_ StreamConnWrapper = (*streamToPacketConn)(nil)
 
-	_ StreamListener = (*packetToStreamListener[ConnectedPacketConn])(nil)
+	_ StreamListener = (*packetToStreamListener[Conn])(nil)
 )

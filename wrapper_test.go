@@ -445,7 +445,7 @@ func (c *closeCountingStreamConn) Close() error {
 
 // sliceListener is a PacketListener accepting the connections given, then failing with net.ErrClosed
 // and a zero C.
-type sliceListener[C ConnectedPacketConn] struct {
+type sliceListener[C Conn] struct {
 	addr  net.Addr
 	conns []C
 }

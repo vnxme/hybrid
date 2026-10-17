@@ -180,8 +180,8 @@ func (c *SplitConfig) resolve() splitConfig {
 // SplitConn is a split connection: a FromToPacketConn serving the packets of a single flow,
 // which it reads from and writes to its remote address.
 type SplitConn interface {
+	Conn // With the remote address of the flow
 	FromToPacketConn
-	ConnectedPacketConn // With the remote address of the flow
 
 	// Release hands the flow over to the fallback connection, e.g. as no handler recognizes it,
 	// and closes the split connection.

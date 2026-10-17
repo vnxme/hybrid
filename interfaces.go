@@ -21,12 +21,21 @@ import (
 	"time"
 )
 
-// ConnectedPacketConn is a generic packet-oriented network connection serving a single remote address,
-// which it reads packets from with Read and writes packets to with Write, as a StreamConn does.
-// Any *net.UDPConn, *net.IPConn or *net.UnixConn satisfies it, but serves a single remote address only if dialed.
-type ConnectedPacketConn interface {
+// Conn is a hybrid of a PacketConn and a StreamConn: a packet-oriented network connection serving a single
+// remote address, which it reads packets from with Read and writes packets to with Write, so it's a StreamConn
+// as well, but one keeping packet boundaries. Any *net.UDPConn, *net.IPConn or *net.UnixConn satisfies it,
+// but serves a single remote address only if dialed.
+type Conn interface {
 	PacketConn
-	StreamConn
+
+	// Read reads a single packet from the remote address into b. A packet longer than b is truncated,
+	// silently or with an error, e.g. io.ErrShortBuffer, depending on the connection, and the rest of it
+	// is lost, so reading a packet in parts, e.g. with io.ReadFull, fails.
+	Read(b []byte) (n int, err error)
+	// RemoteAddr returns the remote network address.
+	RemoteAddr() net.Addr
+	// Write writes b as a single packet to the remote address.
+	Write(b []byte) (n int, err error)
 }
 
 // Deadline signals that a point in time has passed by closing a channel, which a select may wait on
@@ -109,8 +118,9 @@ type PacketConnWrapper interface {
 }
 
 // PacketListener is a generic network listener for packet-oriented protocols, similar to StreamListener,
-// accepting connections of type C.
-type PacketListener[C PacketConn] interface {
+// accepting connections of type C, each serving a single remote address. [PacketToStreamListener] makes
+// a StreamListener of it.
+type PacketListener[C Conn] interface {
 	// Accept waits for and returns the next connection to the listener.
 	Accept() (C, error)
 	// Close closes the listener. Any blocked Accept operations will be unblocked and return errors.
@@ -120,7 +130,7 @@ type PacketListener[C PacketConn] interface {
 }
 
 // PacketListenerWrapper can unwrap the underlying PacketListener of connections of type C.
-type PacketListenerWrapper[C PacketConn] interface {
+type PacketListenerWrapper[C Conn] interface {
 	Unwrap() PacketListener[C]
 }
 
@@ -152,7 +162,8 @@ type UDPConn interface {
 	WriteMsgUDPAddrPort(b []byte, oob []byte, addr netip.AddrPort) (n int, oobn int, err error)
 }
 
-// Interface guards of the types of the standard library
+// Interface guards
 var (
-	_ UDPConn = (*net.UDPConn)(nil)
+	_ StreamConn = Conn(nil)
+	_ UDPConn    = (*net.UDPConn)(nil)
 )
