@@ -84,35 +84,35 @@ func testSplitPayloadSizes(t *testing.T) {
 		minWBS, minSafeWBS, maxSafeWBS, maxWBS int // WBS - write buffer size
 	}
 	pairs := []pair{
-		{name: "StandardUnbufferedSyncPipe", ctor: func() (PacketConn, PacketConn) {
+		{name: "StandardUnbufferedSyncPipe", ctor: func(testing.TB) (PacketConn, PacketConn) {
 			c1, c2 := net.Pipe()
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		// The smallest packet over our pipes takes a byte, as they send nothing for an empty write, like TCP
-		{name: "HybridUnbufferedSyncPipe", ctor: func() (PacketConn, PacketConn) {
+		{name: "HybridUnbufferedSyncPipe", ctor: func(testing.TB) (PacketConn, PacketConn) {
 			c1, c2 := UnbufferedPipe(false)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: 1, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
-		{name: "HybridUnbufferedSemiPipe", ctor: func() (PacketConn, PacketConn) {
+		{name: "HybridUnbufferedSemiPipe", ctor: func(testing.TB) (PacketConn, PacketConn) {
 			c1, c2 := UnbufferedPipe(true)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: 1, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
-		{name: "HybridBufferedAsyncPipe", ctor: func() (PacketConn, PacketConn) {
+		{name: "HybridBufferedAsyncPipe", ctor: func(testing.TB) (PacketConn, PacketConn) {
 			c1, c2 := BufferedPipe(10)
 			return StreamToPacketConn(c1), StreamToPacketConn(c2)
 		}, minWBS: 1, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
 		// Unlike our pipes, trunks keep empty packets, as UDP does, and the splitter reads them as FromToPacketConns
-		{name: "HybridUnbufferedTrunk", ctor: func() (PacketConn, PacketConn) {
+		{name: "HybridUnbufferedTrunk", ctor: func(testing.TB) (PacketConn, PacketConn) {
 			return UnbufferedTrunk(nil, nil)
 		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
-		{name: "HybridBufferedTrunk", ctor: func() (PacketConn, PacketConn) {
+		{name: "HybridBufferedTrunk", ctor: func(testing.TB) (PacketConn, PacketConn) {
 			return BufferedTrunk(10, nil, nil)
 		}, minWBS: packetSizeMin, minSafeWBS: packetSizeMinSafe, maxSafeWBS: packetSizeMaxSafe, maxWBS: packetSizeMax},
-		{name: "LocalUDP4Socket", ctor: func() (PacketConn, PacketConn) {
-			return newLocalPacketListeners("udp4")
+		{name: "LocalUDP4Socket", ctor: func(tb testing.TB) (PacketConn, PacketConn) {
+			return newLocalPacketListeners(tb, "udp4")
 		}, minWBS: udp4PayloadSizeMin, minSafeWBS: udp4PayloadSizeMinSafe, maxSafeWBS: udp4PayloadSizeMaxSafe, maxWBS: udp4PayloadSizeMax},
-		{name: "LocalUDP6Socket", ctor: func() (PacketConn, PacketConn) {
-			return newLocalPacketListeners("udp6")
+		{name: "LocalUDP6Socket", ctor: func(tb testing.TB) (PacketConn, PacketConn) {
+			return newLocalPacketListeners(tb, "udp6")
 		}, minWBS: udp6PayloadSizeMin, minSafeWBS: udp6PayloadSizeMinSafe, maxSafeWBS: udp6PayloadSizeMaxSafe, maxWBS: udp6PayloadSizeMax},
 	}
 
@@ -147,7 +147,7 @@ func testSplitPayloadSizes(t *testing.T) {
 // packet has been read, or counted as dropped.
 func checkSplitPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
 	t.Helper()
-	pc1, pc2 := ctor()
+	pc1, pc2 := ctor(t)
 
 	timeout := 50 * time.Millisecond
 	chr, chw, done := make(chan int), make(chan int), make(chan struct{})

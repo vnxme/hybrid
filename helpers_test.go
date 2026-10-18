@@ -17,12 +17,63 @@ package hybrid
 import (
 	"errors"
 	"io"
+	"math"
 	"net"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"golang.org/x/net/nettest"
 )
+
+// Payload sizes to test packet connections with: the smallest, the smallest and the largest typical ones,
+// which fit any path and a standard Ethernet frame respectively, and the largest.
+//
+// The smallest payload is empty, as UDP datagrams with no payload are valid, e.g. for signaling and keep-alives.
+//
+// The smallest typical payload is 548 bytes over IPv4 and 1232 bytes over IPv6, and the largest typical one
+// is 1472 bytes over IPv4 and 1452 bytes over IPv6, given that:
+//   - every IPv4 host accepts datagrams of 576 bytes, and every IPv6 link has an MTU of at least 1280 bytes;
+//   - the standard Ethernet MTU is 1500 bytes;
+//   - the IP header takes 20 bytes over IPv4, without options, and 40 bytes over IPv6;
+//   - the UDP header takes 8 bytes.
+//
+// The largest payload is 65507 bytes over IPv4, as the total length of an IPv4 packet, header included,
+// is limited to 65535 bytes, but 65527 bytes over IPv6, as the payload length of IPv6 excludes its header.
+// IPv6 jumbograms aren't supported. Packet connections not over IP, e.g. trunks and pipes, are tested
+// with the typical sizes of IPv6, and with up to 65535 bytes.
+//
+// See also RFC 8085, Section 3.2.
+const (
+	ethStandardMTU           = 1500
+	ip4MinimumReassemblySize = 576 // Every IPv4 host accepts datagrams this large, while the minimum MTU is 68
+	ip6MinimumMTU            = 1280
+
+	ip4HeaderSize  = 20 // Without options
+	ip6HeaderSize  = 40
+	udpHeaderSize  = 8
+	udp4HeaderSize = ip4HeaderSize + udpHeaderSize
+	udp6HeaderSize = ip6HeaderSize + udpHeaderSize
+
+	packetSizeMin     = 0
+	packetSizeMinSafe = ip6MinimumMTU
+	packetSizeMaxSafe = ethStandardMTU
+	packetSizeMax     = math.MaxUint16
+
+	udp4PayloadSizeMin     = packetSizeMin
+	udp4PayloadSizeMinSafe = ip4MinimumReassemblySize - udp4HeaderSize
+	udp4PayloadSizeMaxSafe = ethStandardMTU - udp4HeaderSize
+	udp4PayloadSizeMax     = packetSizeMax - udp4HeaderSize
+
+	udp6PayloadSizeMin     = packetSizeMin
+	udp6PayloadSizeMinSafe = ip6MinimumMTU - udp6HeaderSize
+	udp6PayloadSizeMaxSafe = ethStandardMTU - udp6HeaderSize
+	udp6PayloadSizeMax     = packetSizeMax - udpHeaderSize
+)
+
+// packetConnPairCtor returns a pair of packet connections to test with, which may write to each other.
+type packetConnPairCtor func(tb testing.TB) (PacketConn, PacketConn)
 
 // closeConcurrently closes c from n goroutines at once, and returns how many of them have succeeded,
 // failing the test if any other has failed with an error other than net.ErrClosed.
@@ -74,6 +125,24 @@ func logfIf(tb testing.TB, condition bool, format string, args ...any) {
 	if condition {
 		tb.Logf(format, args...)
 	}
+}
+
+// newLocalPacketListeners listens twice on the loopback address of the given UDP network with ports chosen
+// by the system, skipping the test if the network isn't supported, e.g. udp6 without IPv6, and closes both
+// sockets once the test ends.
+func newLocalPacketListeners(tb testing.TB, network string) (PacketConn, PacketConn) {
+	tb.Helper()
+	skipIfNoUDP(tb)
+	var pcs [2]PacketConn
+	for i := range pcs {
+		pc, err := nettest.NewLocalPacketListener(network)
+		if err != nil {
+			tb.Skipf("NewLocalPacketListener(%q) = %v", network, err)
+		}
+		tb.Cleanup(func() { _ = pc.Close() })
+		pcs[i] = pc
+	}
+	return pcs[0], pcs[1]
 }
 
 // skipIfNoUDP skips the test or benchmark on the platforms without UDP sockets.
