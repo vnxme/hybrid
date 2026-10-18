@@ -32,6 +32,7 @@ import (
 
 // TestSplit runs the tests of splitters, of their split connections and of their fallback connections.
 func TestSplit(t *testing.T) {
+	t.Run(testSplitAcceptName, testSplitAccept)
 	t.Run(testSplitBlockedReadsName, testSplitBlockedReads)
 	t.Run(testSplitBlockedWritesName, testSplitBlockedWrites)
 	t.Run(testSplitCloseName, testSplitClose)
@@ -60,7 +61,6 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitReleaseWithoutFallbackName, testSplitReleaseWithoutFallback)
 	t.Run(testSplitShortBufferName, testSplitShortBuffer)
 	t.Run(testSplitStopName, testSplitStop)
-	t.Run(testSplitStreamListenerName, testSplitStreamListener)
 	t.Run(testSplitTrunkFlowsName, testSplitTrunkFlows)
 	t.Run(testSplitUDPSocketFlowsName, testSplitUDPSocketFlows)
 	t.Run(testSplitUDPTruncatedName, testSplitUDPTruncated)
@@ -211,10 +211,10 @@ func checkSplitPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 		}()
 
 		for {
-			conn, err := ln.Accept()
+			conn, err := ln.AcceptSplit()
 			if err != nil {
 				if !errors.Is(err, net.ErrClosed) {
-					logfIf(t, testPacketSplitDebug, "%v: ln.Accept() = %v", me, err)
+					logfIf(t, testPacketSplitDebug, "%v: ln.AcceptSplit() = %v", me, err)
 				}
 				break
 			}
@@ -339,17 +339,17 @@ func acceptSplitConn(t *testing.T, ln SplitListener) SplitConn {
 	}
 	ch := make(chan result, 1)
 	go func() {
-		c, err := ln.Accept()
+		c, err := ln.AcceptSplit()
 		ch <- result{c, err}
 	}()
 	select {
 	case r := <-ch:
 		if r.err != nil {
-			t.Fatalf("Accept() = %v, want nil", r.err)
+			t.Fatalf("AcceptSplit() = %v, want nil", r.err)
 		}
 		return r.c
 	case <-time.After(time.Second):
-		t.Fatalf("Accept() hasn't returned")
+		t.Fatalf("AcceptSplit() hasn't returned")
 		return nil
 	}
 }
@@ -691,15 +691,12 @@ func testSplitUnwrapUDP(t *testing.T) {
 	}
 }
 
-// testSplitStreamListener ensures a splitter wrapped with PacketToStreamListener accepts its split connections
-// as is, which read and write the packets of their flows as StreamConns, and unwraps to the splitter.
-func testSplitStreamListener(t *testing.T) {
+// testSplitAccept ensures Accept returns split connections as is, which read and write the packets of their flows
+// as StreamConns, and a nil StreamConn once the splitter stops.
+func testSplitAccept(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := splitTrunk(t, nil)
-	sl := PacketToStreamListener(ln) // Infers SplitConn
-	if sl.Addr() != ln.Addr() {
-		t.Errorf("Addr() = %v, want %v", sl.Addr(), ln.Addr())
-	}
+	var sl StreamListener = ln
 
 	writeFrom(t, client, a, "a1")
 	conn, err := sl.Accept()
@@ -730,14 +727,14 @@ func testSplitStreamListener(t *testing.T) {
 		t.Errorf("ReadFromTo() = %q to %v, %v, want %q to %s, nil", b[:n], dst, err, "x", a)
 	}
 
-	if got := sl.(Wrapper[PacketListener[SplitConn]]).Unwrap(); got != ln {
-		t.Errorf("Unwrap() = %v, want the splitter", got)
-	}
 	if err := sl.Close(); err != nil {
 		t.Errorf("Close() = %v, want nil", err)
 	}
-	if _, err := sl.Accept(); !errors.Is(err, net.ErrClosed) {
-		t.Errorf("Accept() after Close() = %v, want net.ErrClosed", err)
+	if c, err := sl.Accept(); !errors.Is(err, net.ErrClosed) || c != nil {
+		t.Errorf("Accept() after Close() = %#v, %v, want nil, net.ErrClosed", c, err)
+	}
+	if c, err := ln.AcceptSplit(); !errors.Is(err, net.ErrClosed) || c != nil {
+		t.Errorf("AcceptSplit() after Close() = %#v, %v, want nil, net.ErrClosed", c, err)
 	}
 }
 
@@ -809,6 +806,7 @@ func testSplitUDPSocketFlows(t *testing.T) {
 }
 
 const (
+	testSplitAcceptName                    = "Accept"
 	testSplitBlockedReadsName              = "BlockedReads"
 	testSplitBlockedWritesName             = "BlockedWrites"
 	testSplitCloseName                     = "Close"
@@ -837,7 +835,6 @@ const (
 	testSplitReleaseWithoutFallbackName    = "ReleaseWithoutFallback"
 	testSplitShortBufferName               = "ShortBuffer"
 	testSplitStopName                      = "Stop"
-	testSplitStreamListenerName            = "StreamListener"
 	testSplitTrunkFlowsName                = "TrunkFlows"
 	testSplitUDPSocketFlowsName            = "UDPSocketFlows"
 	testSplitUDPTruncatedName              = "UDPTruncated"

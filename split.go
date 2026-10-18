@@ -191,23 +191,26 @@ type SplitConn interface {
 // SplitListener is a listener of a splitter, accepting split connections, with its fallback connection
 // and statistics.
 type SplitListener interface {
-	// Accept returns the split connection of the next new flow, Addr returns the local address
-	// of the underlying PacketConn, and Close closes it and stops the splitter.
-	PacketListener[SplitConn]
+	// Accept returns the split connection of the next new flow as a StreamConn, as AcceptSplit does,
+	// Addr returns the local address of the underlying PacketConn, and Close closes it and stops the splitter.
+	PacketListener
+
+	// Stop stops the splitter like Close does, but leaves the underlying PacketConn open, with no deadlines,
+	// for the caller to take it over, e.g. with Unwrap.
+	Stopper
 
 	// Unwrap returns the underlying PacketConn as given to Split, which the splitter reads from and writes to
 	// until it's stopped by Close or Stop.
 	Wrapper[PacketConn]
+
+	// AcceptSplit returns the split connection of the next new flow.
+	AcceptSplit() (SplitConn, error)
 
 	// Fallback returns the fallback connection of the splitter, or nil if it has none.
 	Fallback() FromToPacketConn
 
 	// Stats returns the numbers of packets dropped so far, by reason.
 	Stats() SplitStats
-
-	// Stop stops the splitter like Close does, but leaves the underlying PacketConn open, with no deadlines,
-	// for the caller to take it over, e.g. with Unwrap.
-	Stopper
 }
 
 // SplitStats counts the packets a splitter has dropped, by reason.
@@ -308,8 +311,11 @@ func Split(pc PacketConn, config *SplitConfig) SplitListener {
 	return s
 }
 
-// Accept waits for and returns the split connection of the next new flow, or fails once the splitter stops.
-func (s *splitter) Accept() (SplitConn, error) {
+// Accept waits for and returns the split connection of the next new flow as a StreamConn, as AcceptSplit does.
+func (s *splitter) Accept() (StreamConn, error) { return s.AcceptSplit() }
+
+// AcceptSplit waits for and returns the split connection of the next new flow, or fails once the splitter stops.
+func (s *splitter) AcceptSplit() (SplitConn, error) {
 	if isClosedChan(s.done) {
 		return nil, errSplitClosed
 	}

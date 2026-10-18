@@ -430,30 +430,6 @@ func (w *packetToStreamConn) RemoteAddr() net.Addr { return w.remote }
 // Unwrap returns the underlying PacketConn.
 func (w *packetToStreamConn) Unwrap() PacketConn { return w.PacketConn }
 
-// packetToStreamListener is a Wrapper[PacketListener[C]] that implements StreamListener.
-type packetToStreamListener[C Conn] struct {
-	PacketListener[C]
-}
-
-// PacketToStreamListener wraps pl as a StreamListener, accepting each connection as is,
-// since a Conn is a StreamConn.
-func PacketToStreamListener[C Conn](pl PacketListener[C]) StreamListener {
-	return &packetToStreamListener[C]{pl}
-}
-
-// Accept accepts the next connection of the underlying PacketListener as a StreamConn,
-// which is nil on error rather than a nil C in a non-nil StreamConn.
-func (w *packetToStreamListener[C]) Accept() (StreamConn, error) {
-	c, err := w.PacketListener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
-// Unwrap returns the underlying PacketListener.
-func (w *packetToStreamListener[C]) Unwrap() PacketListener[C] { return w.PacketListener }
-
 // streamToPacketConn is a Wrapper[StreamConn] that implements PacketConn.
 type streamToPacketConn struct {
 	StreamConn
@@ -502,15 +478,11 @@ var (
 	_ StreamConn = (*idleTimeoutStreamConn)(nil)
 	_ StreamConn = (*packetToStreamConn)(nil)
 
-	_ StreamListener = (*packetToStreamListener[Conn])(nil)
-
 	_ Wrapper[PacketConn] = (*fakeAddressPacketConn)(nil)
 	_ Wrapper[PacketConn] = (*fakeClosePacketConn)(nil)
 	_ Wrapper[PacketConn] = (*idleTimeoutPacketConn)(nil)
 	_ Wrapper[PacketConn] = (*packetToFromToPacketConn)(nil)
 	_ Wrapper[PacketConn] = (*packetToStreamConn)(nil)
-
-	_ Wrapper[PacketListener[Conn]] = (*packetToStreamListener[Conn])(nil)
 
 	_ Wrapper[StreamConn] = (*fakeAddressStreamConn)(nil)
 	_ Wrapper[StreamConn] = (*fakeCloseStreamConn)(nil)
