@@ -861,7 +861,7 @@ func testPipeZeroLength(t *testing.T, ctor pipeCtor) {
 		t.Errorf("c2.Read() = %d, %v, want 0, nil", n, err)
 	}
 
-	// Like on Unix, a deadline fails a zero-length write but not a zero-length read
+	// As on Unix, a deadline fails a zero-length write but not a zero-length read
 	_ = c1.SetDeadline(time.Now().Add(-time.Second))
 	if _, err := c1.Write(nil); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("c1.Write() = %v, want os.ErrDeadlineExceeded", err)

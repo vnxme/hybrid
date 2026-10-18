@@ -37,7 +37,7 @@ import (
 // A pipe is a pair of in-memory StreamConn ends, connected to each other, for testing stream-oriented code
 // without sockets. It's deliberately based on net.Pipe, as a reference implementation: its code is derived
 // from that of net.Pipe, and its tests run against net.Pipe as well, so that a pipe differs from net.Pipe
-// only where it says so. Like with net.Pipe, each end receives the chunks written by the other end over
+// only where it says so. As with net.Pipe, each end receives the chunks written by the other end over
 // a channel, acknowledges the bytes it takes over another one unless the pipe is buffered, and has a done
 // channel, closed by Close, which the other end waits on too.
 //
@@ -294,9 +294,9 @@ func (p *pipe) write(b []byte) (n int, err error) {
 		return 0, nil
 	}
 
-	p.wrMu.Lock() // Ensure entirety of b is written together
+	p.wrMu.Lock() // Ensure the entirety of b is written together
 	defer p.wrMu.Unlock()
-	// An async pipe requires copy on write, as Write returns before b is read
+	// An async pipe requires copying on write, as Write returns before b is read
 	var ref *[]byte // Reference to the pooled buffer of b, if any
 	if cap(p.wrTx) > 0 {
 		src := b

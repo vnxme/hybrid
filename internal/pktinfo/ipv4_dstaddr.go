@@ -69,7 +69,7 @@ func marshal4(oob []byte, src netip.Addr, _ int) int {
 	return cMsgIPv4DestAddrPayload
 }
 
-// Parse searches packet info control messages in the given OOB buffer.
+// Parse searches the given OOB buffer for packet info control messages.
 // It returns a destination address, a local interface index, and true if a message has been found.
 // It skips a message too short for packet info, e.g. as truncation has shortened it.
 // An IPv4 destination address comes unmapped, even in IPv6 packet info on a dual-stack socket.

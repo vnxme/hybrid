@@ -31,8 +31,7 @@ import (
 // should be given the connection before it's wrapped, and a method unrelated to the aspect changed, e.g.
 // SyscallConn, may still be reached through Unwrap.
 
-// fakeAddressPacketConn is a PacketConn wrapper that has
-// customizable local and remote addresses.
+// fakeAddressPacketConn is a Wrapper[PacketConn] with customizable local and remote addresses.
 type fakeAddressPacketConn struct {
 	PacketConn
 
@@ -40,13 +39,11 @@ type fakeAddressPacketConn struct {
 	remote net.Addr
 }
 
-// FakeAddressPacketConn returns a PacketConn implementation that shadows
-// local and remote addresses.
+// FakeAddressPacketConn returns a PacketConn implementation that shadows local and remote addresses.
 //
-// Unless the local address is nil, it is returned by LocalAddr instead of
-// the native local address. Similarly, unless the remote address is nil,
-// it is returned by ReadFrom instead of the address a packet comes from,
-// and WriteTo sends every packet to it, whatever address it is given.
+// Unless the local address is nil, it is returned by LocalAddr instead of the native local address.
+// Similarly, unless the remote address is nil, it is returned by ReadFrom instead of the address a packet
+// comes from, and WriteTo sends every packet to it, whatever address it is given.
 func FakeAddressPacketConn(pc PacketConn, local, remote net.Addr) PacketConn {
 	return &fakeAddressPacketConn{pc, local, remote}
 }
@@ -80,8 +77,7 @@ func (w *fakeAddressPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 // Unwrap returns the underlying PacketConn.
 func (w *fakeAddressPacketConn) Unwrap() PacketConn { return w.PacketConn }
 
-// fakeAddressStreamConn is a StreamConn wrapper that has
-// customizable local and remote addresses.
+// fakeAddressStreamConn is a Wrapper[StreamConn] with customizable local and remote addresses.
 type fakeAddressStreamConn struct {
 	StreamConn
 
@@ -89,12 +85,10 @@ type fakeAddressStreamConn struct {
 	remote net.Addr
 }
 
-// FakeAddressStreamConn returns a StreamConn implementation that shadows
-// local and remote addresses.
+// FakeAddressStreamConn returns a StreamConn implementation that shadows local and remote addresses.
 //
-// Unless the local address is nil, it is returned by LocalAddr instead of
-// the native local address. Similarly, unless the remote address is nil,
-// it is returned by RemoteAddr instead of the native remote address.
+// Unless the local address is nil, it is returned by LocalAddr instead of the native local address.
+// Similarly, unless the remote address is nil, it is returned by RemoteAddr instead of the native remote address.
 func FakeAddressStreamConn(sc StreamConn, local, remote net.Addr) StreamConn {
 	return &fakeAddressStreamConn{sc, local, remote}
 }
@@ -118,7 +112,7 @@ func (w *fakeAddressStreamConn) RemoteAddr() net.Addr {
 // Unwrap returns the underlying StreamConn.
 func (w *fakeAddressStreamConn) Unwrap() StreamConn { return w.StreamConn }
 
-// fakeClosePacketConn is a PacketConn wrapper that has a customizable Close.
+// fakeClosePacketConn is a Wrapper[PacketConn] with a customizable Close.
 type fakeClosePacketConn struct {
 	PacketConn
 
@@ -146,7 +140,7 @@ func (w *fakeClosePacketConn) Close() error {
 // Unwrap returns the underlying PacketConn.
 func (w *fakeClosePacketConn) Unwrap() PacketConn { return w.PacketConn }
 
-// fakeCloseStreamConn is a StreamConn wrapper that has a customizable Close.
+// fakeCloseStreamConn is a Wrapper[StreamConn] with a customizable Close.
 type fakeCloseStreamConn struct {
 	StreamConn
 
@@ -230,8 +224,7 @@ func (t *idleTimer) stop() bool {
 	return true
 }
 
-// idleTimeoutPacketConn is a PacketConn wrapper that closes
-// the underlying connection when its idle timeout has occurred.
+// idleTimeoutPacketConn is a Wrapper[PacketConn] that closes the underlying connection once idle for its timeout.
 type idleTimeoutPacketConn struct {
 	PacketConn
 
@@ -244,9 +237,9 @@ type idleTimeoutPacketConn struct {
 // The timeout is ignored if it's zero or negative. The idle time restarts on each successful
 // read and write operation, i.e. when n > 0 or err == nil.
 //
-// The idle time starts when the underlying connection is wrapped, i.e. before this function
-// returns, and the timer stops for good once Stop is called, which leaves the underlying connection
-// open, or the underlying connection is closed by Close or by the timer itself.
+// The idle time starts when the underlying connection is wrapped, i.e. before this function returns,
+// and the timer stops for good once Stop is called, leaving the underlying connection open, or once
+// the connection is closed, by Close or by the timer.
 func IdleTimeoutPacketConn(pc PacketConn, timeout time.Duration) PacketConn {
 	w := &idleTimeoutPacketConn{PacketConn: pc}
 	w.idle.init(timeout, pc.Close)
@@ -289,8 +282,7 @@ func (w *idleTimeoutPacketConn) Stop() error {
 // Unwrap returns the underlying PacketConn, which the timer closes once idle, unless stopped.
 func (w *idleTimeoutPacketConn) Unwrap() PacketConn { return w.PacketConn }
 
-// idleTimeoutStreamConn is a StreamConn wrapper that closes
-// the underlying connection when its idle timeout has occurred.
+// idleTimeoutStreamConn is a Wrapper[StreamConn] that closes the underlying connection once idle for its timeout.
 type idleTimeoutStreamConn struct {
 	StreamConn
 
@@ -303,9 +295,9 @@ type idleTimeoutStreamConn struct {
 // The timeout is ignored if it's zero or negative. The idle time restarts on each successful
 // read and write operation, i.e. when n > 0 or err == nil.
 //
-// The idle time starts when the underlying connection is wrapped, i.e. before this function
-// returns, and the timer stops for good once Stop is called, which leaves the underlying connection
-// open, or the underlying connection is closed by Close or by the timer itself.
+// The idle time starts when the underlying connection is wrapped, i.e. before this function returns,
+// and the timer stops for good once Stop is called, leaving the underlying connection open, or once
+// the connection is closed, by Close or by the timer.
 func IdleTimeoutStreamConn(sc StreamConn, timeout time.Duration) StreamConn {
 	w := &idleTimeoutStreamConn{StreamConn: sc}
 	w.idle.init(timeout, sc.Close)
@@ -353,14 +345,12 @@ type packetToFromToPacketConn struct {
 	PacketConn
 }
 
-// PacketToFromToPacketConn returns a FromToPacketConn implementation
-// based on the underlying PacketConn.
+// PacketToFromToPacketConn returns a FromToPacketConn implementation based on the underlying PacketConn.
 //
-// If the given PacketConn satisfies FromToPacketConn, no wrapping is done at all.
-// If tryPacketInfoUDP is true, the PacketConn implements UDPConn, and system calls succeed,
-// a FromToUDPConn made by [PacketInfoUDPConn] is returned. Otherwise, this function creates a simple wrapper
-// that returns zero values for the destination address and the local interface index
-// on read, and ignores any values assigned to these parameters on write.
+// If the given PacketConn satisfies FromToPacketConn, no wrapping is done at all. If tryPacketInfoUDP is true,
+// the PacketConn implements UDPConn, and system calls succeed, a FromToUDPConn made by [PacketInfoUDPConn]
+// is returned. Otherwise, this function creates a simple wrapper that returns zero values for the destination
+// address and the local interface index on read, and ignores any values assigned to these parameters on write.
 func PacketToFromToPacketConn(pc PacketConn, tryPacketInfoUDP bool) FromToPacketConn {
 	if fpc, ok := pc.(FromToPacketConn); ok {
 		return fpc
@@ -401,14 +391,14 @@ type packetToStreamConn struct {
 	remote net.Addr
 }
 
-// PacketToStreamConn returns a StreamConn implementation based on
-// the underlying PacketConn with the given remote address.
+// PacketToStreamConn returns a StreamConn implementation based on the underlying PacketConn
+// with the given remote address.
 //
-// The pre-defined remote address is used by the RemoteAddr and Write methods.
-// The Read method is unsafe because no filters apply to the remote address.
-// Each Read reads a single packet, which is truncated if longer than the buffer,
-// silently or with an error, e.g. io.ErrShortBuffer, depending on the underlying
-// PacketConn, so that reading a packet in parts, e.g. with io.ReadFull, fails.
+// The remote address given is returned by RemoteAddr, and Write sends every packet to it,
+// while Read accepts a packet from any address, as no filter applies to the remote address.
+// Each Read reads a single packet, which is truncated if longer than the buffer, silently or with
+// an error, e.g. io.ErrShortBuffer, depending on the underlying PacketConn, so that reading a packet
+// in parts, e.g. with io.ReadFull, fails.
 func PacketToStreamConn(pc PacketConn, remote net.Addr) StreamConn {
 	return &packetToStreamConn{pc, remote}
 }
@@ -435,13 +425,12 @@ type streamToPacketConn struct {
 	StreamConn
 }
 
-// StreamToPacketConn returns a PacketConn implementation based on
-// the underlying StreamConn.
+// StreamToPacketConn returns a PacketConn implementation based on the underlying StreamConn.
 //
-// The underlying remote address is returned by the ReadFrom method. The WriteTo method
-// is unsafe because the remote address argument is completely ignored. A packet read
-// is what a single Read returns, so packets keep their boundaries only if the StreamConn
-// keeps those of writes, as a pipe does with a buffer as long as any write, and TCP doesn't.
+// ReadFrom returns the remote address of the StreamConn, while WriteTo writes to it whatever address
+// it's given, as the address argument is ignored. A packet read is what a single Read returns, so packets
+// keep their boundaries only if the StreamConn keeps those of writes, as a pipe does with a buffer as long
+// as any write, and TCP doesn't.
 func StreamToPacketConn(sc StreamConn) PacketConn {
 	return &streamToPacketConn{sc}
 }

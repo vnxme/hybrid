@@ -58,10 +58,10 @@ func parse6(data []byte) (dst netip.Addr, idx int, ok bool) {
 	return dst, int(info.Ifindex), true
 }
 
-// isLocalIP6 checks if the given netip.Addr is a link-local unicast,
+// isLocalIP6 reports whether x is a link-local unicast,
 // interface-local multicast or link-local multicast IPv6 address.
 //
-// Note: x is assumed to be a valid IPv6, i.e. no extra checks are done.
+// Note: x is assumed to be a valid IPv6 address, i.e. no extra checks are done.
 func isLocalIP6(x netip.Addr) bool {
 	a16 := x.As16()
 	s := uint16(a16[0])<<8 | uint16(a16[1])

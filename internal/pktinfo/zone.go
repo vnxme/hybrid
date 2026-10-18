@@ -41,7 +41,7 @@ const (
 // An ipv6ZoneCache resolves IPv6 zones, i.e. the names and the indices of the network interfaces,
 // without listing the interfaces each time. Its list is read without locking, and replaced by
 // a single goroutine at a time once it's too old. Multiple names sharing an index are managed
-// on a first-come first-served basis.
+// on a first-come, first-served basis.
 type ipv6ZoneCache struct {
 	current atomic.Pointer[zoneList]
 	list    func() ([]net.Interface, error) // Lists the interfaces, e.g. net.Interfaces

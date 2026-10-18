@@ -79,7 +79,7 @@ func (s *splitter) readLoop() {
 
 			// If the underlying FromToPacketConn has unexpectedly closed while
 			// the splitter's done channel remains open, spawn a closing goroutine.
-			// Close() waits until readLoop() returns, so it can't be done in sync.
+			// Close() waits until readLoop() returns, so it can't be done synchronously.
 			if !isClosedChan(s.done) {
 				go func() {
 					_ = s.Close()

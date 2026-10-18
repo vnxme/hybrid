@@ -465,7 +465,7 @@ var (
 	errSplitDeadlineExceeded = os.ErrDeadlineExceeded
 	errSplitMissingAddress   = errors.New("hybrid: missing address") // Reported by writing to the fallback connection with no remote address
 	errSplitShortBuffer      = io.ErrShortBuffer                     // Reported by reading a packet longer than the read buffer
-	errSplitWriteToConnected = net.ErrWriteToConnected               // Reported by writing to another address than that of the flow
+	errSplitWriteToConnected = net.ErrWriteToConnected               // Reported by writing to an address other than that of the flow
 )
 
 // Interface guards

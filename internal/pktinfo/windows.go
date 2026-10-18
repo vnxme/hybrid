@@ -71,7 +71,7 @@ func setPacketInfo4(info *cMsgIPv4PacketInfo, src [4]byte, idx int) {
 	info.Ifindex = uint32(idx) //nolint:gosec // G115
 }
 
-// IsV6Only returns true if IPV6_V6ONLY socket option is enabled.
+// IsV6Only reports whether the IPV6_V6ONLY socket option is enabled.
 func IsV6Only(c syscall.RawConn) (bool, error) {
 	return rawConnGetSockOptBool(c, windows.IPPROTO_IPV6, windows.IPV6_V6ONLY)
 }

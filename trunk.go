@@ -105,23 +105,21 @@ type trunk struct {
 	wrMu sync.Mutex // Serialize write operations
 }
 
-// BufferedTrunk creates an in-memory, full duplex packet-oriented network connection
-// that is buffered and asynchronous; both ends implement the FromToPacketConn interface.
-// Reads on one end aren't matched with writes on the other: a write returns once its
-// packet has been queued, unless the queue already holds queueSize packets, in which
-// case it blocks. Packets are copied internally, so the write buffer may be reused
-// once a write returns. When the remote end is closed, reads return net.ErrClosed
-// once all the packets queued have been read, and writes return net.ErrClosed.
+// BufferedTrunk creates an in-memory, full duplex packet-oriented network connection that is buffered
+// and asynchronous; both ends implement the FromToPacketConn interface. Reads on one end aren't matched
+// with writes on the other: a write returns once its packet has been queued, unless the queue already
+// holds queueSize packets, in which case it blocks. Packets are copied internally, so the write buffer
+// may be reused once a write returns. When the remote end is closed, reads return net.ErrClosed once all
+// the packets queued have been read, and writes return net.ErrClosed.
 //
-// The ends have local addresses addr1 and addr2 respectively, or a generic
-// trunk address if nil. A local address is returned by LocalAddr, used as
-// the source address of a packet written without one, e.g. by WriteTo, and
-// as the destination address of a packet read that was written without one.
-// A packet is delivered to the other end whatever its destination address is,
-// so that multiple packet flows may share a trunk, told apart by addresses.
+// The ends have local addresses addr1 and addr2 respectively, or a generic trunk address if nil. A local
+// address is returned by LocalAddr, used as the source address of a packet written without one, e.g. by
+// WriteTo, and as the destination address of a packet read that was written without one. A packet is
+// delivered to the other end whatever its destination address is, so that multiple packet flows may share
+// a trunk, told apart by addresses.
 //
-// A packet longer than the read buffer is truncated: a read returns the bytes
-// copied along with io.ErrShortBuffer, and the rest of the packet is dropped.
+// A packet longer than the read buffer is truncated: a read returns the bytes copied along with
+// io.ErrShortBuffer, and the rest of the packet is dropped.
 //
 // BufferedTrunk panics if queueSize isn't positive.
 func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (FromToPacketConn, FromToPacketConn) {
@@ -131,12 +129,11 @@ func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (FromToPacketConn, From
 	return newTrunk(queueSize, addr1, addr2)
 }
 
-// UnbufferedTrunk creates an in-memory, full duplex packet-oriented network connection
-// that is unbuffered and synchronous; both ends implement the FromToPacketConn interface.
-// Reads on one end are matched with writes on the other, copying packets directly
-// between the two; there is no internal buffering. A write returns once its packet
-// has been copied by a read, so the write buffer may be reused after that. When the
-// remote end is closed, reads and writes return net.ErrClosed. Local addresses and packet truncation
+// UnbufferedTrunk creates an in-memory, full duplex packet-oriented network connection that is unbuffered
+// and synchronous; both ends implement the FromToPacketConn interface. Reads on one end are matched with
+// writes on the other, copying packets directly between the two; there is no internal buffering. A write
+// returns once its packet has been copied by a read, so the write buffer may be reused after that. When
+// the remote end is closed, reads and writes return net.ErrClosed. Local addresses and packet truncation
 // are handled the same way as by [BufferedTrunk].
 func UnbufferedTrunk(addr1, addr2 net.Addr) (FromToPacketConn, FromToPacketConn) {
 	return newTrunk(0, addr1, addr2)
@@ -233,7 +230,7 @@ func (tr *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 		}
 	}
 
-	if pkt.dst == nil { // A packet written without a destination address is destined to this end
+	if pkt.dst == nil { // A packet written without a destination address is destined for this end
 		pkt.dst = cloneAddr(tr.addr)
 	}
 	nr := copy(b, pkt.buf)
@@ -242,7 +239,7 @@ func (tr *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 	if cap(tr.rdRx) == 0 { // An unbuffered trunk lets remote write return only once the packet is copied
 		tr.rdTx <- struct{}{}
 	}
-	if nr < len(pkt.buf) { // Unread bytes are dropped, i.e. a trunk doesn't support partial read
+	if nr < len(pkt.buf) { // Unread bytes are dropped, i.e. a trunk doesn't support partial reads
 		return nr, pkt.src, pkt.dst, pkt.idx, errTrunkShortBuffer
 	}
 	return nr, pkt.src, pkt.dst, pkt.idx, nil
@@ -297,7 +294,7 @@ func (tr *trunk) write(b []byte, dst, src net.Addr, idx int) (int, error) {
 	}
 	// Copy addresses, as the caller may modify them once write returns, and so may remote read
 	pkt := trunkPacket{buf: b, src: cloneAddr(src), dst: cloneAddr(dst), idx: idx}
-	if cap(tr.wrTx) > 0 { // An async buffered trunk requires copy on write
+	if cap(tr.wrTx) > 0 { // An async buffered trunk requires copying on write
 		pkt.buf, pkt.ref = getBuf(len(b))
 		copy(pkt.buf, b)
 	}

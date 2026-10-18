@@ -61,11 +61,12 @@ func BenchmarkIsLocalIP6(b *testing.B) {
 }
 
 // TestMarshalParse6 ensures IPv6 packet info, which has the same layout for sending and receiving,
-// is parsed as it has been marshalled, except that a mapped IPv4 address is parsed unmapped. IPv4 packet info isn't parsed, as it has different meanings
-// or even types for sending and receiving, e.g. on Linux, in_pktinfo carries the source address
-// in ipi_spec_dst for sending, but the destination one in ipi_addr for receiving, while BSD sends
-// IP_SENDSRCADDR with no interface index. Real IPv4 control messages are covered by
-// TestControlUDPPacketInfo and TestPacketInfoUDPConnInterfaces in the hybrid package.
+// is parsed as it has been marshaled, except that a mapped IPv4 address is parsed unmapped.
+// IPv4 packet info isn't parsed, as it has different meanings or even types for sending and receiving,
+// e.g. on Linux, in_pktinfo carries the source address in ipi_spec_dst for sending, but the destination
+// one in ipi_addr for receiving, while BSD sends IP_SENDSRCADDR with no interface index. Real IPv4
+// control messages are covered by TestControlUDPPacketInfo and TestPacketInfoUDPConnInterfaces
+// in the hybrid package.
 func TestMarshalParse6(t *testing.T) {
 	for _, test := range []struct {
 		src  netip.Addr

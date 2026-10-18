@@ -25,7 +25,7 @@ import (
 const bufPoolMaxBits = 16
 
 var (
-	// bufPools hold reusable buffers by size class, see bufClass.
+	// bufPools holds reusable buffers by size class, see bufClass.
 	bufPools [2*bufPoolMaxBits + 1]sync.Pool
 
 	// bufPoison makes putBuf clear buffers, so that tests detect any use of a buffer after its return.

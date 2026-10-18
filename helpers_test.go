@@ -68,11 +68,11 @@ func listenLoopbackPacketInfoUDP(tb testing.TB) (*net.UDPConn, FromToUDPConn) {
 	return pc, c
 }
 
-// logfIf calls [testing.T].Logf() if condition is true.
-func logfIf(t *testing.T, condition bool, format string, args ...any) {
-	t.Helper()
+// logfIf calls [testing.TB.Logf] if condition is true.
+func logfIf(tb testing.TB, condition bool, format string, args ...any) {
+	tb.Helper()
 	if condition {
-		t.Logf(format, args...)
+		tb.Logf(format, args...)
 	}
 }
 

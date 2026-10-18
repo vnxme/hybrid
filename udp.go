@@ -30,7 +30,7 @@ import (
 //
 // A UDP socket bound to an unspecified address, i.e. 0.0.0.0 or ::, receives the packets sent to any address
 // of the host, while ReadFrom tells only the address a packet comes from, and WriteTo leaves the address a reply
-// goes from to the system. So a reply may go from another address than the one its client sent to, e.g. on a host
+// goes from to the system. So a reply may go from an address other than the one its client sent to, e.g. on a host
 // with several addresses, and the client drops it. Packet info closes the gap: once it's enabled on a socket, each
 // packet read comes with a control message carrying the local address it came to and the index of the interface
 // it came through, and a packet written with such a message goes from the address and through the interface given.
@@ -64,10 +64,10 @@ type packetInfoUDPConn struct {
 	UDPConn
 
 	rdOOBSize atomic.Int32 // Size of control message buffers for reading, if grown from pktinfo.BufferSize
-	port      uint16       // Contains the local port number
+	port      uint16       // Local port, which every packet read is reported as sent to
 
-	v4Only bool // Equals true if no IPv6 could be expected
-	v6Only bool // Equals true if no IPv4 could be expected
+	v4Only bool // Set if the socket accepts no IPv6
+	v6Only bool // Set if the socket accepts no IPv4
 }
 
 // NeedPacketInfoUDPConn reports whether conn is bound to an unspecified address, so that the local
@@ -164,14 +164,14 @@ func (u *packetInfoUDPConn) network() string {
 	return "udp"
 }
 
-// ReadFromTo wraps around ReadFromToUDPAddrPort. Like [net.UDPConn.ReadFrom], it returns nil
+// ReadFromTo calls ReadFromToUDPAddrPort. Like [net.UDPConn.ReadFrom], it returns nil
 // instead of a nil *net.UDPAddr for an address it doesn't know, so that it compares equal to nil.
 func (u *packetInfoUDPConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, src, dst, idx, err := u.ReadFromToUDPAddrPort(b)
 	return n, addrPortToAddr(src), addrPortToAddr(dst), idx, err
 }
 
-// ReadFromToUDP wraps around ReadFromToUDPAddrPort.
+// ReadFromToUDP calls ReadFromToUDPAddrPort.
 func (u *packetInfoUDPConn) ReadFromToUDP(b []byte) (int, *net.UDPAddr, *net.UDPAddr, int, error) {
 	n, src, dst, idx, err := u.ReadFromToUDPAddrPort(b)
 	return n, addrPortToUDPAddr(src), addrPortToUDPAddr(dst), idx, err
@@ -208,7 +208,7 @@ func (u *packetInfoUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort
 	return n, src, netip.AddrPort{}, 0, nil
 }
 
-// WriteToFrom wraps around WriteToFromUDP. It fails with [syscall.EINVAL] unless dst is a *net.UDPAddr,
+// WriteToFrom calls WriteToFromUDP. It fails with [syscall.EINVAL] unless dst is a *net.UDPAddr,
 // and src is nil or a *net.UDPAddr.
 func (u *packetInfoUDPConn) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	dstAddr, dstOk := dst.(*net.UDPAddr)
@@ -224,12 +224,12 @@ func (u *packetInfoUDPConn) WriteToFrom(b []byte, dst, src net.Addr, idx int) (i
 	return u.WriteToFromUDP(b, dstAddr, srcAddr, idx)
 }
 
-// WriteToFromUDP wraps around WriteToFromUDPAddrPort.
+// WriteToFromUDP calls WriteToFromUDPAddrPort.
 func (u *packetInfoUDPConn) WriteToFromUDP(b []byte, dst, src *net.UDPAddr, idx int) (int, error) {
 	return u.WriteToFromUDPAddrPort(b, dst.AddrPort(), src.AddrPort(), idx)
 }
 
-// WriteToFromUDPAddrPort calls a platform-specific packet info marshaller to fill a pooled control
+// WriteToFromUDPAddrPort calls a platform-specific packet info marshaler to fill a pooled control
 // message buffer before it proceeds to [net.UDPConn.WriteMsgUDPAddrPort], or, if src is invalid and idx
 // is zero, it calls [net.UDPConn.WriteToUDPAddrPort]. On Windows, it ignores idx if src is invalid, as the system
 // doesn't choose a source address for packet info. It fails with [syscall.EINVAL] if idx is negative

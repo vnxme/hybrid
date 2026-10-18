@@ -88,7 +88,7 @@ func (sc *splitConnBase) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-// closeLocal closes localDone, and reports whether it's done so, rather than found it closed.
+// closeLocal closes localDone, and reports whether it has closed it, rather than found it closed.
 func (sc *splitConnBase) closeLocal() (closed bool) {
 	sc.once.Do(func() {
 		close(sc.localDone)

@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-// TestWrapper runs the tests of the wrappers of connections and listeners.
+// TestWrapper runs the tests of the wrappers of connections.
 func TestWrapper(t *testing.T) {
 	t.Run(testWrapperFakeAddressPacketConnName, testWrapperFakeAddressPacketConn)
 	t.Run(testWrapperFakeAddressStreamConnName, testWrapperFakeAddressStreamConn)

@@ -120,7 +120,7 @@ func (s *splitter) write(pkt *splitPacket) bool {
 	case errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe):
 		// If the underlying FromToPacketConn has unexpectedly closed while
 		// the splitter's done channel remains open, spawn a closing goroutine.
-		// Close() waits until writeLoop() returns, so it can't be done in sync.
+		// Close() waits until writeLoop() returns, so it can't be done synchronously.
 		if !isClosedChan(s.done) {
 			go func() {
 				_ = s.Close()

@@ -214,7 +214,8 @@ func testSplitClosedErrors(t *testing.T) {
 	}
 }
 
-// testSplitDeadlines ensures the read and write deadlines of split connections and of the fallback connection.
+// testSplitDeadlines ensures the read and write deadlines of split connections and of the fallback connection
+// make reads and writes fail once exceeded, and let a waiting read time out.
 func testSplitDeadlines(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})

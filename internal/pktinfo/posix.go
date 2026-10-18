@@ -46,7 +46,7 @@ func cMsgLenOf(hdr *cMsgHeader) int {
 	return int(hdr.Len) //nolint:gosec // G115
 }
 
-// IsV6Only returns true if IPV6_V6ONLY socket option is enabled.
+// IsV6Only reports whether the IPV6_V6ONLY socket option is enabled.
 func IsV6Only(c syscall.RawConn) (bool, error) {
 	return rawConnGetSockOptBool(c, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY)
 }

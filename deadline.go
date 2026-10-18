@@ -79,13 +79,13 @@ func makeDeadline[H deadlineHook](hook H) deadline[H] {
 	return deadline[H]{hook: hook}
 }
 
-// SimpleDeadline returns a pointer to the struct that satisfies the Deadline interface.
+// SimpleDeadline returns a new Deadline without a hook.
 func SimpleDeadline() Deadline {
 	d := makeDeadline(noHook{})
 	return &d
 }
 
-// HookDeadline returns a pointer to the struct that satisfies the Deadline interface.
+// HookDeadline returns a new Deadline that runs hook when its timer fires.
 // Unless the hook argument is nil, it is run as follows:
 //
 //   - The hook is run on its own goroutine once the time passed to Set in the future
