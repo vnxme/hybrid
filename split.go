@@ -451,7 +451,7 @@ const (
 	DefaultSplitFallbackQueueSize = 1024 // As the fallback connection may serve many flows
 	DefaultSplitIdleTimeout       = 30 * time.Second
 	DefaultSplitMaxFlows          = 8192
-	DefaultSplitReadBufferSize    = math.MaxUint16 - (20 + 8) // The largest IPv4 UDP datagram is 64 KiB net of headers
+	DefaultSplitReadBufferSize    = math.MaxUint16 - 8 // The largest UDP payload, over IPv6, as it is 20 bytes less over IPv4
 	DefaultSplitReadQueueSize     = 32
 	DefaultSplitWriteQueueSize    = 64
 	DefaultSplitWriteTimeout      = 500 * time.Millisecond

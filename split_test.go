@@ -61,6 +61,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitShortBufferName, testSplitShortBuffer)
 	t.Run(testSplitStopName, testSplitStop)
 	t.Run(testSplitTrunkFlowsName, testSplitTrunkFlows)
+	t.Run(testSplitUDPMaxDatagramName, testSplitUDPMaxDatagram)
 	t.Run(testSplitUDPSocketFlowsName, testSplitUDPSocketFlows)
 	t.Run(testSplitUDPTruncatedName, testSplitUDPTruncated)
 	t.Run(testSplitUnderlyingDeadlineName, testSplitUnderlyingDeadline)
@@ -825,6 +826,7 @@ const (
 	testSplitShortBufferName               = "ShortBuffer"
 	testSplitStopName                      = "Stop"
 	testSplitTrunkFlowsName                = "TrunkFlows"
+	testSplitUDPMaxDatagramName            = "UDPMaxDatagram"
 	testSplitUDPSocketFlowsName            = "UDPSocketFlows"
 	testSplitUDPTruncatedName              = "UDPTruncated"
 	testSplitUnderlyingDeadlineName        = "UnderlyingDeadline"

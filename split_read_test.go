@@ -365,6 +365,30 @@ func checkSplitPacket(t *testing.T, c SplitConn, want string) {
 	}
 }
 
+// testSplitUDPMaxDatagram ensures a splitter with the default read buffer reads the largest UDP datagrams
+// in full, over IPv4 and IPv6 alike.
+func testSplitUDPMaxDatagram(t *testing.T) {
+	for _, test := range []struct {
+		network string
+		size    int
+	}{
+		{"udp4", udp4PayloadSizeMax},
+		{"udp6", udp6PayloadSizeMax},
+	} {
+		t.Run(test.network, func(t *testing.T) {
+			client, server := newLocalPacketListeners(t, test.network)
+			ln := Split(server, nil)
+			defer func() { _ = ln.Close() }()
+
+			data := strings.Repeat("x", test.size)
+			if _, err := client.WriteTo([]byte(data), server.LocalAddr()); err != nil {
+				t.Fatal(err)
+			}
+			checkSplitPacket(t, acceptSplitConn(t, ln), data)
+		})
+	}
+}
+
 // testSplitUDPTruncated ensures a splitter drops and counts a UDP datagram larger than its read buffer,
 // whether the system flags truncation, as Linux does, or reports an error, as Windows does.
 func testSplitUDPTruncated(t *testing.T) {
