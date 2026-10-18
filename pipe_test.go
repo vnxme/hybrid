@@ -195,25 +195,11 @@ func testPipeClose(t *testing.T, ctor pipeCtor) {
 	defer func() { _ = c2.Close() }()
 
 	const closers = 20
-	var succeeded atomic.Int32
-	var wg sync.WaitGroup
-	for range closers {
-		wg.Go(func() {
-			switch err := c1.Close(); {
-			case err == nil:
-				succeeded.Add(1)
-			case !errors.Is(err, net.ErrClosed):
-				t.Errorf("c1.Close() = %v, want nil or %v", err, net.ErrClosed)
-			}
-		})
-	}
-	wg.Wait()
-
-	want := int32(closers)
+	want := closers
 	if hybrid {
 		want = 1
 	}
-	if n := succeeded.Load(); n != want {
+	if n := closeConcurrently(t, c1, closers); n != want {
 		t.Errorf("c1.Close() succeeded %d times, want %d", n, want)
 	}
 }

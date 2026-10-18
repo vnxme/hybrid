@@ -15,15 +15,73 @@
 package hybrid
 
 import (
+	"errors"
+	"io"
 	"net"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
+
+// closeConcurrently closes c from n goroutines at once, and returns how many of them have succeeded,
+// failing the test if any other has failed with an error other than net.ErrClosed.
+func closeConcurrently(t *testing.T, c io.Closer, n int) int {
+	t.Helper()
+	var succeeded atomic.Int32
+	var wg sync.WaitGroup
+	for range n {
+		wg.Go(func() {
+			switch err := c.Close(); {
+			case err == nil:
+				succeeded.Add(1)
+			case !errors.Is(err, net.ErrClosed):
+				t.Errorf("Close() = %v, want nil or %v", err, net.ErrClosed)
+			}
+		})
+	}
+	wg.Wait()
+	return int(succeeded.Load())
+}
+
+// listenLoopbackUDP listens on 127.0.0.1 with a port chosen by the system, and closes the socket
+// once the test ends.
+func listenLoopbackUDP(tb testing.TB) *net.UDPConn {
+	tb.Helper()
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { _ = pc.Close() })
+	return pc
+}
+
+// listenLoopbackPacketInfoUDP listens as listenLoopbackUDP does, and returns the socket wrapped
+// with PacketInfoUDPConn too.
+func listenLoopbackPacketInfoUDP(tb testing.TB) (*net.UDPConn, FromToUDPConn) {
+	tb.Helper()
+	pc := listenLoopbackUDP(tb)
+	c, err := PacketInfoUDPConn(pc)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return pc, c
+}
 
 // logfIf calls [testing.T].Logf() if condition is true.
 func logfIf(t *testing.T, condition bool, format string, args ...any) {
 	t.Helper()
 	if condition {
 		t.Logf(format, args...)
+	}
+}
+
+// skipIfNoUDP skips the test or benchmark on the platforms without UDP sockets.
+func skipIfNoUDP(tb testing.TB) {
+	tb.Helper()
+	switch runtime.GOOS {
+	case "js", "plan9", "wasip1":
+		tb.Skipf("not supported on %s", runtime.GOOS)
 	}
 }
 

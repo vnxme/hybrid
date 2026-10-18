@@ -33,10 +33,7 @@ import (
 // TestControlUDPPacketInfo ensures packet info is enabled for every IP version a socket accepts,
 // including IPv4 on a dual-stack socket, for which Control is called with network udp6.
 func TestControlUDPPacketInfo(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	lo4, lo6 := netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")
 	tests := []struct {
@@ -97,10 +94,7 @@ func TestControlUDPPacketInfo(t *testing.T) {
 // TestNeedPacketInfoUDPConn ensures packet info is reported as needed only for sockets bound to
 // an unspecified address, and not yet wrapped with PacketInfoUDPConn.
 func TestNeedPacketInfoUDPConn(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	tests := []struct {
 		network, address string
@@ -174,20 +168,9 @@ func TestPacketInfoUDPConn(t *testing.T) {
 	})
 
 	t.Run("Wrapped", func(t *testing.T) {
-		switch runtime.GOOS {
-		case "js", "plan9", "wasip1":
-			t.Skipf("not supported on %s", runtime.GOOS)
-		}
+		skipIfNoUDP(t)
 
-		pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = pc.Close() }()
-		c, err := PacketInfoUDPConn(pc)
-		if err != nil {
-			t.Fatal(err)
-		}
+		pc, c := listenLoopbackPacketInfoUDP(t)
 		if got, err := PacketInfoUDPConn(c); got != c || err != nil {
 			t.Errorf("PacketInfoUDPConn() of a wrapped conn = %v, %v, want %v, nil", got, err, c)
 		}
@@ -200,20 +183,9 @@ func TestPacketInfoUDPConn(t *testing.T) {
 // TestPacketInfoUDPConnNilAddrs ensures unknown addresses are returned as nil net.Addr values,
 // not as nil *net.UDPAddr ones, which wouldn't compare equal to nil.
 func TestPacketInfoUDPConnNilAddrs(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
-	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = pc.Close() }()
-	c, err := PacketInfoUDPConn(pc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, c := listenLoopbackPacketInfoUDP(t)
 
 	// A failed read knows neither address
 	_ = c.SetReadDeadline(time.Now().Add(-time.Second))
@@ -222,7 +194,7 @@ func TestPacketInfoUDPConnNilAddrs(t *testing.T) {
 	}
 
 	// A write rejected for its addresses reports only the valid ones
-	_, err = c.WriteToFromUDPAddrPort(nil, netip.AddrPort{}, netip.AddrPort{}, 0)
+	_, err := c.WriteToFromUDPAddrPort(nil, netip.AddrPort{}, netip.AddrPort{}, 0)
 	var opErr *net.OpError
 	if !errors.As(err, &opErr) || opErr.Source != nil || opErr.Addr != nil {
 		t.Errorf("WriteToFromUDPAddrPort() = %v, want net.OpError with nil Source and Addr", err)
@@ -233,19 +205,12 @@ func TestPacketInfoUDPConnNilAddrs(t *testing.T) {
 // the socket accepts and src, if any, is of the same IP version, whether or not they are mapped,
 // and unless idx is in the range every platform has room for.
 func TestPacketInfoUDPConnWriteValidation(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	tooBig := math.MaxInt32
 	tooBig++ // Negative on 32-bit platforms, which is invalid too
 
-	sink4, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = sink4.Close() }()
+	sink4 := listenLoopbackUDP(t)
 	sink6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})
 	if err != nil {
 		t.Skipf("ListenUDP() = %v", err) // E.g. no IPv6 support
@@ -314,26 +279,11 @@ func TestPacketInfoUDPConnWriteValidation(t *testing.T) {
 // TestPacketInfoUDPConnWriteCount ensures a write with packet info reports all the bytes
 // of a datagram as written, which WriteMsgUDPAddrPort doesn't on Windows since Go 1.26.
 func TestPacketInfoUDPConnWriteCount(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	lo := netip.MustParseAddr("127.0.0.1")
-	pc, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(lo, 0)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = pc.Close() }()
-	c, err := PacketInfoUDPConn(pc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(lo, 0)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = client.Close() }()
+	_, c := listenLoopbackPacketInfoUDP(t)
+	client := listenLoopbackUDP(t)
 
 	payload := []byte("abc")
 	dst := client.LocalAddr().(*net.UDPAddr).AddrPort()
@@ -350,21 +300,10 @@ func TestPacketInfoUDPConnWriteCount(t *testing.T) {
 // TestPacketInfoUDPConnTruncatedOOB ensures control message buffers grow once a read finds its control
 // messages truncated, so that packet info is read again, rather than lost for every packet afterwards.
 func TestPacketInfoUDPConnTruncatedOOB(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	lo := netip.MustParseAddr("127.0.0.1")
-	pc, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(lo, 0)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = pc.Close() }()
-	c, err := PacketInfoUDPConn(pc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pc, c := listenLoopbackPacketInfoUDP(t)
 	const size = 8 // Too short for any control message header
 	c.(*packetInfoUDPConn).rdOOBSize.Store(size)
 
@@ -399,10 +338,7 @@ func TestPacketInfoUDPConnTruncatedOOB(t *testing.T) {
 // TestPacketInfoUDPConnUnmapped ensures a dual-stack socket returns src and dst of IPv4 packets unmapped,
 // and that it replies to them.
 func TestPacketInfoUDPConnUnmapped(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6unspecified})
 	if err != nil {
@@ -468,10 +404,7 @@ func (c localAddrConn) LocalAddr() net.Addr { return c.addr }
 // TestPacketInfoUDPConnFamily ensures the IP versions a socket accepts are detected from its local address
 // and IPV6_V6ONLY, and that a connection without a local *net.UDPAddr is rejected.
 func TestPacketInfoUDPConnFamily(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	tests := []struct {
 		network, address string
@@ -509,11 +442,7 @@ func TestPacketInfoUDPConnFamily(t *testing.T) {
 	}
 
 	t.Run("BadLocalAddr", func(t *testing.T) {
-		pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = pc.Close() }()
+		pc := listenLoopbackUDP(t)
 		for _, addr := range []net.Addr{
 			nil,                                      // No local address
 			oneTrunkAddr,                             // Not a *net.UDPAddr
@@ -556,18 +485,11 @@ func TestAddrPortToUDPAddr(t *testing.T) {
 // BenchmarkPacketInfoUDPConn measures writes and reads with packet info over loopback, next to
 // those of the underlying *net.UDPConn. Each operation is a write and the read of the same datagram.
 func BenchmarkPacketInfoUDPConn(b *testing.B) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		b.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(b)
 
 	lo := netip.MustParseAddr("127.0.0.1")
 	listen := func() (*net.UDPConn, netip.AddrPort) {
-		pc, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(lo, 0)))
-		if err != nil {
-			b.Fatal(err)
-		}
-		b.Cleanup(func() { _ = pc.Close() })
+		pc := listenLoopbackUDP(b)
 		_ = pc.SetReadDeadline(time.Now().Add(time.Minute)) // Fail rather than hang if a datagram is lost
 		return pc, pc.LocalAddr().(*net.UDPAddr).AddrPort()
 	}
@@ -671,10 +593,7 @@ func localAddrs(t *testing.T) [][]netip.Addr {
 // and with a local interface index, and that a reply written with them comes from this address,
 // as well as a reply written with another address of the same kind on the same interface as src.
 func TestPacketInfoUDPConnInterfaces(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	addrs := localAddrs(t)
 	for _, socket := range []struct{ network, address string }{
@@ -766,16 +685,9 @@ func (c negativeReadUDPConn) ReadMsgUDPAddrPort(_, _ []byte) (int, int, int, net
 
 // TestPacketInfoUDPConnNegativeRead ensures a failed read never reports a negative count.
 func TestPacketInfoUDPConnNegativeRead(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
-	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = pc.Close() }()
+	pc := listenLoopbackUDP(t)
 	c, err := PacketInfoUDPConn(negativeReadUDPConn{pc})
 	if err != nil {
 		t.Fatal(err)

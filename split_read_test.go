@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -369,10 +368,7 @@ func checkSplitPacket(t *testing.T, c SplitConn, want string) {
 // testSplitUDPTruncated ensures a splitter drops and counts a UDP datagram larger than its read buffer,
 // whether the system flags truncation, as Linux does, or reports an error, as Windows does.
 func testSplitUDPTruncated(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	const size = minSplitReadBufferSize
 	for _, info := range []bool{true, false} {

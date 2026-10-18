@@ -23,7 +23,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -659,18 +658,11 @@ func testSplitUnwrap(t *testing.T) {
 // testSplitUnwrapUDP ensures Unwrap returns the UDP connection given to Split, rather than the wrapper
 // the splitter reads and writes through, with packet info or without, and Stop leaves it open with no deadlines.
 func testSplitUnwrapUDP(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	for _, info := range []bool{true, false} {
 		t.Run(map[bool]string{true: "PacketInfo", false: "NoPacketInfo"}[info], func(t *testing.T) {
-			pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = pc.Close() }()
+			pc := listenLoopbackUDP(t)
 			ln := Split(pc, &SplitConfig{PacketInfo: info})
 			if got := ln.Unwrap(); got != pc {
 				t.Errorf("Unwrap() = %T, want the %T given", got, pc)
@@ -742,10 +734,7 @@ func testSplitAccept(t *testing.T) {
 // addresses too, and replies from the address each flow came to, while a splitter without packet info
 // tells them apart by their source addresses alone.
 func testSplitUDPSocketFlows(t *testing.T) {
-	switch runtime.GOOS {
-	case "js", "plan9", "wasip1":
-		t.Skipf("not supported on %s", runtime.GOOS)
-	}
+	skipIfNoUDP(t)
 
 	for _, test := range []struct {
 		name   string
@@ -773,7 +762,7 @@ func testSplitUDPSocketFlows(t *testing.T) {
 				if err != nil {
 					t.Skipf("ListenUDP(%s) = %v", network, err)
 				}
-				defer func() { _ = client.Close() }()
+				t.Cleanup(func() { _ = client.Close() })
 				dst := netip.AddrPortFrom(to, port)
 				if _, err = client.WriteToUDPAddrPort([]byte("ping"), dst); err != nil {
 					t.Fatal(err)

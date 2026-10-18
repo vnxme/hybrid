@@ -296,21 +296,7 @@ func testTrunkClose(t *testing.T, ctor trunkCtor) {
 
 	c1, c2 = ctor(nil, nil)
 	defer func() { _ = c2.Close() }()
-	const closers = 20
-	var succeeded atomic.Int32
-	var wg sync.WaitGroup
-	for range closers {
-		wg.Go(func() {
-			switch err := c1.Close(); {
-			case err == nil:
-				succeeded.Add(1)
-			case !errors.Is(err, net.ErrClosed):
-				t.Errorf("c1.Close() = %v, want nil or %v", err, net.ErrClosed)
-			}
-		})
-	}
-	wg.Wait()
-	if n := succeeded.Load(); n != 1 {
+	if n := closeConcurrently(t, c1, 20); n != 1 {
 		t.Errorf("c1.Close() succeeded %d times, want 1", n)
 	}
 }
