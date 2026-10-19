@@ -172,7 +172,7 @@ for {
 			return
 		}
 		if !recognized(b[:n]) {
-			_ = c.Release() // Hand the later packets of the flow over to the fallback connection
+			_ = c.Release(b[:n]) // Hand the flow over to the fallback connection, the packet read first
 			return
 		}
 		_, _ = c.Write(reply(b[:n])) // Goes to the client, from the address it sent to
@@ -195,7 +195,7 @@ a `net.Listener` is expected, e.g. to a generic proxy server loop.
 | `SplitListener.Close()`        | Stops the splitter and closes `pc`                                                                  |
 | `SplitListener.Stop()`         | Stops the splitter, but leaves `pc` open, with no deadlines, for the caller to take over            |
 | `SplitListener.Unwrap()`       | Returns `pc` as given to `Split`                                                                    |
-| `SplitConn.Release()`          | Hands the flow over to the fallback connection and closes the split connection                      |
+| `SplitConn.Release(pkts...)`   | Hands the flow over to the fallback connection, the packets given first, and closes the connection  |
 | `SplitConn.Read`, `ReadFrom`, `ReadFromTo` | Read a packet of the flow; a short buffer gives `io.ErrShortBuffer`                     |
 | `SplitConn.Write`, `WriteTo`, `WriteToFrom` | Write a packet to the client; another address fails with `net.ErrWriteToConnected`     |
 
@@ -213,9 +213,8 @@ asymmetric routing: the latest one is kept and used for replies. A UDP flow is l
 - The first packet of an unknown flow creates a split connection, queues it for `Accept`, and queues the packet
   on it.
 - A handler accepting the connection either serves it or releases it, e.g. as no matcher recognizes the flow:
-  then the packets queued on the connection and all the later packets of the flow go to the fallback connection
-  if there is one, or are dropped if there isn't. The packets the handler has read already aren't handed over,
-  so a protocol whose client retransmits, e.g. QUIC, recovers on its own.
+  then the packets it has read and hands back to `Release`, the packets queued on the connection and all the later
+  packets of the flow go to the fallback connection, in this order, if there is one, or are dropped if there isn't.
 - Once the fallback connection is closed, a released flow ends instead, so that its next packet is offered
   to `Accept` again, e.g. as the server behind the fallback connection has stopped.
 - A flow ends when its connection is closed, by its handler or by its idle timeout, and its next packet starts

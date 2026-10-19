@@ -25,21 +25,34 @@ import (
 	"time"
 )
 
-// testSplitRelease ensures releasing a split connection hands the packets queued and the later packets
-// of its flow over to the fallback connection, in order, while the other flows go on as they were.
+// testSplitRelease ensures releasing a split connection hands the packets given, copied, the packets queued
+// and the later packets of its flow over to the fallback connection, in order, while the other flows go on
+// as they were.
 func testSplitRelease(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 	writeFrom(t, client, a, "a1")
 	writeFrom(t, client, a, "a2")
+	writeFrom(t, client, a, "a3")
 	conn := acceptSplitConn(t, ln)
-	if err := conn.Release(); err != nil {
+	read := make([][]byte, 2) // As a handler matching the flow would
+	for i := range read {
+		read[i] = make([]byte, 8)
+		n, err := conn.Read(read[i])
+		if err != nil {
+			t.Fatalf("Read() = %v, want nil", err)
+		}
+		read[i] = read[i][:n]
+	}
+	if err := conn.Release(read...); err != nil {
 		t.Fatalf("Release() = %v, want nil", err)
 	}
-	writeFrom(t, client, a, "a3")
+	copy(read[0], "xx") // Released packets are copied
+	writeFrom(t, client, a, "a4")
 	writeFrom(t, client, b, "b1")
 
-	if got, want := strings.Join(readFallback(t, ln.Fallback()), " "), a.String()+":a1 "+a.String()+":a2 "+a.String()+":a3"; got != want {
+	want := strings.Join([]string{a.String() + ":a1", a.String() + ":a2", a.String() + ":a3", a.String() + ":a4"}, " ")
+	if got := strings.Join(readFallback(t, ln.Fallback()), " "); got != want {
 		t.Errorf("packets of the fallback connection = %q, want %q", got, want)
 	}
 	if other := acceptSplitConn(t, ln); other.RemoteAddr().String() != b.String() {
@@ -58,7 +71,7 @@ func testSplitRelease(t *testing.T) {
 }
 
 // testSplitReleaseWithoutFallback ensures releasing a split connection without a fallback connection drops
-// the packets of its flow, without starting a new flow.
+// and counts the packets given and those of its flow, without starting a new flow.
 func testSplitReleaseWithoutFallback(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 	client, ln := splitTrunk(t, nil)
@@ -66,10 +79,15 @@ func testSplitReleaseWithoutFallback(t *testing.T) {
 		t.Fatalf("Fallback() = %v, want nil", ln.Fallback())
 	}
 	writeFrom(t, client, a, "a1")
-	releaseSplitConn(t, ln)
 	writeFrom(t, client, a, "a2")
+	conn := acceptSplitConn(t, ln)
+	checkSplitPacket(t, conn, "a1")
+	if err := conn.Release([]byte("a1")); err != nil {
+		t.Fatalf("Release() = %v, want nil", err)
+	}
+	writeFrom(t, client, a, "a3")
 	writeFrom(t, client, b, "b1")
-	waitSplitStats(t, ln, SplitStats{NoFallback: 2})
+	waitSplitStats(t, ln, SplitStats{NoFallback: 3})
 	if conn := acceptSplitConn(t, ln); conn.RemoteAddr().String() != b.String() { // Not a new flow of a
 		t.Errorf("RemoteAddr() = %s, want %s", conn.RemoteAddr(), b)
 	}

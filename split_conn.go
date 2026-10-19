@@ -181,9 +181,9 @@ func (sc *splitConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) 
 }
 
 // Release hands the flow of the connection over to the fallback connection of the splitter: the packets
-// queued and all the later packets of the flow go there, or are dropped if the splitter has no fallback
-// connection. The connection is closed, but its flow goes on until it's idle.
-func (sc *splitConn) Release() error {
+// given, copied, then the packets queued and all the later packets of the flow go there, or are dropped
+// if the splitter has no fallback connection. The connection is closed, but its flow goes on until it's idle.
+func (sc *splitConn) Release(pkts ...[]byte) error {
 	sc.releaseMu.Lock()
 	defer sc.releaseMu.Unlock()
 	if isClosedChan(sc.localDone) {
@@ -191,6 +191,14 @@ func (sc *splitConn) Release() error {
 	}
 
 	sc.released.Store(true)
+	for _, b := range pkts {
+		pkt := &splitPacket{conn: sc}
+		if len(b) > 0 {
+			pkt.buf, pkt.ref = getBuf(len(b))
+			copy(pkt.buf, b)
+		}
+		sc.splitter.toFallback(pkt)
+	}
 	for {
 		select {
 		case pkt := <-sc.rdRx:

@@ -48,15 +48,17 @@ import (
 //
 // Lifecycle. The first packet of an unknown flow creates a split connection, queues it for Accept,
 // and queues the packet on it. A handler accepting the connection either serves it or releases it,
-// e.g. as no matcher recognizes the flow: then the packets queued on the connection and all the later
-// packets of the flow go to the fallback connection if there is one, or are dropped if there isn't.
+// e.g. as no matcher recognizes the flow: then the packets it has read and hands back, the packets queued
+// on the connection and all the later packets of the flow go to the fallback connection if there is one,
+// or are dropped if there isn't.
 // Once the fallback connection is closed, a released flow ends instead, so that its next packet is offered
 // to Accept again, e.g. as the server behind the fallback connection has stopped.
 // A flow ends when its connection is closed, by its handler or by its idle timeout, and its next
 // packet starts a new flow straight away: UDP has nothing like TCP's TIME_WAIT and RST to tell a late
 // packet of an old flow from the first packet of a new one. Only packets read start flows: a write
-// keeps the flow of its remote address going, but a reply to a remote address without one, e.g. written
-// by the fallback connection, starts a new flow, queued for Accept like any other.
+// keeps the flow of its remote address going, but doesn't start one, so the response to a packet written
+// to a remote address without a flow, e.g. by the fallback connection, starts a new flow, queued for Accept
+// like any other.
 //
 // Deadlines. Split connections and the fallback connection have read and write deadlines of their own,
 // like any net.Conn or net.PacketConn. Each flow has an idle timeout, which every packet read or written
@@ -184,8 +186,9 @@ type SplitConn interface {
 	FromToPacketConn
 
 	// Release hands the flow over to the fallback connection, e.g. as no handler recognizes it,
-	// and closes the split connection.
-	Release() error
+	// and closes the split connection. The packets given, e.g. those read while matching, go first,
+	// as the packets of the flow, so that the fallback connection misses none of them.
+	Release(pkts ...[]byte) error
 }
 
 // SplitListener is a listener of a splitter, accepting split connections, with its fallback connection
