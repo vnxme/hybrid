@@ -22,16 +22,26 @@ import (
 	"time"
 )
 
-// flowKey identifies a flow: by its source and destination addresses for a UDP connection
-// that reports destination addresses, or by its source address alone otherwise, as src
-// for a *net.UDPAddr, or as the string of any other address in addr.
+// flowKey identifies a flow: by its source and destination addresses for a connection that reports
+// destination addresses, or by its source address alone otherwise. An address is held in src or dst
+// for a *net.UDPAddr, or as its string in srcStr or dstStr for any other address.
 type flowKey struct {
-	src, dst netip.AddrPort
-	addr     string
+	src, dst       netip.AddrPort
+	srcStr, dstStr string
 }
 
 // remote returns the key of the remote address of a flow, i.e. of its source address.
-func (k flowKey) remote() flowKey { return flowKey{src: k.src, addr: k.addr} }
+func (k flowKey) remote() flowKey { return flowKey{src: k.src, srcStr: k.srcStr} }
+
+// hasDst reports whether the key holds a destination address.
+func (k flowKey) hasDst() bool { return k.dst.IsValid() || k.dstStr != "" }
+
+// withDst returns the key with the given destination address, held the way addrKey holds a source address.
+func (k flowKey) withDst(a net.Addr) flowKey {
+	d := addrKey(a)
+	k.dst, k.dstStr = d.src, d.srcStr
+	return k
+}
 
 // addrKey returns the key of an address the way a flow is told apart by its source address alone,
 // with an IPv4 address unmapped, as packet info reports it, so that it matches however it's written.
@@ -40,7 +50,7 @@ func addrKey(a net.Addr) flowKey {
 		ap := u.AddrPort()
 		return flowKey{src: netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
 	}
-	return flowKey{addr: a.String()}
+	return flowKey{srcStr: a.String()}
 }
 
 // splitPacketInfo describes a packet read from the underlying connection.
@@ -96,7 +106,7 @@ func (s *splitter) readLoop() {
 			s.drops.truncated.Add(1)
 			continue
 		}
-		if s.udp != nil && !p.key.dst.IsValid() { // Packet info is missing, e.g. as it has been truncated
+		if s.byDst && !p.key.hasDst() { // E.g. packet info is missing, as it has been truncated
 			s.drops.noDestination.Add(1)
 			continue
 		}
@@ -116,6 +126,9 @@ func (s *splitter) read(b []byte, p *splitPacketInfo) (n int, err error) {
 	n, p.src, p.dst, p.idx, err = s.pc.ReadFromTo(b)
 	if p.src != nil {
 		p.key = addrKey(p.src)
+	}
+	if s.byDst && p.dst != nil {
+		p.key = p.key.withDst(p.dst)
 	}
 	return n, err
 }

@@ -25,17 +25,13 @@ import (
 	"time"
 )
 
-// testSplitTrunkFlows ensures packets over a trunk make a flow per source address, whatever its type,
-// destination address and interface index are, and that a flow keeps the latest interface index.
+// testSplitTrunkFlows ensures packets over a trunk make a flow per source and destination address, whatever
+// their types are, that a flow keeps the latest interface index and replies from its destination address,
+// and that a trunk wrapped so as to hide destination addresses makes a flow per source address alone.
 func testSplitTrunkFlows(t *testing.T) {
-	client, server := BufferedTrunk(16, nil, nil)
-	defer func() { _ = client.Close() }()
-	ln := Split(server, nil)
-	defer func() { _ = ln.Close() }()
-
 	a, b, c := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}, testAddr("c")
-	dst1, dst2 := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}, &net.UDPAddr{IP: net.IPv4(198, 51, 100, 2), Port: 53}
-	for _, w := range []struct {
+	dst1, dst2, dst3 := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}, &net.UDPAddr{IP: net.IPv4(198, 51, 100, 2), Port: 53}, testAddr("d")
+	writes := []struct {
 		src, dst net.Addr
 		idx      int
 		data     string
@@ -43,26 +39,78 @@ func testSplitTrunkFlows(t *testing.T) {
 		{a, dst1, 1, "a1"},
 		{b, dst1, 1, "b1"},
 		{c, dst1, 1, "c1"},
-		{a, dst2, 2, "a2"}, // The flow of a, though to another destination address and through another interface
-	} {
-		if _, err := client.WriteToFrom([]byte(w.data), w.dst, w.src, w.idx); err != nil {
-			t.Fatal(err)
-		}
+		{a, dst2, 2, "a2"}, // Another flow of a, to another destination address
+		{a, dst3, 3, "a3"}, // And to a destination address of another type
+		{a, dst1, 4, "a4"}, // The flow of a1, through another interface
 	}
 
-	want := map[string]string{a.String(): "a1 a2", b.String(): "b1", c.String(): "c1"}
-	for range want {
-		conn := acceptSplitConn(t, ln)
-		remote := conn.RemoteAddr().String()
-		if got := strings.Join(readSplitConn(t, conn), " "); got != want[remote] {
-			t.Errorf("packets of the flow of %s = %q, want %q", remote, got, want[remote])
-		}
-		if wantIdx := map[bool]int{true: 2, false: 1}[remote == a.String()]; conn.(interface{ LocalIfIdx() int }).LocalIfIdx() != wantIdx {
-			t.Errorf("LocalIfIdx() of the flow of %s = %d, want %d", remote, conn.(interface{ LocalIfIdx() int }).LocalIfIdx(), wantIdx)
-		}
-		_ = conn.Close()
+	type flow struct {
+		data string
+		idx  int
 	}
-	waitSplitStats(t, ln, SplitStats{})
+	check := func(t *testing.T, wrap func(PacketConn) PacketConn, key func(SplitConn) string, want map[string]flow) {
+		client, server := BufferedTrunk(16, nil, nil)
+		defer func() { _ = client.Close() }()
+		ln := Split(wrap(server), nil)
+		defer func() { _ = ln.Close() }()
+		for _, w := range writes {
+			if _, err := client.WriteToFrom([]byte(w.data), w.dst, w.src, w.idx); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		for range want {
+			conn := acceptSplitConn(t, ln)
+			k := key(conn)
+			if got := strings.Join(readSplitConn(t, conn), " "); got != want[k].data {
+				t.Errorf("packets of the flow of %s = %q, want %q", k, got, want[k].data)
+			}
+			if got := conn.(interface{ LocalIfIdx() int }).LocalIfIdx(); got != want[k].idx {
+				t.Errorf("LocalIfIdx() of the flow of %s = %d, want %d", k, got, want[k].idx)
+			}
+			_ = conn.Close()
+		}
+		waitSplitStats(t, ln, SplitStats{})
+	}
+
+	t.Run("BySourceAndDestination", func(t *testing.T) {
+		key := func(c SplitConn) string { return c.RemoteAddr().String() + ">" + c.LocalAddr().String() }
+		check(t, func(pc PacketConn) PacketConn { return pc }, key, map[string]flow{
+			a.String() + ">" + dst1.String(): {"a1 a4", 4},
+			a.String() + ">" + dst2.String(): {"a2", 2},
+			a.String() + ">" + dst3.String(): {"a3", 3},
+			b.String() + ">" + dst1.String(): {"b1", 1},
+			c.String() + ">" + dst1.String(): {"c1", 1},
+		})
+	})
+
+	t.Run("BySource", func(t *testing.T) {
+		key := func(c SplitConn) string { return c.RemoteAddr().String() }
+		check(t, func(pc PacketConn) PacketConn { return FakeAddressPacketConn(pc, nil, nil) }, key, map[string]flow{
+			a.String(): {"a1 a2 a3 a4", 0}, // Hidden by the wrapper, as are destination addresses
+			b.String(): {"b1", 0},
+			c.String(): {"c1", 0},
+		})
+	})
+
+	t.Run("Replies", func(t *testing.T) {
+		client, server := BufferedTrunk(16, nil, nil)
+		defer func() { _ = client.Close() }()
+		ln := Split(server, nil)
+		defer func() { _ = ln.Close() }()
+		for _, dst := range []net.Addr{dst1, dst2} {
+			if _, err := client.WriteToFrom([]byte("q"), dst, a, 0); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := acceptSplitConn(t, ln).Write([]byte("r")); err != nil {
+				t.Fatal(err)
+			}
+			_ = client.SetReadDeadline(time.Now().Add(time.Second))
+			if _, src, to, _, err := client.ReadFromTo(make([]byte, 8)); err != nil || src.String() != dst.String() || to.String() != a.String() {
+				t.Errorf("ReadFromTo() = %v, %v, %v, want %v, %v, nil", src, to, err, dst, a)
+			}
+		}
+	})
 }
 
 // scriptedUDPConn is a FromToUDPConn whose reads return the given packets, then wait until it's closed.

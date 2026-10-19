@@ -201,12 +201,15 @@ a `net.Listener` is expected, e.g. to a generic proxy server loop.
 
 ### Flows
 
-A flow of a UDP connection that reports the destination address of each packet, e.g. with packet info,
-is identified by its source and destination addresses. A flow of any other connection, e.g. of a UDP connection
-without packet info or of a trunk, is identified by its source address alone. Which addresses identify a flow
-is decided once per splitter, not per packet, so that a flow stays whole: a splitter that uses destination
-addresses drops a packet without one. The interface index isn't part of a flow, as it may change, e.g. with
-asymmetric routing: the latest one is kept and used for replies. A UDP flow is looked up without allocating.
+A flow of a connection that reports the destination address of each packet, e.g. of a UDP connection with packet
+info or of a trunk, is identified by its source and destination addresses, and its split connection replies from
+that destination address. A flow of any other connection, e.g. of a UDP connection without packet info, is
+identified by its source address alone. Which addresses identify a flow is decided once per splitter, not per
+packet, so that a flow stays whole: a splitter that uses destination addresses drops a packet without one. To split
+a connection that reports destination addresses by source address alone, e.g. a trunk emulating a UDP socket
+without packet info, wrap it so as to hide them, e.g. with `FakeAddressPacketConn(pc, nil, nil)`. The interface
+index isn't part of a flow, as it may change, e.g. with asymmetric routing: the latest one is kept and used for
+replies. A UDP flow is looked up without allocating.
 
 ### Lifecycle
 

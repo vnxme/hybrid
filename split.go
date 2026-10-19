@@ -34,17 +34,19 @@ import (
 // flows together, e.g. as the packet connection of the QUIC server of Caddy, which tells QUIC
 // connections apart itself. Its write loop writes the packets of all those connections.
 //
-// Flows. A flow of a UDP connection that reports the destination address of each packet, e.g. with
-// packet info, is identified by its source and destination addresses, as netip.AddrPort values.
-// A flow of any other connection, e.g. of a UDP connection without packet info or of a trunk, is
-// identified by its source address alone, as a netip.AddrPort value for a *net.UDPAddr, or as the
-// string of any other address. One comparable key type holds either, so a UDP flow is looked up
-// without allocating. Which addresses identify a flow is decided once per splitter, not per packet,
-// so that a flow stays whole: a splitter that uses destination addresses drops a packet without one.
+// Flows. A flow of a connection that reports the destination address of each packet, e.g. of a UDP
+// connection with packet info or of a trunk, is identified by its source and destination addresses.
+// A flow of any other connection, e.g. of a UDP connection without packet info, is identified by its
+// source address alone. An address is held as a netip.AddrPort value for a *net.UDPAddr, or as the
+// string of any other address, in one comparable key type, so a UDP flow is looked up without allocating.
+// Which addresses identify a flow is decided once per splitter, not per packet, so that a flow stays
+// whole: a splitter that uses destination addresses drops a packet without one, and a connection reporting
+// them is split by source address alone only if wrapped so as to hide them, e.g. by FakeAddressPacketConn.
 // The interface index isn't part of a flow, as it may change, e.g. with asymmetric routing: the
-// latest one is kept and used for replies. Trunks carry the addresses their writers give, so
-// a test can have many flows over a trunk by writing from distinct source addresses: a trunk end
-// writing without one gives its own local address, which makes a single flow.
+// latest one is kept and used for replies. Trunks carry the addresses their writers give, so a test
+// can have many flows over a trunk by writing from distinct source addresses or to distinct destination
+// addresses: a trunk end writing without a source address gives its own local address, and an end reading
+// a packet without a destination address gives its own, which makes a single flow.
 //
 // Lifecycle. The first packet of an unknown flow creates a split connection, queues it for Accept,
 // and queues the packet on it. A handler accepting the connection either serves it or releases it,
@@ -138,7 +140,7 @@ type SplitConfig struct {
 	// PacketInfo makes the splitter enable packet info with [PacketInfoUDPConn] if the underlying PacketConn
 	// satisfies UDPConn, so that flows are told apart by their destination addresses as well, and replies
 	// are sent from the address each flow came to, e.g. for a UDPConn listening on an unspecified address.
-	// Without it, flows are told apart by their source addresses alone.
+	// Without it, flows of a UDPConn are told apart by their source addresses alone.
 	PacketInfo bool
 }
 
@@ -267,6 +269,7 @@ type splitter struct {
 
 	// Free of pointers, so placed after the fields holding them, for the garbage collector to scan less
 	cfg   splitConfig
+	byDst bool         // Set if pc reports destination addresses, so that they identify flows too
 	clock atomic.Int64 // Time since the sweeper started, kept by it, coarse but cheap to read
 	drops struct {
 		truncated, noDestination, tableFull, acceptQueueFull, connQueueFull, connClosed atomic.Uint64 // Reading
@@ -294,6 +297,8 @@ func Split(pc PacketConn, config *SplitConfig) SplitListener {
 		flows:       make(map[flowKey]*splitConn),
 	}
 	s.udp, _ = s.pc.(FromToUDPConn)
+	_, plain := s.pc.(*packetToFromToPacketConn) // Which reports no destination addresses
+	s.byDst = !plain
 	s.remotes.m = make(map[flowKey]*splitConn)
 	s.swept.m = make(map[*splitConn]struct{})
 	if cfg.fallbackConn {
