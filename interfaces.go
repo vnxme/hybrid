@@ -125,6 +125,20 @@ type Stopper interface {
 	Stop() error
 }
 
+// StoppablePacketConn is a WrappingPacketConn that can stop what it does on its own,
+// leaving the underlying PacketConn open for the caller to take over with Unwrap.
+type StoppablePacketConn interface {
+	WrappingPacketConn
+	Stopper
+}
+
+// StoppableStreamConn is a WrappingStreamConn that can stop what it does on its own,
+// leaving the underlying StreamConn open for the caller to take over with Unwrap.
+type StoppableStreamConn interface {
+	WrappingStreamConn
+	Stopper
+}
+
 // StreamConn is an alias for net.Conn, i.e. a generic stream-oriented network connection.
 type StreamConn = net.Conn
 

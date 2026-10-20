@@ -231,7 +231,7 @@ type idleTimeoutPacketConn struct {
 	idle idleTimer
 }
 
-// IdleTimeoutPacketConn returns a WrappingPacketConn that closes the underlying PacketConn
+// IdleTimeoutPacketConn returns a StoppablePacketConn that closes the underlying PacketConn
 // asynchronously from a separate goroutine once it has been idle for the timeout.
 //
 // The timeout is ignored if it's zero or negative. The idle time restarts on each successful
@@ -240,7 +240,7 @@ type idleTimeoutPacketConn struct {
 // The idle time starts when the underlying connection is wrapped, i.e. before this function returns,
 // and the timer stops for good once Stop is called, leaving the underlying connection open, or once
 // the connection is closed, by Close or by the timer.
-func IdleTimeoutPacketConn(pc PacketConn, timeout time.Duration) WrappingPacketConn {
+func IdleTimeoutPacketConn(pc PacketConn, timeout time.Duration) StoppablePacketConn {
 	w := &idleTimeoutPacketConn{PacketConn: pc}
 	w.idle.init(timeout, pc.Close)
 	return w
@@ -289,7 +289,7 @@ type idleTimeoutStreamConn struct {
 	idle idleTimer
 }
 
-// IdleTimeoutStreamConn returns a WrappingStreamConn that closes the underlying StreamConn
+// IdleTimeoutStreamConn returns a StoppableStreamConn that closes the underlying StreamConn
 // asynchronously from a separate goroutine once it has been idle for the timeout.
 //
 // The timeout is ignored if it's zero or negative. The idle time restarts on each successful
@@ -298,7 +298,7 @@ type idleTimeoutStreamConn struct {
 // The idle time starts when the underlying connection is wrapped, i.e. before this function returns,
 // and the timer stops for good once Stop is called, leaving the underlying connection open, or once
 // the connection is closed, by Close or by the timer.
-func IdleTimeoutStreamConn(sc StreamConn, timeout time.Duration) WrappingStreamConn {
+func IdleTimeoutStreamConn(sc StreamConn, timeout time.Duration) StoppableStreamConn {
 	w := &idleTimeoutStreamConn{StreamConn: sc}
 	w.idle.init(timeout, sc.Close)
 	return w
@@ -456,18 +456,16 @@ var (
 
 	_ PacketConn = (*streamToPacketConn)(nil)
 
-	_ Stopper = (*idleTimeoutPacketConn)(nil)
-	_ Stopper = (*idleTimeoutStreamConn)(nil)
+	_ StoppablePacketConn = (*idleTimeoutPacketConn)(nil)
+	_ StoppableStreamConn = (*idleTimeoutStreamConn)(nil)
 
 	_ StreamConn = (*packetToStreamConn)(nil)
 
 	_ WrappingPacketConn = (*fakeAddressPacketConn)(nil)
 	_ WrappingPacketConn = (*fakeClosePacketConn)(nil)
-	_ WrappingPacketConn = (*idleTimeoutPacketConn)(nil)
 
 	_ WrappingStreamConn = (*fakeAddressStreamConn)(nil)
 	_ WrappingStreamConn = (*fakeCloseStreamConn)(nil)
-	_ WrappingStreamConn = (*idleTimeoutStreamConn)(nil)
 
 	_ Wrapper[PacketConn] = (*packetToFromToPacketConn)(nil)
 	_ Wrapper[PacketConn] = (*packetToStreamConn)(nil)

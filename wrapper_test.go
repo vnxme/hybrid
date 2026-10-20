@@ -225,7 +225,10 @@ func testWrapperIdleTimeout(t *testing.T) {
 	// subject is a wrapper with an idle timeout over a connection counting its closures,
 	// and the means to read and write through the wrapper.
 	type subject struct {
-		w      io.Closer
+		w interface {
+			io.Closer
+			Stopper
+		}
 		under  any
 		closes *atomic.Int32
 		unwrap func() any
@@ -282,7 +285,7 @@ func testWrapperIdleTimeout(t *testing.T) {
 				if got := s.closes.Load(); got != 1 {
 					t.Fatalf("closures of an idle connection = %d, want 1", got)
 				}
-				if err := s.w.(Stopper).Stop(); !errors.Is(err, net.ErrClosed) {
+				if err := s.w.Stop(); !errors.Is(err, net.ErrClosed) {
 					t.Errorf("Stop() = %v, want net.ErrClosed, as the timer has closed the connection", err)
 				}
 				if err := s.w.Close(); !errors.Is(err, net.ErrClosed) {
@@ -339,8 +342,7 @@ func testWrapperIdleTimeout(t *testing.T) {
 
 			t.Run("StoppedByStop", func(t *testing.T) {
 				s := kind.ctor(t, idle)
-				stopper := s.w.(Stopper)
-				if err := stopper.Stop(); err != nil {
+				if err := s.w.Stop(); err != nil {
 					t.Fatalf("Stop() = %v, want nil", err)
 				}
 				if err := s.write(); err != nil { // Using the wrapper after Stop mustn't restart the timer
@@ -350,7 +352,7 @@ func testWrapperIdleTimeout(t *testing.T) {
 				if got := s.closes.Load(); got != 0 {
 					t.Errorf("closures of a connection with a stopped timer = %d, want 0", got)
 				}
-				if err := stopper.Stop(); !errors.Is(err, net.ErrClosed) {
+				if err := s.w.Stop(); !errors.Is(err, net.ErrClosed) {
 					t.Errorf("Stop() again = %v, want net.ErrClosed", err)
 				}
 				if err := s.w.Close(); err != nil || s.closes.Load() != 1 {
