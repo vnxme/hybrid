@@ -148,6 +148,18 @@ type UDPConn interface {
 	WriteMsgUDPAddrPort(b []byte, oob []byte, addr netip.AddrPort) (n int, oobn int, err error)
 }
 
+// WrappingPacketConn is a PacketConn wrapping another one, which Unwrap returns.
+type WrappingPacketConn interface {
+	PacketConn
+	Wrapper[PacketConn]
+}
+
+// WrappingStreamConn is a StreamConn wrapping another one, which Unwrap returns.
+type WrappingStreamConn interface {
+	StreamConn
+	Wrapper[StreamConn]
+}
+
 // Wrapper can unwrap the underlying value of type T, e.g. a PacketConn or a StreamConn.
 // T must be the very type Unwrap returns, e.g. a wrapper returning a FromToPacketConn isn't a Wrapper[PacketConn].
 type Wrapper[T any] interface {

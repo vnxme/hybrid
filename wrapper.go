@@ -39,12 +39,12 @@ type fakeAddressPacketConn struct {
 	remote net.Addr
 }
 
-// FakeAddressPacketConn returns a PacketConn implementation that shadows local and remote addresses.
+// FakeAddressPacketConn returns a WrappingPacketConn that shadows local and remote addresses.
 //
 // Unless the local address is nil, it is returned by LocalAddr instead of the native local address.
 // Similarly, unless the remote address is nil, it is returned by ReadFrom instead of the address a packet
 // comes from, and WriteTo sends every packet to it, whatever address it is given.
-func FakeAddressPacketConn(pc PacketConn, local, remote net.Addr) PacketConn {
+func FakeAddressPacketConn(pc PacketConn, local, remote net.Addr) WrappingPacketConn {
 	return &fakeAddressPacketConn{pc, local, remote}
 }
 
@@ -85,11 +85,11 @@ type fakeAddressStreamConn struct {
 	remote net.Addr
 }
 
-// FakeAddressStreamConn returns a StreamConn implementation that shadows local and remote addresses.
+// FakeAddressStreamConn returns a WrappingStreamConn that shadows local and remote addresses.
 //
 // Unless the local address is nil, it is returned by LocalAddr instead of the native local address.
 // Similarly, unless the remote address is nil, it is returned by RemoteAddr instead of the native remote address.
-func FakeAddressStreamConn(sc StreamConn, local, remote net.Addr) StreamConn {
+func FakeAddressStreamConn(sc StreamConn, local, remote net.Addr) WrappingStreamConn {
 	return &fakeAddressStreamConn{sc, local, remote}
 }
 
@@ -119,13 +119,13 @@ type fakeClosePacketConn struct {
 	closeFunc func() error
 }
 
-// FakeClosePacketConn returns a PacketConn implementation that shadows Close.
+// FakeClosePacketConn returns a WrappingPacketConn that shadows Close.
 //
 // Unless closeFunc is nil, Close calls it instead of closing the underlying PacketConn,
 // and returns its error. Otherwise, Close does nothing and returns nil. Either way, the underlying
 // PacketConn stays open: reads and writes go on, and Close neither unblocks them nor makes them fail,
 // so whoever owns the PacketConn closes it, e.g. after Unwrap.
-func FakeClosePacketConn(pc PacketConn, closeFunc func() error) PacketConn {
+func FakeClosePacketConn(pc PacketConn, closeFunc func() error) WrappingPacketConn {
 	return &fakeClosePacketConn{pc, closeFunc}
 }
 
@@ -147,13 +147,13 @@ type fakeCloseStreamConn struct {
 	closeFunc func() error
 }
 
-// FakeCloseStreamConn returns a StreamConn implementation that shadows Close.
+// FakeCloseStreamConn returns a WrappingStreamConn that shadows Close.
 //
 // Unless closeFunc is nil, Close calls it instead of closing the underlying StreamConn,
 // and returns its error. Otherwise, Close does nothing and returns nil. Either way, the underlying
 // StreamConn stays open: reads and writes go on, and Close neither unblocks them nor makes them fail,
 // so whoever owns the StreamConn closes it, e.g. after Unwrap.
-func FakeCloseStreamConn(sc StreamConn, closeFunc func() error) StreamConn {
+func FakeCloseStreamConn(sc StreamConn, closeFunc func() error) WrappingStreamConn {
 	return &fakeCloseStreamConn{sc, closeFunc}
 }
 
@@ -231,7 +231,7 @@ type idleTimeoutPacketConn struct {
 	idle idleTimer
 }
 
-// IdleTimeoutPacketConn returns a PacketConn implementation that closes the underlying PacketConn
+// IdleTimeoutPacketConn returns a WrappingPacketConn that closes the underlying PacketConn
 // asynchronously from a separate goroutine once it has been idle for the timeout.
 //
 // The timeout is ignored if it's zero or negative. The idle time restarts on each successful
@@ -240,7 +240,7 @@ type idleTimeoutPacketConn struct {
 // The idle time starts when the underlying connection is wrapped, i.e. before this function returns,
 // and the timer stops for good once Stop is called, leaving the underlying connection open, or once
 // the connection is closed, by Close or by the timer.
-func IdleTimeoutPacketConn(pc PacketConn, timeout time.Duration) PacketConn {
+func IdleTimeoutPacketConn(pc PacketConn, timeout time.Duration) WrappingPacketConn {
 	w := &idleTimeoutPacketConn{PacketConn: pc}
 	w.idle.init(timeout, pc.Close)
 	return w
@@ -289,7 +289,7 @@ type idleTimeoutStreamConn struct {
 	idle idleTimer
 }
 
-// IdleTimeoutStreamConn returns a StreamConn implementation that closes the underlying StreamConn
+// IdleTimeoutStreamConn returns a WrappingStreamConn that closes the underlying StreamConn
 // asynchronously from a separate goroutine once it has been idle for the timeout.
 //
 // The timeout is ignored if it's zero or negative. The idle time restarts on each successful
@@ -298,7 +298,7 @@ type idleTimeoutStreamConn struct {
 // The idle time starts when the underlying connection is wrapped, i.e. before this function returns,
 // and the timer stops for good once Stop is called, leaving the underlying connection open, or once
 // the connection is closed, by Close or by the timer.
-func IdleTimeoutStreamConn(sc StreamConn, timeout time.Duration) StreamConn {
+func IdleTimeoutStreamConn(sc StreamConn, timeout time.Duration) WrappingStreamConn {
 	w := &idleTimeoutStreamConn{StreamConn: sc}
 	w.idle.init(timeout, sc.Close)
 	return w
@@ -454,27 +454,23 @@ func (w *streamToPacketConn) Unwrap() StreamConn { return w.StreamConn }
 var (
 	_ FromToPacketConn = (*packetToFromToPacketConn)(nil)
 
-	_ PacketConn = (*fakeAddressPacketConn)(nil)
-	_ PacketConn = (*fakeClosePacketConn)(nil)
-	_ PacketConn = (*idleTimeoutPacketConn)(nil)
 	_ PacketConn = (*streamToPacketConn)(nil)
 
 	_ Stopper = (*idleTimeoutPacketConn)(nil)
 	_ Stopper = (*idleTimeoutStreamConn)(nil)
 
-	_ StreamConn = (*fakeAddressStreamConn)(nil)
-	_ StreamConn = (*fakeCloseStreamConn)(nil)
-	_ StreamConn = (*idleTimeoutStreamConn)(nil)
 	_ StreamConn = (*packetToStreamConn)(nil)
 
-	_ Wrapper[PacketConn] = (*fakeAddressPacketConn)(nil)
-	_ Wrapper[PacketConn] = (*fakeClosePacketConn)(nil)
-	_ Wrapper[PacketConn] = (*idleTimeoutPacketConn)(nil)
+	_ WrappingPacketConn = (*fakeAddressPacketConn)(nil)
+	_ WrappingPacketConn = (*fakeClosePacketConn)(nil)
+	_ WrappingPacketConn = (*idleTimeoutPacketConn)(nil)
+
+	_ WrappingStreamConn = (*fakeAddressStreamConn)(nil)
+	_ WrappingStreamConn = (*fakeCloseStreamConn)(nil)
+	_ WrappingStreamConn = (*idleTimeoutStreamConn)(nil)
+
 	_ Wrapper[PacketConn] = (*packetToFromToPacketConn)(nil)
 	_ Wrapper[PacketConn] = (*packetToStreamConn)(nil)
 
-	_ Wrapper[StreamConn] = (*fakeAddressStreamConn)(nil)
-	_ Wrapper[StreamConn] = (*fakeCloseStreamConn)(nil)
-	_ Wrapper[StreamConn] = (*idleTimeoutStreamConn)(nil)
 	_ Wrapper[StreamConn] = (*streamToPacketConn)(nil)
 )
