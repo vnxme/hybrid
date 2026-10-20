@@ -117,6 +117,12 @@ type PacketConn = net.PacketConn
 // the very type, e.g. AcceptSplit of a SplitListener, as *net.TCPListener has AcceptTCP.
 type PacketListener = net.Listener
 
+// PacketOverStreamConn is a PacketConn over a StreamConn, which Unwrap returns.
+type PacketOverStreamConn interface {
+	PacketConn
+	Wrapper[StreamConn]
+}
+
 // Stopper can stop what a wrapper or a splitter does on its own, e.g. closing an idle connection or reading
 // packets from it, leaving the underlying connection open.
 type Stopper interface {
@@ -144,6 +150,12 @@ type StreamConn = net.Conn
 
 // StreamListener is an alias for net.Listener, i.e. a generic network listener for stream-oriented protocols.
 type StreamListener = net.Listener
+
+// StreamOverPacketConn is a StreamConn over a PacketConn, which Unwrap returns.
+type StreamOverPacketConn interface {
+	StreamConn
+	Wrapper[PacketConn]
+}
 
 // UDPConn is an interface that is implicitly implemented by *net.UDPConn.
 type UDPConn interface {

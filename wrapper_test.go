@@ -475,7 +475,7 @@ func testWrapperPacketToStreamConn(t *testing.T) {
 		t.Errorf("Read() = %q, %v, want %q, io.ErrShortBuffer", b[:n], err, "trun")
 	}
 
-	if got := w.(Wrapper[PacketConn]).Unwrap(); got != c1 {
+	if got := w.Unwrap(); got != c1 {
 		t.Errorf("Unwrap() = %v, want the trunk end", got)
 	}
 }
@@ -502,7 +502,7 @@ func testWrapperStreamToPacketConn(t *testing.T) {
 		t.Errorf("ReadFrom() = %q from %v, %v, want %q from %v, nil", b[:n], from, err, "pong", c1.RemoteAddr())
 	}
 
-	if got := w.(Wrapper[StreamConn]).Unwrap(); got != c1 {
+	if got := w.Unwrap(); got != c1 {
 		t.Errorf("Unwrap() = %v, want the pipe end", got)
 	}
 }

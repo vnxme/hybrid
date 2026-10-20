@@ -391,7 +391,7 @@ type packetToStreamConn struct {
 	remote net.Addr
 }
 
-// PacketToStreamConn returns a StreamConn implementation based on the underlying PacketConn
+// PacketToStreamConn returns a StreamOverPacketConn based on the underlying PacketConn
 // with the given remote address.
 //
 // The remote address given is returned by RemoteAddr, and Write sends every packet to it,
@@ -399,7 +399,7 @@ type packetToStreamConn struct {
 // Each Read reads a single packet, which is truncated if longer than the buffer, silently or with
 // an error, e.g. io.ErrShortBuffer, depending on the underlying PacketConn, so that reading a packet
 // in parts, e.g. with io.ReadFull, fails.
-func PacketToStreamConn(pc PacketConn, remote net.Addr) StreamConn {
+func PacketToStreamConn(pc PacketConn, remote net.Addr) StreamOverPacketConn {
 	return &packetToStreamConn{pc, remote}
 }
 
@@ -425,13 +425,13 @@ type streamToPacketConn struct {
 	StreamConn
 }
 
-// StreamToPacketConn returns a PacketConn implementation based on the underlying StreamConn.
+// StreamToPacketConn returns a PacketOverStreamConn based on the underlying StreamConn.
 //
 // ReadFrom returns the remote address of the StreamConn, while WriteTo writes to it whatever address
 // it's given, as the address argument is ignored. A packet read is what a single Read returns, so packets
 // keep their boundaries only if the StreamConn keeps those of writes, as a pipe does with a buffer as long
 // as any write, and TCP doesn't.
-func StreamToPacketConn(sc StreamConn) PacketConn {
+func StreamToPacketConn(sc StreamConn) PacketOverStreamConn {
 	return &streamToPacketConn{sc}
 }
 
@@ -454,12 +454,12 @@ func (w *streamToPacketConn) Unwrap() StreamConn { return w.StreamConn }
 var (
 	_ FromToPacketConn = (*packetToFromToPacketConn)(nil)
 
-	_ PacketConn = (*streamToPacketConn)(nil)
+	_ PacketOverStreamConn = (*streamToPacketConn)(nil)
 
 	_ StoppablePacketConn = (*idleTimeoutPacketConn)(nil)
 	_ StoppableStreamConn = (*idleTimeoutStreamConn)(nil)
 
-	_ StreamConn = (*packetToStreamConn)(nil)
+	_ StreamOverPacketConn = (*packetToStreamConn)(nil)
 
 	_ WrappingPacketConn = (*fakeAddressPacketConn)(nil)
 	_ WrappingPacketConn = (*fakeClosePacketConn)(nil)
@@ -468,7 +468,4 @@ var (
 	_ WrappingStreamConn = (*fakeCloseStreamConn)(nil)
 
 	_ Wrapper[PacketConn] = (*packetToFromToPacketConn)(nil)
-	_ Wrapper[PacketConn] = (*packetToStreamConn)(nil)
-
-	_ Wrapper[StreamConn] = (*streamToPacketConn)(nil)
 )

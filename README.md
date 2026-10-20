@@ -71,25 +71,27 @@ The package builds on the standard library rather than replacing it: `PacketConn
 `StreamListener` and `PacketListener` are aliases of `net` types, so any `net` connection or listener fits,
 and every type of the package can be used wherever a `net` type is expected.
 
-| Interface             | Definition                                    | Satisfied by                                                        |
-|-----------------------|-----------------------------------------------|---------------------------------------------------------------------|
-| `PacketConn`          | alias of `net.PacketConn`                     | `*net.UDPConn`, trunks, the fallback connection of a splitter       |
-| `StreamConn`          | alias of `net.Conn`                           | `*net.TCPConn`, pipes, split connections                            |
-| `StreamListener`      | alias of `net.Listener`                       | `*net.TCPListener`                                                  |
-| `PacketListener`      | alias of `net.Listener`                       | `SplitListener`                                                     |
-| `Conn`                | `PacketConn` + `Read`, `Write`, `RemoteAddr`  | dialed `*net.UDPConn`, split connections                            |
-| `FromToReader`        | `ReadFromTo`                                  | trunks, `FromToUDPConn`, split and fallback connections             |
-| `FromToWriter`        | `WriteToFrom`                                 | trunks, `FromToUDPConn`, split and fallback connections             |
-| `FromToPacketConn`    | `PacketConn` + `FromToReader` + `FromToWriter`| trunks, split connections, the fallback connection                  |
-| `UDPConn`             | the methods of `*net.UDPConn`                 | `*net.UDPConn`                                                      |
-| `FromToUDPConn`       | `UDPConn` + `FromTo*` + UDP-specific variants | `PacketInfoUDPConn`                                                 |
-| `Wrapper[T]`          | `Unwrap() T`                                  | wrappers, adapters, `PacketInfoUDPConn`, `SplitListener`            |
-| `WrappingPacketConn`  | `PacketConn` + `Wrapper[PacketConn]`          | the `PacketConn` wrappers                                           |
-| `WrappingStreamConn`  | `StreamConn` + `Wrapper[StreamConn]`          | the `StreamConn` wrappers                                           |
-| `Stopper`             | `Stop() error`                                | idle timeout wrappers, `SplitListener`                              |
-| `StoppablePacketConn` | `WrappingPacketConn` + `Stopper`              | `IdleTimeoutPacketConn`                                             |
-| `StoppableStreamConn` | `WrappingStreamConn` + `Stopper`              | `IdleTimeoutStreamConn`                                             |
-| `Deadline`            | `Set(time.Time)`, `Wait() <-chan struct{}`    | `SimpleDeadline`, `HookDeadline`                                    |
+| Interface              | Definition                                    | Satisfied by                                                        |
+|------------------------|-----------------------------------------------|---------------------------------------------------------------------|
+| `PacketConn`           | alias of `net.PacketConn`                     | `*net.UDPConn`, trunks, the fallback connection of a splitter       |
+| `StreamConn`           | alias of `net.Conn`                           | `*net.TCPConn`, pipes, split connections                            |
+| `StreamListener`       | alias of `net.Listener`                       | `*net.TCPListener`                                                  |
+| `PacketListener`       | alias of `net.Listener`                       | `SplitListener`                                                     |
+| `Conn`                 | `PacketConn` + `Read`, `Write`, `RemoteAddr`  | dialed `*net.UDPConn`, split connections                            |
+| `FromToReader`         | `ReadFromTo`                                  | trunks, `FromToUDPConn`, split and fallback connections             |
+| `FromToWriter`         | `WriteToFrom`                                 | trunks, `FromToUDPConn`, split and fallback connections             |
+| `FromToPacketConn`     | `PacketConn` + `FromToReader` + `FromToWriter`| trunks, split connections, the fallback connection                  |
+| `UDPConn`              | the methods of `*net.UDPConn`                 | `*net.UDPConn`                                                      |
+| `FromToUDPConn`        | `UDPConn` + `FromTo*` + UDP-specific variants | `PacketInfoUDPConn`                                                 |
+| `Wrapper[T]`           | `Unwrap() T`                                  | wrappers, adapters, `PacketInfoUDPConn`, `SplitListener`            |
+| `WrappingPacketConn`   | `PacketConn` + `Wrapper[PacketConn]`          | the `PacketConn` wrappers                                           |
+| `WrappingStreamConn`   | `StreamConn` + `Wrapper[StreamConn]`          | the `StreamConn` wrappers                                           |
+| `Stopper`              | `Stop() error`                                | idle timeout wrappers, `SplitListener`                              |
+| `StoppablePacketConn`  | `WrappingPacketConn` + `Stopper`              | `IdleTimeoutPacketConn`                                             |
+| `StoppableStreamConn`  | `WrappingStreamConn` + `Stopper`              | `IdleTimeoutStreamConn`                                             |
+| `StreamOverPacketConn` | `StreamConn` + `Wrapper[PacketConn]`          | `PacketToStreamConn`                                                |
+| `PacketOverStreamConn` | `PacketConn` + `Wrapper[StreamConn]`          | `StreamToPacketConn`                                                |
+| `Deadline`             | `Set(time.Time)`, `Wait() <-chan struct{}`    | `SimpleDeadline`, `HookDeadline`                                    |
 
 ### Conn
 
@@ -126,8 +128,9 @@ A listener may also have a method returning the very type, e.g. `AcceptSplit` of
 
 `Wrapper[T]` unwraps the underlying value of type `T`. `T` must be the very type `Unwrap` returns, e.g. a wrapper
 returning a `FromToPacketConn` isn't a `Wrapper[PacketConn]`. The wrappers that keep the type of a connection
-return a `WrappingPacketConn` or a `WrappingStreamConn`, so `Unwrap` needs no type assertion, while an adapter
-returns the type it adapts to, and is a `Wrapper` of the type it's given.
+return a `WrappingPacketConn` or a `WrappingStreamConn`, so `Unwrap` needs no type assertion. So do the adapters
+changing the orientation of a connection, which return a `StreamOverPacketConn` or a `PacketOverStreamConn`,
+whose `Unwrap` returns the connection of the other orientation.
 
 `Stopper` stops what a wrapper or a splitter does on its own, e.g. closing an idle connection or reading packets
 from it, while leaving the underlying connection open, typically for the caller to take it over with `Unwrap`.
