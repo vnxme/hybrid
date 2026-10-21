@@ -71,7 +71,7 @@ func (sc *splitConnBase) send(b []byte, c *splitConn, dst, src net.Addr, idx int
 func (s *splitter) lookupRemote(addr net.Addr) *splitConn {
 	s.remotes.RLock()
 	defer s.remotes.RUnlock()
-	return s.remotes.m[addrKey(addr)]
+	return s.remotes.m[addrKeyOf(addr)]
 }
 
 // writeLoop writes the packets of the write queue to the underlying connection, until the splitter closes

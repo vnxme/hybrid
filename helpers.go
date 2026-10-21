@@ -26,8 +26,41 @@ package hybrid
 
 import (
 	"net"
+	"net/netip"
 	"slices"
 )
+
+// addrKey identifies an address, e.g. as a map key: a *net.UDPAddr, a *net.TCPAddr or a *net.IPAddr
+// by its netip.AddrPort, with a zero port for a *net.IPAddr and an IPv4 address unmapped, as packet info
+// reports it, so that it matches however it's written, or any other address by its string. As it doesn't
+// hold the network, keys should only compare addresses of a single network, e.g. of a single connection.
+type addrKey struct {
+	ap  netip.AddrPort
+	str string
+}
+
+// addrKeyOf returns the key of an address. A nil pointer of a type held by its netip.AddrPort gives
+// an empty key.
+func addrKeyOf(a net.Addr) addrKey {
+	var ap netip.AddrPort
+	switch a := a.(type) {
+	case *net.UDPAddr:
+		ap = a.AddrPort()
+	case *net.TCPAddr:
+		ap = a.AddrPort()
+	case *net.IPAddr:
+		if a != nil {
+			ip, _ := netip.AddrFromSlice(a.IP)
+			ap = netip.AddrPortFrom(ip.WithZone(a.Zone), 0)
+		}
+	default:
+		return addrKey{str: a.String()}
+	}
+	return addrKey{ap: netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
+}
+
+// valid reports whether the key holds an address.
+func (k addrKey) valid() bool { return k.ap.IsValid() || k.str != "" }
 
 // cloneAddr returns a copy of a standard address, so that they don't share memory.
 // Any other address, including a nil pointer of a standard type, is returned as is.

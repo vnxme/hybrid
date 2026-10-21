@@ -18,39 +18,13 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/netip"
 	"time"
 )
 
 // flowKey identifies a flow: by its source and destination addresses for a connection that reports
-// destination addresses, or by its source address alone otherwise. An address is held in src or dst
-// for a *net.UDPAddr, or as its string in srcStr or dstStr for any other address.
+// destination addresses, or by its source address alone otherwise, with dst left empty.
 type flowKey struct {
-	src, dst       netip.AddrPort
-	srcStr, dstStr string
-}
-
-// remote returns the key of the remote address of a flow, i.e. of its source address.
-func (k flowKey) remote() flowKey { return flowKey{src: k.src, srcStr: k.srcStr} }
-
-// hasDst reports whether the key holds a destination address.
-func (k flowKey) hasDst() bool { return k.dst.IsValid() || k.dstStr != "" }
-
-// withDst returns the key with the given destination address, held the way addrKey holds a source address.
-func (k flowKey) withDst(a net.Addr) flowKey {
-	d := addrKey(a)
-	k.dst, k.dstStr = d.src, d.srcStr
-	return k
-}
-
-// addrKey returns the key of an address the way a flow is told apart by its source address alone,
-// with an IPv4 address unmapped, as packet info reports it, so that it matches however it's written.
-func addrKey(a net.Addr) flowKey {
-	if u, ok := a.(*net.UDPAddr); ok {
-		ap := u.AddrPort()
-		return flowKey{src: netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
-	}
-	return flowKey{srcStr: a.String()}
+	src, dst addrKey
 }
 
 // splitPacketInfo describes a packet read from the underlying connection.
@@ -106,7 +80,7 @@ func (s *splitter) readLoop() {
 			s.drops.truncated.Add(1)
 			continue
 		}
-		if s.byDst && !p.key.hasDst() { // E.g. packet info is missing, as it has been truncated
+		if s.byDst && !p.key.dst.valid() { // E.g. packet info is missing, as it has been truncated
 			s.drops.noDestination.Add(1)
 			continue
 		}
@@ -119,16 +93,16 @@ func (s *splitter) readLoop() {
 func (s *splitter) read(b []byte, p *splitPacketInfo) (n int, err error) {
 	*p = splitPacketInfo{}
 	if s.udp != nil {
-		n, p.key.src, p.key.dst, p.idx, err = s.udp.ReadFromToUDPAddrPort(b)
+		n, p.key.src.ap, p.key.dst.ap, p.idx, err = s.udp.ReadFromToUDPAddrPort(b)
 		return n, err
 	}
 
 	n, p.src, p.dst, p.idx, err = s.pc.ReadFromTo(b)
 	if p.src != nil {
-		p.key = addrKey(p.src)
+		p.key.src = addrKeyOf(p.src)
 	}
 	if s.byDst && p.dst != nil {
-		p.key = p.key.withDst(p.dst)
+		p.key.dst = addrKeyOf(p.dst)
 	}
 	return n, err
 }
@@ -168,7 +142,7 @@ func (s *splitter) route(data []byte, p *splitPacketInfo) {
 		s.swept.m[c] = struct{}{}
 		s.swept.Unlock()
 		s.remotes.Lock()
-		s.remotes.m[p.key.remote()] = c
+		s.remotes.m[p.key.src] = c
 		s.remotes.Unlock()
 	}
 	c.touch()
@@ -290,8 +264,8 @@ func (s *splitter) deleteFlow(c *splitConn) {
 	s.discard(c)
 	delete(s.flows, c.key)
 	s.remotes.Lock()
-	if r := c.key.remote(); s.remotes.m[r] == c {
-		delete(s.remotes.m, r)
+	if s.remotes.m[c.key.src] == c {
+		delete(s.remotes.m, c.key.src)
 	}
 	s.remotes.Unlock()
 }

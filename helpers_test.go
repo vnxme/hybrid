@@ -19,6 +19,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/netip"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -151,6 +152,47 @@ func skipIfNoUDP(tb testing.TB) {
 	switch runtime.GOOS {
 	case "js", "plan9", "wasip1":
 		tb.Skipf("not supported on %s", runtime.GOOS)
+	}
+}
+
+// TestAddrKeyOf ensures addrKeyOf holds a UDP, TCP or IP address by its netip.AddrPort, unmapped and with
+// the zone of an IPv6 address only, so that it matches however it's written, and any other address by its string.
+func TestAddrKeyOf(t *testing.T) {
+	v4 := netip.MustParseAddrPort("192.0.2.1:3")
+	v6 := netip.MustParseAddrPort("[2001:db8::1]:3")
+	ll := netip.MustParseAddrPort("[fe80::1%eth0]:3")
+	ip := func(s string) net.IP { return net.ParseIP(s) }
+	for _, test := range []struct {
+		name string
+		addr net.Addr
+		want addrKey
+	}{
+		{"UDP4", &net.UDPAddr{IP: ip("192.0.2.1").To4(), Port: 3}, addrKey{ap: v4}},
+		{"UDP4In16Bytes", &net.UDPAddr{IP: ip("192.0.2.1"), Port: 3}, addrKey{ap: v4}},
+		{"UDP4Mapped", &net.UDPAddr{IP: ip("::ffff:192.0.2.1"), Port: 3, Zone: "eth0"}, addrKey{ap: v4}},
+		{"UDP6", &net.UDPAddr{IP: ip("2001:db8::1"), Port: 3}, addrKey{ap: v6}},
+		{"UDP6Zone", &net.UDPAddr{IP: ip("fe80::1"), Port: 3, Zone: "eth0"}, addrKey{ap: ll}},
+		{"UDPNil", (*net.UDPAddr)(nil), addrKey{}},
+		{"TCP4Mapped", &net.TCPAddr{IP: ip("::ffff:192.0.2.1"), Port: 3}, addrKey{ap: v4}},
+		{"TCP6Zone", &net.TCPAddr{IP: ip("fe80::1"), Port: 3, Zone: "eth0"}, addrKey{ap: ll}},
+		{"TCPNil", (*net.TCPAddr)(nil), addrKey{}},
+		{"IP4Mapped", &net.IPAddr{IP: ip("::ffff:192.0.2.1"), Zone: "eth0"}, addrKey{ap: netip.AddrPortFrom(v4.Addr(), 0)}},
+		{"IP6Zone", &net.IPAddr{IP: ip("fe80::1"), Zone: "eth0"}, addrKey{ap: netip.AddrPortFrom(ll.Addr(), 0)}},
+		{"IPNoIP", &net.IPAddr{}, addrKey{}},
+		{"IPNil", (*net.IPAddr)(nil), addrKey{}},
+		{"Unix", &net.UnixAddr{Name: "/tmp/sock", Net: "unixgram"}, addrKey{str: "/tmp/sock"}},
+		{"Trunk", oneTrunkAddr, addrKey{str: oneTrunkAddr.String()}},
+		{"Pipe", onePipeAddr, addrKey{str: onePipeAddr.String()}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := addrKeyOf(test.addr)
+			if got != test.want {
+				t.Errorf("addrKeyOf(%v) = %+v, want %+v", test.addr, got, test.want)
+			}
+			if valid := test.want != (addrKey{}); got.valid() != valid {
+				t.Errorf("addrKeyOf(%v).valid() = %t, want %t", test.addr, got.valid(), valid)
+			}
+		})
 	}
 }
 

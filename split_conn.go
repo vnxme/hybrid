@@ -131,7 +131,7 @@ type splitConn struct {
 func (s *splitter) newConnection(p *splitPacketInfo) *splitConn {
 	src, dst := p.src, p.dst
 	if s.udp != nil {
-		src, dst = addrPortToAddr(p.key.src), addrPortToAddr(p.key.dst)
+		src, dst = addrPortToAddr(p.key.src.ap), addrPortToAddr(p.key.dst.ap)
 	}
 
 	sc := &splitConn{
@@ -225,7 +225,7 @@ func (sc *splitConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 // interface rather than idx. Like a connected UDP socket, it fails with net.ErrWriteToConnected if dst or src
 // is another address.
 func (sc *splitConn) WriteToFrom(b []byte, dst, src net.Addr, _ int) (int, error) {
-	if dst != nil && addrKey(dst) != sc.key.remote() || src != nil && addrKey(src) != addrKey(sc.LocalAddr()) {
+	if dst != nil && addrKeyOf(dst) != sc.key.src || src != nil && addrKeyOf(src) != addrKeyOf(sc.LocalAddr()) {
 		return 0, sc.opError("write", sc.LocalAddr(), dst, errSplitWriteToConnected)
 	}
 	n, err := sc.send(b, sc, sc.remoteAddr, sc.localAddr, sc.LocalIfIdx())
