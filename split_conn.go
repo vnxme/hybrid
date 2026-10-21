@@ -100,9 +100,6 @@ func (sc *splitConnBase) closeLocal() (closed bool) {
 // opError wraps err in net.OpError the same way as a trunk, and so a UDP connection, does: Source is
 // the local address, and Addr is the remote one. Setting a deadline reports the local address as Addr only.
 func (sc *splitConnBase) opError(op string, local, remote net.Addr, err error) error {
-	if err == nil {
-		return nil
-	}
 	network := sc.splitter.pc.LocalAddr().Network()
 	if op == "set" {
 		return &net.OpError{Op: op, Net: network, Addr: local, Err: err}
@@ -173,7 +170,9 @@ func (sc *splitConn) ReadFrom(b []byte) (int, net.Addr, error) {
 // which the caller may change, and its latest interface index.
 func (sc *splitConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 	n, c, err := sc.receive(b)
-	err = sc.opError("read", sc.LocalAddr(), sc.remoteAddr, err)
+	if err != nil {
+		err = sc.opError("read", sc.LocalAddr(), sc.remoteAddr, err)
+	}
 	if c == nil { // No packet read
 		return 0, nil, nil, 0, err
 	}
@@ -229,7 +228,10 @@ func (sc *splitConn) WriteToFrom(b []byte, dst, src net.Addr, _ int) (int, error
 		return 0, sc.opError("write", sc.LocalAddr(), dst, errSplitWriteToConnected)
 	}
 	n, err := sc.send(b, sc, sc.remoteAddr, sc.localAddr, sc.LocalIfIdx())
-	return n, sc.opError("write", sc.LocalAddr(), sc.remoteAddr, err)
+	if err != nil {
+		err = sc.opError("write", sc.LocalAddr(), sc.remoteAddr, err)
+	}
+	return n, err
 }
 
 // ended reports whether the flow of the connection has ended, i.e. it's been closed without being released,
@@ -288,7 +290,9 @@ func (sc *splitFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, err
 	if c == nil { // No packet read
 		return 0, nil, nil, 0, sc.opError("read", sc.LocalAddr(), nil, err)
 	}
-	err = sc.opError("read", sc.LocalAddr(), c.remoteAddr, err)
+	if err != nil {
+		err = sc.opError("read", sc.LocalAddr(), c.remoteAddr, err)
+	}
 	return n, cloneAddr(c.remoteAddr), cloneAddr(c.localAddr), c.LocalIfIdx(), err // Copies the caller may change
 }
 
@@ -318,7 +322,10 @@ func (sc *splitFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int,
 		to, src = c.remoteAddr, cloneAddr(src)
 	}
 	n, err := sc.send(b, c, to, src, idx)
-	return n, sc.opError("write", sc.LocalAddr(), dst, err)
+	if err != nil {
+		err = sc.opError("write", sc.LocalAddr(), dst, err)
+	}
+	return n, err
 }
 
 // discard drops and counts the packets left unread on the closed fallback connection.

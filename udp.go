@@ -240,10 +240,11 @@ func (u *packetInfoUDPConn) WriteToFromUDP(b []byte, dst, src *net.UDPAddr, idx 
 // count as IPv4 ones.
 func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.AddrPort, idx int) (n int, err error) {
 	// Require dst of an IP version the socket accepts, and src, if any, of the same IP version
-	bits, srcBits := dst.Addr().Unmap().BitLen(), src.Addr().Unmap().BitLen()
-	is4 := bits == 32
-	accepted := is4 && !u.v6Only || bits == 128 && !u.v4Only
-	if idx < 0 || idx > math.MaxInt32 || !accepted || srcBits != 0 && srcBits != bits {
+	srcIP := src.Addr().Unmap()
+	dstBits, srcBits := dst.Addr().Unmap().BitLen(), srcIP.BitLen()
+	is4 := dstBits == 32
+	accepted := is4 && !u.v6Only || dstBits == 128 && !u.v4Only
+	if idx < 0 || idx > math.MaxInt32 || !accepted || srcBits != 0 && srcBits != dstBits {
 		return 0, &net.OpError{Op: "write", Net: u.network(), Source: addrPortToAddr(src), Addr: addrPortToAddr(dst), Err: syscall.EINVAL}
 	}
 
@@ -255,7 +256,7 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 
 	oob, ref := getBuf(pktinfo.BufferSize)
 	defer putBuf(ref)
-	oobN := pktinfo.Marshal(oob, is4, src.Addr().Unmap(), idx)
+	oobN := pktinfo.Marshal(oob, is4, srcIP, idx)
 	n, _, err = u.WriteMsgUDPAddrPort(b, oob[:oobN], dst)
 
 	// Since Go 1.26, WriteMsgUDPAddrPort returns 0 bytes written on Windows, though it sends
