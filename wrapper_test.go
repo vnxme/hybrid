@@ -442,42 +442,127 @@ func testWrapperPacketToFromToPacketConn(t *testing.T) {
 }
 
 // testWrapperPacketToStreamConn ensures PacketToStreamConn writes to the remote address given, reads a packet
-// from any address, and truncates a packet longer than the read buffer, as the underlying PacketConn does.
+// from any address unless filtered, or from the remote address only, dropping the others, and truncates a packet
+// longer than the read buffer, as the underlying PacketConn does.
 func testWrapperPacketToStreamConn(t *testing.T) {
 	a1 := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1}
 	a2 := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 2}
 	remote := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 3}
-	c1, c2 := BufferedTrunk(4, a1, a2)
-	defer func() { _, _ = c1.Close(), c2.Close() }()
-	w := PacketToStreamConn(c1, remote)
-	b := make([]byte, 8)
+	mapped := &net.UDPAddr{IP: net.ParseIP("::ffff:192.0.2.1"), Port: 3} // As a dual-stack socket reports remote
+	other := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 3}
 
-	if got := w.RemoteAddr(); got != remote {
-		t.Errorf("RemoteAddr() = %v, want %v", got, remote)
+	// pair returns the wrapper over one end of a trunk, and the other end, sending packets from a2 unless told.
+	pair := func(t *testing.T, remote net.Addr, filter bool) (StreamOverPacketConn, FromToPacketConn) {
+		c1, c2 := BufferedTrunk(8, a1, a2)
+		t.Cleanup(func() { _, _ = c1.Close(), c2.Close() })
+		w := PacketToStreamConn(c1, remote, filter)
+		if got := w.Unwrap(); got != c1 {
+			t.Errorf("Unwrap() = %v, want the trunk end", got)
+		}
+		return w, c2
 	}
-
-	if _, err := w.Write([]byte("ping")); err != nil {
-		t.Fatalf("Write() = %v, want nil", err)
-	}
-	if n, _, to, _, err := c2.ReadFromTo(b); err != nil || string(b[:n]) != "ping" || to.String() != remote.String() {
-		t.Errorf("ReadFromTo() = %q to %v, %v, want %q to %v, nil", b[:n], to, err, "ping", remote)
-	}
-
-	for _, data := range []string{"pong", "truncated"} {
-		if _, err := c2.WriteTo([]byte(data), nil); err != nil {
-			t.Fatalf("WriteTo() = %v, want nil", err)
+	send := func(t *testing.T, c FromToPacketConn, data string, src net.Addr) {
+		if _, err := c.WriteToFrom([]byte(data), nil, src, 0); err != nil {
+			t.Fatalf("WriteToFrom() = %v, want nil", err)
 		}
 	}
-	if n, err := w.Read(b[:4]); err != nil || string(b[:n]) != "pong" {
-		t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, "pong")
-	}
-	if n, err := w.Read(b[:4]); !errors.Is(err, io.ErrShortBuffer) || string(b[:n]) != "trun" {
-		t.Errorf("Read() = %q, %v, want %q, io.ErrShortBuffer", b[:n], err, "trun")
+
+	t.Run("NoFilter", func(t *testing.T) {
+		w, c2 := pair(t, remote, false)
+		b := make([]byte, 8)
+
+		if got := w.RemoteAddr(); got != remote {
+			t.Errorf("RemoteAddr() = %v, want %v", got, remote)
+		}
+
+		if _, err := w.Write([]byte("ping")); err != nil {
+			t.Fatalf("Write() = %v, want nil", err)
+		}
+		if n, _, to, _, err := c2.ReadFromTo(b); err != nil || string(b[:n]) != "ping" || to.String() != remote.String() {
+			t.Errorf("ReadFromTo() = %q to %v, %v, want %q to %v, nil", b[:n], to, err, "ping", remote)
+		}
+
+		send(t, c2, "pong", nil)
+		send(t, c2, "truncated", other)
+		if n, err := w.Read(b[:4]); err != nil || string(b[:n]) != "pong" {
+			t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, "pong")
+		}
+		if n, err := w.Read(b[:4]); !errors.Is(err, io.ErrShortBuffer) || string(b[:n]) != "trun" {
+			t.Errorf("Read() = %q, %v, want %q, io.ErrShortBuffer", b[:n], err, "trun")
+		}
+	})
+
+	t.Run("Filter", func(t *testing.T) {
+		w, c2 := pair(t, remote, true)
+		b := make([]byte, 8)
+
+		send(t, c2, "a", other)
+		send(t, c2, "b", remote)
+		send(t, c2, "truncated", other) // Its error is dropped along with it
+		send(t, c2, "c", nil)           // From a2
+		send(t, c2, "d", mapped)
+		send(t, c2, "truncated", remote)
+		for _, want := range []string{"b", "d"} {
+			if n, err := w.Read(b[:4]); err != nil || string(b[:n]) != want {
+				t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, want)
+			}
+		}
+		if n, err := w.Read(b[:4]); !errors.Is(err, io.ErrShortBuffer) || string(b[:n]) != "trun" {
+			t.Errorf("Read() = %q, %v, want %q, io.ErrShortBuffer", b[:n], err, "trun")
+		}
+	})
+
+	t.Run("FilterDeadline", func(t *testing.T) {
+		w, c2 := pair(t, remote, true)
+		b := make([]byte, 8)
+
+		send(t, c2, "a", other)
+		send(t, c2, "b", nil)
+		_ = w.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		var nerr net.Error
+		if n, err := w.Read(b); !errors.As(err, &nerr) || !nerr.Timeout() || n != 0 {
+			t.Errorf("Read() = %q, %v, want \"\", a timeout", b[:n], err)
+		}
+	})
+
+	t.Run("FilterNilRemote", func(t *testing.T) { // The filter is ignored, rather than every packet dropped
+		w, c2 := pair(t, nil, true)
+		b := make([]byte, 8)
+
+		send(t, c2, "a", other)
+		if n, err := w.Read(b); err != nil || string(b[:n]) != "a" {
+			t.Errorf("Read() = %q, %v, want %q, nil", b[:n], err, "a")
+		}
+	})
+
+	// readClosed ensures Read returns net.ErrClosed, rather than goes on reading.
+	readClosed := func(t *testing.T, w StreamOverPacketConn) {
+		done := make(chan error, 1)
+		go func() {
+			_, err := w.Read(make([]byte, 8))
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if !errors.Is(err, net.ErrClosed) {
+				t.Errorf("Read() = %v, want net.ErrClosed", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Read() hasn't returned once closed")
+		}
 	}
 
-	if got := w.Unwrap(); got != c1 {
-		t.Errorf("Unwrap() = %v, want the trunk end", got)
-	}
+	t.Run("FilterClose", func(t *testing.T) {
+		w, c2 := pair(t, remote, true)
+
+		send(t, c2, "a", other)
+		time.AfterFunc(50*time.Millisecond, func() { _ = w.Close() })
+		readClosed(t, w)
+	})
+
+	t.Run("FilterStaleSource", func(t *testing.T) { // A failed read returns, whatever address it reports
+		readClosed(t, PacketToStreamConn(&staleSourcePacketConn{src: other}, remote, true))
+	})
 }
 
 // testWrapperStreamToPacketConn ensures StreamToPacketConn reads from the remote address of the StreamConn,
@@ -527,6 +612,17 @@ type closeCountingStreamConn struct {
 func (c *closeCountingStreamConn) Close() error {
 	c.closes.Add(1)
 	return c.StreamConn.Close()
+}
+
+// staleSourcePacketConn is a closed PacketConn whose ReadFrom reports a stale source address with its error,
+// as the PacketConn contract allows.
+type staleSourcePacketConn struct {
+	PacketConn
+	src net.Addr
+}
+
+func (c *staleSourcePacketConn) ReadFrom([]byte) (int, net.Addr, error) {
+	return 0, c.src, net.ErrClosed
 }
 
 const (

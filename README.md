@@ -516,16 +516,22 @@ if err := c.Stop(); err == nil {
 
 ### Adapters
 
-| Function                              | Description                                                                                  |
-|---------------------------------------|----------------------------------------------------------------------------------------------|
-| `PacketToStreamConn(pc, remote)`      | A `StreamConn` over a `PacketConn`, writing every packet to `remote`                         |
-| `StreamToPacketConn(sc)`              | A `PacketConn` over a `StreamConn`, reading and writing packets as single reads and writes   |
-| `PacketToFromToPacketConn(pc, tryPacketInfoUDP)` | A `FromToPacketConn` over any `PacketConn`, with packet info for a `UDPConn` if asked and possible |
+| Function                                         | Description                                                                                         |
+|--------------------------------------------------|-----------------------------------------------------------------------------------------------------|
+| `PacketToStreamConn(pc, remote, filter)`         | A `StreamConn` over a `PacketConn`, writing to `remote`, and reading only from it if `filter`       |
+| `StreamToPacketConn(sc)`                         | A `PacketConn` over a `StreamConn`, reading and writing packets as single reads and writes          |
+| `PacketToFromToPacketConn(pc, tryPacketInfoUDP)` | A `FromToPacketConn` over any `PacketConn`, with packet info for a `UDPConn` if asked and possible  |
 
-- `PacketToStreamConn`: `RemoteAddr` returns the remote address given, and `Write` sends every packet to it,
-  while `Read` accepts a packet from any address, as no filter applies to the remote address. Each `Read` reads
-  a single packet, which is truncated if longer than the buffer, silently or with an error, depending on
-  the underlying connection, so that reading a packet in parts, e.g. with `io.ReadFull`, fails.
+- `PacketToStreamConn`: `RemoteAddr` returns the remote address given, and `Write` sends every packet to it.
+  If `filter` is set and the remote address isn't nil, `Read` accepts a packet from the remote address only,
+  as a dialed UDP socket does, and drops a packet from any other address, along with any error of its read,
+  e.g. of its truncation if the connection reports the source of a truncated packet, and waits for the next one.
+  A failed read, i.e. one reading nothing, returns its error whatever address it reports, e.g. once
+  the connection closes or its read deadline passes. A UDP or IP address matches regardless of IPv4 mapping,
+  e.g. `192.0.2.1:3` matches `[::ffff:192.0.2.1]:3`. Without the filter, `Read` accepts a packet from any
+  address. Each `Read` reads a single packet, which is truncated if longer than the buffer, silently or with
+  an error, depending on the underlying connection, so that reading a packet in parts, e.g. with `io.ReadFull`,
+  fails.
 - `StreamToPacketConn`: `ReadFrom` returns the remote address of the `StreamConn`, while `WriteTo` writes to it
   whatever address it's given, as the address argument is ignored. A packet read is what a single `Read`
   returns, so packets keep their boundaries only if the `StreamConn` keeps those of writes, as a pipe does with

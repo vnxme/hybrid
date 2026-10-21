@@ -388,25 +388,43 @@ func (w *packetToFromToPacketConn) Unwrap() PacketConn {
 type packetToStreamConn struct {
 	PacketConn
 
-	remote net.Addr
+	remote    net.Addr
+	remoteKey addrKey // Of the remote address, if Read filters packets by it
+	filter    bool
 }
 
 // PacketToStreamConn returns a StreamOverPacketConn based on the underlying PacketConn
 // with the given remote address.
 //
-// The remote address given is returned by RemoteAddr, and Write sends every packet to it,
-// while Read accepts a packet from any address, as no filter applies to the remote address.
-// Each Read reads a single packet, which is truncated if longer than the buffer, silently or with
-// an error, e.g. io.ErrShortBuffer, depending on the underlying PacketConn, so that reading a packet
-// in parts, e.g. with io.ReadFull, fails.
-func PacketToStreamConn(pc PacketConn, remote net.Addr) StreamOverPacketConn {
-	return &packetToStreamConn{pc, remote}
+// The remote address given is returned by RemoteAddr, and Write sends every packet to it.
+// If filter is set and the remote address isn't nil, Read accepts a packet from the remote address only,
+// as a dialed UDP socket does, and drops a packet from any other address, along with any error of its read,
+// e.g. of its truncation if the underlying PacketConn reports the source of a truncated packet.
+// A failed read, i.e. one reading nothing, returns its error whatever address it reports, e.g. once
+// the connection closes or its read deadline passes. A UDP or IP address matches regardless of IPv4 mapping.
+// Without the filter, Read accepts a packet from any address. ReadFrom of the underlying PacketConn applies
+// no filter. Each Read reads a single packet, which is truncated if longer than the buffer, silently or with
+// an error, e.g. io.ErrShortBuffer, depending on the underlying PacketConn, so that reading a packet in parts,
+// e.g. with io.ReadFull, fails.
+func PacketToStreamConn(pc PacketConn, remote net.Addr, filter bool) StreamOverPacketConn {
+	w := &packetToStreamConn{PacketConn: pc, remote: remote}
+	if filter && remote != nil {
+		w.filter, w.remoteKey = true, addrKeyOf(remote)
+	}
+	return w
 }
 
-// Read reads a packet from the underlying PacketConn, from any address.
+// Read reads a packet from the underlying PacketConn, from the remote address given if filtered,
+// or from any address otherwise. It drops a packet read from another address, along with any error of its read,
+// and goes on, while a failed read returns its error, as nothing has been read: any address it reports is stale.
 func (w *packetToStreamConn) Read(b []byte) (n int, err error) {
-	n, _, err = w.ReadFrom(b)
-	return
+	for {
+		var src net.Addr
+		n, src, err = w.ReadFrom(b)
+		if !w.filter || n == 0 && err != nil || src == nil || addrKeyOf(src) == w.remoteKey {
+			return n, err
+		}
+	}
 }
 
 // Write writes a packet to the remote address given.
