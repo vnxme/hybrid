@@ -22,7 +22,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -799,41 +798,6 @@ const (
 	testTrunkUnblockName     = "Unblock"
 	testTrunkWriteReturnName = "WriteReturn"
 )
-
-// readConcurrently reads count packets from pc with as many goroutines as readers, closing pc once they're
-// all read, and fails if any packet is read twice, or if they aren't all read in time.
-func readConcurrently(t *testing.T, pc PacketConn, readers, count int) {
-	t.Helper()
-	var mu sync.Mutex
-	seen := make(map[string]bool, count)
-	var read atomic.Int64
-	var wg sync.WaitGroup
-	for range readers {
-		wg.Go(func() {
-			b := make([]byte, 16)
-			for {
-				n, _, err := pc.ReadFrom(b)
-				if err != nil {
-					return // Closed once every packet is read, or the deadline
-				}
-				mu.Lock()
-				if seen[string(b[:n])] {
-					t.Errorf("packet %q read twice", b[:n])
-				}
-				seen[string(b[:n])] = true
-				mu.Unlock()
-				if read.Add(1) == int64(count) {
-					_ = pc.Close()
-				}
-			}
-		})
-	}
-	_ = pc.SetReadDeadline(time.Now().Add(5 * time.Second))
-	wg.Wait()
-	if got := read.Load(); got != int64(count) {
-		t.Errorf("packets read = %d, want %d", got, count)
-	}
-}
 
 // TestTrunkConcurrentReads ensures reads of a trunk end needn't be serialized: each packet is read once.
 func TestTrunkConcurrentReads(t *testing.T) {

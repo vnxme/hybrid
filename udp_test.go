@@ -20,7 +20,6 @@ import (
 	"math"
 	"net"
 	"net/netip"
-	"reflect"
 	"runtime"
 	"slices"
 	"syscall"
@@ -454,32 +453,6 @@ func TestPacketInfoUDPConnFamily(t *testing.T) {
 			}
 		}
 	})
-}
-
-func TestAddrPortToUDPAddr(t *testing.T) {
-	tests := []struct {
-		ap   netip.AddrPort
-		want *net.UDPAddr
-	}{
-		{netip.AddrPort{}, nil},
-		{netip.MustParseAddrPort("127.0.0.1:80"), &net.UDPAddr{IP: net.IP{127, 0, 0, 1}, Port: 80}},
-		{netip.MustParseAddrPort("[::ffff:127.0.0.1]:80"), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 80}},
-		{netip.MustParseAddrPort("[::1]:0"), &net.UDPAddr{IP: net.IPv6loopback}},
-		{netip.MustParseAddrPort("[fe80::1%eth0]:80"), &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 80, Zone: "eth0"}},
-	}
-	for _, test := range tests {
-		t.Run(test.ap.String(), func(t *testing.T) {
-			if got := addrPortToUDPAddr(test.ap); !reflect.DeepEqual(got, test.want) {
-				t.Errorf("addrPortToUDPAddr() = %#v, want %#v", got, test.want)
-			}
-
-			// Unlike addrPortToUDPAddr, addrPortToAddr returns a nil net.Addr
-			got := addrPortToAddr(test.ap)
-			if test.want == nil && got != nil || test.want != nil && !reflect.DeepEqual(got, test.want) {
-				t.Errorf("addrPortToAddr() = %#v, want %#v", got, test.want)
-			}
-		})
-	}
 }
 
 // BenchmarkPacketInfoUDPConn measures writes and reads with packet info over loopback, next to

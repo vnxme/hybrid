@@ -20,10 +20,12 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/net/nettest"
 )
@@ -146,6 +148,41 @@ func newLocalPacketListeners(tb testing.TB, network string) (PacketConn, PacketC
 	return pcs[0], pcs[1]
 }
 
+// readConcurrently reads count packets from pc with as many goroutines as readers, closing pc once they're
+// all read, and fails if any packet is read twice, or if they aren't all read in time.
+func readConcurrently(t *testing.T, pc PacketConn, readers, count int) {
+	t.Helper()
+	var mu sync.Mutex
+	seen := make(map[string]bool, count)
+	var read atomic.Int64
+	var wg sync.WaitGroup
+	for range readers {
+		wg.Go(func() {
+			b := make([]byte, 16)
+			for {
+				n, _, err := pc.ReadFrom(b)
+				if err != nil {
+					return // Closed once every packet is read, or the deadline
+				}
+				mu.Lock()
+				if seen[string(b[:n])] {
+					t.Errorf("packet %q read twice", b[:n])
+				}
+				seen[string(b[:n])] = true
+				mu.Unlock()
+				if read.Add(1) == int64(count) {
+					_ = pc.Close()
+				}
+			}
+		})
+	}
+	_ = pc.SetReadDeadline(time.Now().Add(5 * time.Second))
+	wg.Wait()
+	if got := read.Load(); got != int64(count) {
+		t.Errorf("packets read = %d, want %d", got, count)
+	}
+}
+
 // skipIfNoUDP skips the test or benchmark on the platforms without UDP sockets.
 func skipIfNoUDP(tb testing.TB) {
 	tb.Helper()
@@ -191,6 +228,32 @@ func TestAddrKeyOf(t *testing.T) {
 			}
 			if valid := test.want != (addrKey{}); got.valid() != valid {
 				t.Errorf("addrKeyOf(%v).valid() = %t, want %t", test.addr, got.valid(), valid)
+			}
+		})
+	}
+}
+
+func TestAddrPortToUDPAddr(t *testing.T) {
+	tests := []struct {
+		ap   netip.AddrPort
+		want *net.UDPAddr
+	}{
+		{netip.AddrPort{}, nil},
+		{netip.MustParseAddrPort("127.0.0.1:80"), &net.UDPAddr{IP: net.IP{127, 0, 0, 1}, Port: 80}},
+		{netip.MustParseAddrPort("[::ffff:127.0.0.1]:80"), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 80}},
+		{netip.MustParseAddrPort("[::1]:0"), &net.UDPAddr{IP: net.IPv6loopback}},
+		{netip.MustParseAddrPort("[fe80::1%eth0]:80"), &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 80, Zone: "eth0"}},
+	}
+	for _, test := range tests {
+		t.Run(test.ap.String(), func(t *testing.T) {
+			if got := addrPortToUDPAddr(test.ap); !reflect.DeepEqual(got, test.want) {
+				t.Errorf("addrPortToUDPAddr() = %#v, want %#v", got, test.want)
+			}
+
+			// Unlike addrPortToUDPAddr, addrPortToAddr returns a nil net.Addr
+			got := addrPortToAddr(test.ap)
+			if test.want == nil && got != nil || test.want != nil && !reflect.DeepEqual(got, test.want) {
+				t.Errorf("addrPortToAddr() = %#v, want %#v", got, test.want)
 			}
 		})
 	}

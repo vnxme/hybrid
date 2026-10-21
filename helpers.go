@@ -62,6 +62,23 @@ func addrKeyOf(a net.Addr) addrKey {
 // valid reports whether the key holds an address.
 func (k addrKey) valid() bool { return k.ap.IsValid() || k.str != "" }
 
+// addrPortToAddr is addrPortToUDPAddr returning a net.Addr, which is nil for an invalid netip.AddrPort,
+// rather than holding a nil *net.UDPAddr, which wouldn't compare equal to nil.
+func addrPortToAddr(ap netip.AddrPort) net.Addr {
+	if a := addrPortToUDPAddr(ap); a != nil {
+		return a
+	}
+	return nil
+}
+
+// addrPortToUDPAddr returns a *net.UDPAddr for a valid netip.AddrPort, or nil.
+func addrPortToUDPAddr(ap netip.AddrPort) *net.UDPAddr {
+	if ap.IsValid() {
+		return net.UDPAddrFromAddrPort(ap)
+	}
+	return nil
+}
+
 // cloneAddr returns a copy of a standard address, so that they don't share memory.
 // Any other address, including a nil pointer of a standard type, is returned as is.
 func cloneAddr(addr net.Addr) net.Addr {

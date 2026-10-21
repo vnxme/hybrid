@@ -264,23 +264,6 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 	return n, err
 }
 
-// addrPortToUDPAddr returns a *net.UDPAddr for a valid netip.AddrPort, or nil.
-func addrPortToUDPAddr(ap netip.AddrPort) *net.UDPAddr {
-	if ap.IsValid() {
-		return net.UDPAddrFromAddrPort(ap)
-	}
-	return nil
-}
-
-// addrPortToAddr is addrPortToUDPAddr returning a net.Addr, which is nil for an invalid netip.AddrPort,
-// rather than holding a nil *net.UDPAddr, which wouldn't compare equal to nil.
-func addrPortToAddr(ap netip.AddrPort) net.Addr {
-	if a := addrPortToUDPAddr(ap); a != nil {
-		return a
-	}
-	return nil
-}
-
 // isNilUDPConn reports whether conn is nil, including a nil *net.UDPConn,
 // whose methods would panic instead of returning an error.
 func isNilUDPConn(conn UDPConn) bool {
