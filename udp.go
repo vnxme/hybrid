@@ -112,7 +112,9 @@ func PacketInfoUDPConn(conn UDPConn) (FromToUDPConn, error) {
 	if !ok {
 		return nil, errors.New("hybrid: UDPConn has no local *net.UDPAddr")
 	}
-	if addr.AddrPort().Port() == 0 { // Packets read are reported as sent to this port
+
+	ap := addr.AddrPort()
+	if ap.Port() == 0 { // Packets read are reported as sent to this port
 		return nil, errors.New("hybrid: UDPConn isn't bound to a port")
 	}
 
@@ -124,7 +126,7 @@ func PacketInfoUDPConn(conn UDPConn) (FromToUDPConn, error) {
 	// Detect whether the connection is IPv4/IPv6-only or dual-stack. Like any address obtained
 	// from a socket, the local address has 4 bytes for an IPv4 socket and 16 bytes for an IPv6 one.
 	var v4Only, v6Only bool
-	switch ip := addr.AddrPort().Addr(); {
+	switch ip := ap.Addr(); {
 	case ip.Is4(): // An IPv4 socket
 		v4Only = true
 	case !ip.Unmap().IsUnspecified(): // An IPv6 socket bound to a specific address
@@ -143,7 +145,7 @@ func PacketInfoUDPConn(conn UDPConn) (FromToUDPConn, error) {
 
 	return &packetInfoUDPConn{
 		UDPConn: conn,
-		port:    addr.AddrPort().Port(),
+		port:    ap.Port(),
 		v4Only:  v4Only,
 		v6Only:  v6Only,
 	}, nil
