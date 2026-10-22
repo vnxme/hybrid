@@ -156,27 +156,38 @@ func (sc *splitConn) LocalIfIdx() int { return int(sc.localIfIdx.Load()) }
 // Read reads a packet of the flow, as ReadFrom does. Unlike a connected UDP socket, which truncates a packet longer
 // than b silently, it returns io.ErrShortBuffer then.
 func (sc *splitConn) Read(b []byte) (int, error) {
-	n, _, _, _, err := sc.ReadFromTo(b)
+	n, _, err := sc.read(b)
 	return n, err
 }
 
-// ReadFrom reads a packet of the flow, and returns a copy of the remote address of the flow.
+// ReadFrom reads a packet of the flow, and returns a copy of the remote address of the flow, which the caller
+// may change.
 func (sc *splitConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, addr, _, _, err := sc.ReadFromTo(b)
-	return n, addr, err
+	n, ok, err := sc.read(b)
+	if !ok {
+		return 0, nil, err
+	}
+	return n, cloneAddr(sc.remoteAddr), err
 }
 
 // ReadFromTo reads a packet of the flow, and returns copies of the remote and local addresses of the flow,
 // which the caller may change, and its latest interface index.
 func (sc *splitConn) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
+	n, ok, err := sc.read(b)
+	if !ok {
+		return 0, nil, nil, 0, err
+	}
+	return n, cloneAddr(sc.remoteAddr), cloneAddr(sc.localAddr), sc.LocalIfIdx(), err
+}
+
+// read reads a packet of the flow, and reports whether it has, even with an error, e.g. io.ErrShortBuffer.
+// Unlike ReadFrom and ReadFromTo, it copies no addresses, which Read doesn't return.
+func (sc *splitConn) read(b []byte) (int, bool, error) {
 	n, c, err := sc.receive(b)
 	if err != nil {
 		err = sc.opError("read", sc.LocalAddr(), sc.remoteAddr, err)
 	}
-	if c == nil { // No packet read
-		return 0, nil, nil, 0, err
-	}
-	return n, cloneAddr(sc.remoteAddr), cloneAddr(sc.localAddr), sc.LocalIfIdx(), err // Copies the caller may change
+	return n, c != nil, err
 }
 
 // Release hands the flow of the connection over to the fallback connection of the splitter: the packets

@@ -29,6 +29,89 @@ import (
 	"time"
 )
 
+// BenchmarkSplit measures a round trip through a split connection over each kind of underlying connection
+// the splitter tells apart: a PacketConn, a FromToPacketConn, a UDPConn and a FromToUDPConn. Each operation
+// is a write to the splitter, the read of the packet from its split connection, the write of the packet back
+// and its read. A trunk of the first two kinds takes the same allocations of its own in each.
+func BenchmarkSplit(b *testing.B) {
+	type peer struct {
+		write, read func(p []byte) error
+	}
+	trunk := func(b *testing.B, wrap func(FromToPacketConn) PacketConn) (peer, PacketConn) {
+		c, s := BufferedTrunk(16, nil, nil)
+		b.Cleanup(func() { _ = c.Close() })
+		_ = c.SetReadDeadline(time.Now().Add(time.Minute)) // Fail rather than hang
+		src := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1).To4(), Port: 1}
+		return peer{
+			write: func(p []byte) error { _, err := c.WriteToFrom(p, nil, src, 0); return err },
+			read:  func(p []byte) error { _, _, err := c.ReadFrom(p); return err },
+		}, wrap(s)
+	}
+	udp := func(b *testing.B) (peer, PacketConn) {
+		skipIfNoUDP(b)
+		c, s := listenLoopbackUDP(b), listenLoopbackUDP(b)
+		_ = c.SetReadDeadline(time.Now().Add(time.Minute)) // Fail rather than hang if a datagram is lost
+		dst := s.LocalAddr().(*net.UDPAddr).AddrPort()
+		return peer{
+			write: func(p []byte) error { _, err := c.WriteToUDPAddrPort(p, dst); return err },
+			read:  func(p []byte) error { _, _, err := c.ReadFromUDPAddrPort(p); return err },
+		}, s
+	}
+
+	for _, bench := range []struct {
+		name   string
+		conn   func(b *testing.B) (peer, PacketConn)
+		config *SplitConfig
+	}{
+		{"PacketConn", func(b *testing.B) (peer, PacketConn) {
+			return trunk(b, func(c FromToPacketConn) PacketConn { return FakeAddressPacketConn(c, nil, nil) })
+		}, nil},
+		{"FromToPacketConn", func(b *testing.B) (peer, PacketConn) {
+			return trunk(b, func(c FromToPacketConn) PacketConn { return c })
+		}, nil},
+		{"UDPConn", udp, nil},
+		{"FromToUDPConn", udp, &SplitConfig{PacketInfo: true}},
+	} {
+		b.Run(bench.name, func(b *testing.B) {
+			c, pc := bench.conn(b)
+			ln := Split(pc, bench.config)
+			b.Cleanup(func() { _ = ln.Close() })
+
+			p := make([]byte, 64)
+			if err := c.write(p); err != nil { // Starts the flow
+				b.Fatal(err)
+			}
+			sc, err := ln.AcceptSplit()
+			if err != nil {
+				b.Fatal(err)
+			}
+			_ = sc.SetReadDeadline(time.Now().Add(time.Minute))
+			echo := func() error {
+				if _, err := sc.Read(p); err != nil {
+					return err
+				}
+				if _, err := sc.Write(p); err != nil {
+					return err
+				}
+				return c.read(p)
+			}
+			if err := echo(); err != nil {
+				b.Fatal(err)
+			}
+
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := c.write(p); err != nil {
+					b.Fatal(err)
+				}
+				if err := echo(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 // TestSplit runs the tests of splitters, of their split connections and of their fallback connections.
 func TestSplit(t *testing.T) {
 	t.Run(testSplitAcceptName, testSplitAccept)
