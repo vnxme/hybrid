@@ -147,6 +147,32 @@ func TestDeadline(t *testing.T) {
 				expectOpen(t, d.Wait())
 			})
 
+			t.Run("Rearm", func(t *testing.T) {
+				d := test.ctor()
+				var prev <-chan struct{}
+				for range 3 { // The timer, reset rather than replaced, closes a new channel each time
+					d.Set(time.Now().Add(deadlineFire))
+					ch := d.Wait()
+					if ch == prev {
+						t.Fatalf("channel is reused, want a new one after the deadline")
+					}
+					expectClosed(t, ch)
+					prev = ch
+				}
+				d.Set(time.Now().Add(deadlinePending))
+				d.Set(time.Time{}) // The reset timer is stopped too
+				expectOpen(t, d.Wait())
+			})
+
+			t.Run("NoAllocs", func(t *testing.T) {
+				d := test.ctor()
+				d.Set(time.Now().Add(time.Hour)) // Creates the channel and the timer
+				if allocs := testing.AllocsPerRun(100, func() { d.Set(time.Now().Add(time.Hour)) }); allocs != 0 {
+					t.Errorf("Set() allocates %v times, want 0", allocs)
+				}
+				d.Set(time.Time{})
+			})
+
 			t.Run("Concurrent", func(t *testing.T) {
 				d := test.ctor()
 				var wg sync.WaitGroup

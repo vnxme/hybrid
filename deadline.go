@@ -44,7 +44,10 @@ import (
 // Differences from net.Pipe. Wait takes no lock: the channel is held in an atomic.Value, which only Set replaces,
 // under its mutex, so that checking a deadline before every read and write costs a single atomic load. The channel
 // is created on first use rather than by the constructor, so that makeDeadline allocates nothing, and a deadline
-// is embedded by value in the struct using it, with no allocation of its own. A deadline is generic over a hook,
+// is embedded by value in the struct using it, with no allocation of its own. The timer is created on first use
+// too, then reset rather than replaced, so that Set allocates nothing afterwards, e.g. when a write deadline is
+// set before every write; it closes whichever channel is current as it fires, which is the channel it has been
+// set for, as Set replaces the channel only once the timer is stopped. A deadline is generic over a hook,
 // which its timer runs before closing the channel, so that every goroutine woken by the channel observes what
 // the hook has done; as Set waits for the channel to be closed, it waits for a running hook to return as well.
 // The internal types use noHook, which is zero-sized and adds nothing to a deadline, while SimpleDeadline and
@@ -69,9 +72,10 @@ func (f funcHook) run() { f() }
 // Once a timer set up by Set fires, it runs its hook, see [HookDeadline].
 type deadline[H deadlineHook] struct {
 	hook   H
-	timer  *time.Timer
+	timer  *time.Timer  // Created on first use, then reset
+	armed  bool         // Set while the timer is set to fire
 	cancel atomic.Value // Holds a chan struct{} created on first use, so that Wait needn't lock mu
-	mu     sync.Mutex   // Guards timer and replacing cancel
+	mu     sync.Mutex   // Guards timer, armed and replacing cancel
 }
 
 // makeDeadline returns a deadline value to be embedded in a struct, avoiding a separate allocation.
@@ -106,6 +110,13 @@ func HookDeadline(hook func()) Deadline {
 	return &d
 }
 
+// fire runs the hook, then closes the current channel, which is the one the timer has been set for:
+// Set replaces it only once the timer is stopped, or once fire has closed it.
+func (d *deadline[H]) fire() {
+	d.hook.run() // Run the hook before closing the channel.
+	close(d.load())
+}
+
 // load returns the current channel, creating it on first use. Unlike Set, it needn't lock mu:
 // only the first channel is stored without mu, and a channel is stored in an interface without
 // an allocation.
@@ -126,10 +137,10 @@ func (d *deadline[H]) Set(t time.Time) {
 	defer d.mu.Unlock()
 
 	cancel := d.load()
-	if d.timer != nil && !d.timer.Stop() {
+	if d.armed && !d.timer.Stop() {
 		<-cancel // Wait for the timer callback to finish and close cancel.
 	}
-	d.timer = nil
+	d.armed = false
 
 	// Time is zero, then there is no deadline.
 	closed := isClosedChan(cancel)
@@ -143,13 +154,14 @@ func (d *deadline[H]) Set(t time.Time) {
 	// Time in the future, set up a timer to cancel in the future.
 	if dur := time.Until(t); dur > 0 {
 		if closed {
-			cancel = make(chan struct{})
-			d.cancel.Store(cancel)
+			d.cancel.Store(make(chan struct{}))
 		}
-		d.timer = time.AfterFunc(dur, func() {
-			d.hook.run() // Run the hook before closing the channel.
-			close(cancel)
-		})
+		if d.timer == nil {
+			d.timer = time.AfterFunc(dur, d.fire)
+		} else {
+			d.timer.Reset(dur)
+		}
+		d.armed = true
 		return
 	}
 
