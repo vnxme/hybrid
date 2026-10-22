@@ -16,10 +16,12 @@ package hybrid
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
 	"net/netip"
+	"os"
 	"reflect"
 	"runtime"
 	"sync"
@@ -292,5 +294,33 @@ func TestCloneAddr(t *testing.T) {
 		if c := cloneAddr(addr); c != addr {
 			t.Errorf("cloneAddr(%#v) = %#v, want it as is", addr, c)
 		}
+	}
+}
+
+// TestIsTimeout ensures isTimeout tells the net.Errors that have timed out, wrapped or not, from any other error.
+func TestIsTimeout(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"Nil", nil, false},
+		{"DeadlineExceeded", os.ErrDeadlineExceeded, true},
+		{"OpError", &net.OpError{Op: "write", Err: os.ErrDeadlineExceeded}, true},
+		{"Wrapped", fmt.Errorf("wrapped: %w", os.ErrDeadlineExceeded), true},
+		{"NoTimeout", &net.DNSError{IsTimeout: false}, false},
+		{"Closed", net.ErrClosed, false},
+		{"EOF", io.EOF, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isTimeout(test.err); got != test.want {
+				t.Errorf("isTimeout(%v) = %t, want %t", test.err, got, test.want)
+			}
+		})
+	}
+
+	// No allocation for no error, which the splitter checks after every write
+	if allocs := testing.AllocsPerRun(100, func() { _ = isTimeout(nil) }); allocs != 0 {
+		t.Errorf("isTimeout(nil) allocates %v times, want 0", allocs)
 	}
 }

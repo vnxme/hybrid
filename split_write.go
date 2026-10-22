@@ -110,7 +110,6 @@ func (s *splitter) write(pkt *splitPacket) bool {
 		_, err = s.pc.WriteToFrom(pkt.buf, pkt.dst, pkt.src, pkt.idx)
 	}
 
-	var nrr net.Error
 	switch {
 	case err == nil:
 		return true
@@ -125,7 +124,7 @@ func (s *splitter) write(pkt *splitPacket) bool {
 		}
 		s.drops.writeUnsent.Add(1)
 		return false
-	case errors.As(err, &nrr) && nrr.Timeout():
+	case isTimeout(err):
 		s.drops.writeTimedOut.Add(1)
 	default: // E.g. an address unreachable or of the wrong IP version, which another packet may not have
 		s.drops.writeFailed.Add(1)

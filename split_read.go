@@ -39,7 +39,6 @@ type splitPacketInfo struct {
 func (s *splitter) readLoop() {
 	defer s.wg.Done()
 
-	var nrr net.Error
 	var p splitPacketInfo
 	// Read into, then copied into a buffer of the packet's size. A byte more than the maximum size of a packet
 	// tells a larger packet, as filling the buffer is the only sign of truncation every connection gives:
@@ -52,7 +51,7 @@ func (s *splitter) readLoop() {
 		n, err := s.read(buf, &p)
 		if n <= 0 && err != nil {
 			// A timeout interrupts reading when the splitter closes, so check it at the top of the loop
-			if errors.As(err, &nrr) && nrr.Timeout() {
+			if isTimeout(err) {
 				continue
 			}
 

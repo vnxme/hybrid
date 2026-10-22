@@ -25,6 +25,7 @@
 package hybrid
 
 import (
+	"errors"
 	"net"
 	"net/netip"
 	"slices"
@@ -129,4 +130,14 @@ func isClosedChan(c <-chan struct{}) bool {
 	default:
 		return false
 	}
+}
+
+// isTimeout reports whether err is a net.Error that has timed out. The net.Error that errors.As fills in
+// escapes to the heap, so it's declared here, and allocated only for an error, rather than by every caller.
+func isTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	var nrr net.Error
+	return errors.As(err, &nrr) && nrr.Timeout()
 }
