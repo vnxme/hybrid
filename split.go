@@ -453,6 +453,29 @@ type splitPacket struct {
 	idx  int // The interface index to write a packet through, if any
 }
 
+// splitPackets holds reusable packets, so that queuing a packet allocates nothing.
+var splitPackets sync.Pool
+
+// newSplitPacket returns a packet with a copy of b, in a pooled buffer, reused if possible.
+func newSplitPacket(b []byte) *splitPacket {
+	pkt, ok := splitPackets.Get().(*splitPacket)
+	if !ok {
+		pkt = new(splitPacket)
+	}
+	if len(b) > 0 {
+		pkt.buf, pkt.ref = getBuf(len(b))
+		copy(pkt.buf, b)
+	}
+	return pkt
+}
+
+// free makes a packet and its buffer reusable. Neither must be used afterwards.
+func (pkt *splitPacket) free() {
+	putBuf(pkt.ref)
+	*pkt = splitPacket{} // Holds no connection or address back from collection
+	splitPackets.Put(pkt)
+}
+
 // Defaults of the fields of SplitConfig, which apply when a field isn't set
 const (
 	DefaultSplitAcceptQueueSize   = 8

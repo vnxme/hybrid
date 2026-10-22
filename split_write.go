@@ -36,24 +36,21 @@ func (sc *splitConnBase) send(b []byte, c *splitConn, dst, src net.Addr, idx int
 		return 0, errSplitDeadlineExceeded
 	}
 
-	pkt := &splitPacket{dst: dst, src: src, idx: idx}
-	if len(b) > 0 {
-		pkt.buf, pkt.ref = getBuf(len(b))
-		copy(pkt.buf, b)
-	}
+	pkt := newSplitPacket(b)
+	pkt.dst, pkt.src, pkt.idx = dst, src, idx
 	select { // Queue without a blocking select if possible, which is much slower
 	case sc.splitter.writeQueue <- pkt:
 	default:
 		select {
 		case sc.splitter.writeQueue <- pkt:
 		case <-sc.localDone:
-			putBuf(pkt.ref)
+			pkt.free()
 			return 0, errSplitClosed
 		case <-sc.splitter.done:
-			putBuf(pkt.ref)
+			pkt.free()
 			return 0, errSplitClosed
 		case <-sc.wrDeadline.Wait():
-			putBuf(pkt.ref)
+			pkt.free()
 			return 0, errSplitDeadlineExceeded
 		}
 	}
@@ -86,7 +83,7 @@ func (s *splitter) writeLoop() {
 			return
 		case pkt := <-s.writeQueue:
 			if isClosedChan(s.done) { // Picked at random, as the splitter has closed meanwhile
-				putBuf(pkt.ref)
+				pkt.free()
 				s.drops.writeUnsent.Add(1)
 				s.drainWrites()
 				return
@@ -103,7 +100,7 @@ func (s *splitter) writeLoop() {
 // and drops it if the write times out or fails. It reports false if the underlying connection is closed,
 // and closes the splitter then.
 func (s *splitter) write(pkt *splitPacket) bool {
-	defer putBuf(pkt.ref)
+	defer pkt.free()
 
 	var err error
 	if s.cfg.writeTimeout > 0 { // The write loop is the only user of the write deadline of the underlying connection
@@ -142,7 +139,7 @@ func (s *splitter) drainWrites() {
 	for {
 		select {
 		case pkt := <-s.writeQueue:
-			putBuf(pkt.ref)
+			pkt.free()
 			s.drops.writeUnsent.Add(1)
 		default:
 			return

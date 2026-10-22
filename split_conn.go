@@ -202,11 +202,8 @@ func (sc *splitConn) Release(pkts ...[]byte) error {
 
 	sc.released.Store(true)
 	for _, b := range pkts {
-		pkt := &splitPacket{conn: sc}
-		if len(b) > 0 {
-			pkt.buf, pkt.ref = getBuf(len(b))
-			copy(pkt.buf, b)
-		}
+		pkt := newSplitPacket(b)
+		pkt.conn = sc
 		sc.splitter.toFallback(pkt)
 	}
 	for {
@@ -344,7 +341,7 @@ func (sc *splitFallback) discard() {
 	for {
 		select {
 		case pkt := <-sc.rdRx:
-			putBuf(pkt.ref)
+			pkt.free()
 			sc.splitter.drops.fallbackClosed.Add(1)
 		default:
 			return

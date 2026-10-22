@@ -148,11 +148,8 @@ func (s *splitter) route(data []byte, p *splitPacketInfo) {
 	c.touch()
 	c.localIfIdx.Store(int64(p.idx)) // The latest one is used for replies
 
-	pkt := &splitPacket{conn: c}
-	if len(data) > 0 {
-		pkt.buf, pkt.ref = getBuf(len(data))
-		copy(pkt.buf, data)
-	}
+	pkt := newSplitPacket(data)
+	pkt.conn = c
 
 	c.releaseMu.Lock() // Keeps the packets of a flow in order while it's being released
 	if c.released.Load() {
@@ -161,7 +158,7 @@ func (s *splitter) route(data []byte, p *splitPacketInfo) {
 		select {
 		case c.rdRx <- pkt:
 		default:
-			putBuf(pkt.ref)
+			pkt.free()
 			s.drops.connQueueFull.Add(1)
 		}
 	}
@@ -171,7 +168,7 @@ func (s *splitter) route(data []byte, p *splitPacketInfo) {
 // toFallback passes a packet of a released flow to the fallback connection, or drops it if there is none.
 func (s *splitter) toFallback(pkt *splitPacket) {
 	if s.fallback == nil || isClosedChan(s.fallback.localDone) {
-		putBuf(pkt.ref)
+		pkt.free()
 		s.drops.noFallback.Add(1)
 		return
 	}
@@ -181,7 +178,7 @@ func (s *splitter) toFallback(pkt *splitPacket) {
 			s.fallback.discard()
 		}
 	default:
-		putBuf(pkt.ref)
+		pkt.free()
 		s.drops.fallbackQueueFull.Add(1)
 	}
 }
@@ -220,12 +217,12 @@ func (sc *splitConnBase) receive(b []byte) (int, *splitConn, error) {
 		}
 	}
 
-	n := copy(b, pkt.buf)
-	putBuf(pkt.ref)
-	if n < len(pkt.buf) { // Unread bytes are dropped, i.e. a split connection doesn't support partial reads
-		return n, pkt.conn, errSplitShortBuffer
+	n, short, c := copy(b, pkt.buf), len(b) < len(pkt.buf), pkt.conn
+	pkt.free()
+	if short { // Unread bytes are dropped, i.e. a split connection doesn't support partial reads
+		return n, c, errSplitShortBuffer
 	}
-	return n, pkt.conn, nil
+	return n, c, nil
 }
 
 // deleteConnection reports a closed or expired connection, for the read loop to delete its flow. It needs no
@@ -276,7 +273,7 @@ func (s *splitter) discard(c *splitConn) {
 	for {
 		select {
 		case pkt := <-c.rdRx:
-			putBuf(pkt.ref)
+			pkt.free()
 			s.drops.connClosed.Add(1)
 		default:
 			s.swept.Lock()
