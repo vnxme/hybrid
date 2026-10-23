@@ -251,6 +251,15 @@ func TestAddrPortToUDPAddr(t *testing.T) {
 			if got := addrPortToUDPAddr(test.ap); !reflect.DeepEqual(got, test.want) {
 				t.Errorf("addrPortToUDPAddr() = %#v, want %#v", got, test.want)
 			}
+			if test.want != nil { // The same as net.UDPAddrFromAddrPort gives, in a single allocation
+				if std := net.UDPAddrFromAddrPort(test.ap); !reflect.DeepEqual(std, test.want) {
+					t.Errorf("net.UDPAddrFromAddrPort() = %#v, want %#v", std, test.want)
+				}
+			}
+			wantAllocs := map[bool]float64{true: 0, false: 1}[test.want == nil]
+			if allocs := testing.AllocsPerRun(10, func() { _ = addrPortToUDPAddr(test.ap) }); allocs != wantAllocs {
+				t.Errorf("addrPortToUDPAddr() allocates %v times, want %v", allocs, wantAllocs)
+			}
 
 			// Unlike addrPortToUDPAddr, addrPortToAddr returns a nil net.Addr
 			got := addrPortToAddr(test.ap)

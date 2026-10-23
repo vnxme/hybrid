@@ -72,15 +72,20 @@ func addrPortToAddr(ap netip.AddrPort) net.Addr {
 	return nil
 }
 
-// addrPortToUDPAddr returns a *net.UDPAddr for a valid netip.AddrPort, or nil.
+// addrPortToUDPAddr returns a *net.UDPAddr for a valid netip.AddrPort, as net.UDPAddrFromAddrPort does,
+// but allocated at once with its IP, or nil.
 func addrPortToUDPAddr(ap netip.AddrPort) *net.UDPAddr {
-	if ap.IsValid() {
-		return net.UDPAddrFromAddrPort(ap)
+	if !ap.IsValid() {
+		return nil
 	}
-	return nil
+	ip := ap.Addr()
+	c := &addrWithIP[net.UDPAddr]{addr: net.UDPAddr{Port: int(ap.Port()), Zone: ip.Zone()}}
+	c.addr.IP = c.copyAddr(ip)
+	return &c.addr
 }
 
-// addrWithIP is a copy of an address along with room for its IP, so that cloneAddr allocates them at once.
+// addrWithIP is an address along with room for its IP, so that cloneAddr and addrPortToUDPAddr allocate them
+// at once.
 type addrWithIP[A net.UDPAddr | net.TCPAddr | net.IPAddr] struct {
 	addr A
 	ip   [net.IPv6len]byte
@@ -93,6 +98,17 @@ func (c *addrWithIP[A]) cloneIP(ip net.IP) net.IP {
 		return slices.Clone(ip)
 	}
 	return c.ip[:copy(c.ip[:], ip)]
+}
+
+// copyAddr copies a valid ip into the room for it, in 4 bytes for an IPv4 address and in 16 for any other,
+// as netip.Addr.AsSlice does.
+func (c *addrWithIP[A]) copyAddr(ip netip.Addr) net.IP {
+	if ip.Is4() {
+		*(*[net.IPv4len]byte)(c.ip[:]) = ip.As4()
+		return c.ip[:net.IPv4len]
+	}
+	c.ip = ip.As16()
+	return c.ip[:]
 }
 
 // cloneAddr returns a copy of a standard address, so that they don't share memory. A copy of an address
