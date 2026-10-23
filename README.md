@@ -48,7 +48,7 @@ code written for `net.Conn`.
 go get github.com/vnxme/hybrid
 ```
 
-Go 1.25 or newer is required.
+Go 1.26 or newer is required.
 
 ## Overview
 

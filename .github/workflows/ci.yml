@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go: ['1.25.x', stable] # The minimum of go.mod, and the latest
+        go: ['1.26.x', stable] # The minimum of go.mod, and the latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
