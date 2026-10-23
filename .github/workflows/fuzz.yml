@@ -1,0 +1,44 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: '0 7 * * 1' # Weekly, as tests run only the seeds
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {package: ., target: FuzzSplit}
+          - {package: ., target: FuzzAddr}
+          - {package: ./internal/pktinfo, target: FuzzParse}
+          - {package: ./internal/pktinfo, target: FuzzMarshal}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false # The build cache, saved once per go.sum, would hold a stale corpus; it's cached below
+      - name: Locate the fuzz cache, which holds the corpus generated so far
+        id: cache-dir
+        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-dir.outputs.dir }}
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }} # Saved anew each run, so that the corpus grows
+          restore-keys: fuzz-${{ matrix.target }}-
+      - name: Fuzz
+        run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 5m ${{ matrix.package }}
+      - name: Upload the failing input, which go test has written into testdata
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.target }}-failing-input
+          path: '**/testdata/fuzz/'

@@ -651,6 +651,14 @@ The tests of pipes run against `net.Pipe` too, so that every difference is delib
 the splitter run over pipes, trunks and UDP sockets alike, with payloads from empty to the largest UDP datagram
 over IPv4 and IPv6. Pooled buffers can be poisoned in tests, to detect any use of a buffer after its return.
 
+Fuzz tests check that the splitter reads each packet once or counts it as dropped, whatever its handlers do,
+and that addresses and packet info are handled safely whatever they hold. Tests run only their seeds, while
+[a weekly job](.github/workflows/fuzz.yml) fuzzes each target for 5 minutes, keeping the corpus between runs:
+
+```sh
+go test -run '^$' -fuzz '^FuzzSplit$' -fuzztime 1m .
+```
+
 ## Status
 
 The module is under active development, ahead of its integration into caddy-l4. Until v1.0.0, minor versions
