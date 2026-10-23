@@ -57,7 +57,7 @@ func rawConnGetSockOptBool(c syscall.RawConn, level int, opt int) (bool, error) 
 	var sVal int
 	var sErr error
 	err := c.Control(func(fd uintptr) {
-		sVal, sErr = unix.GetsockoptInt(int(fd), level, opt) //nolint:gosec // G115
+		sVal, sErr = unix.GetsockoptInt(int(fd), level, opt)
 	})
 	if err != nil {
 		return false, err
@@ -71,7 +71,7 @@ func rawConnGetSockOptBool(c syscall.RawConn, level int, opt int) (bool, error) 
 func rawConnEnableSockOpt(c syscall.RawConn, level int, opt int) error {
 	var sErr error
 	err := c.Control(func(fd uintptr) {
-		sErr = unix.SetsockoptInt(int(fd), level, opt, 1) //nolint:gosec // G115
+		sErr = unix.SetsockoptInt(int(fd), level, opt, 1)
 	})
 	if err != nil {
 		return err
