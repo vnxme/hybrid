@@ -347,9 +347,10 @@ func (s *splitter) AcceptSplit() (SplitConn, error) {
 // Addr returns the local address of the underlying PacketConn.
 func (s *splitter) Addr() net.Addr { return s.orig.LocalAddr() }
 
-// Close closes the underlying PacketConn and stops the internal goroutines. Accept returns an error,
-// while the split connections and the fallback connection return the packets queued, then net.ErrClosed.
-// It returns the error of closing the underlying PacketConn, or net.ErrClosed if the splitter has stopped.
+// Close closes the underlying PacketConn and stops the internal goroutines. Accept returns an error, and the split
+// connections it hasn't returned are closed, while the others and the fallback connection return the packets
+// queued, then net.ErrClosed. It returns the error of closing the underlying PacketConn, or net.ErrClosed
+// if the splitter has stopped.
 func (s *splitter) Close() error {
 	return s.stop(s.orig.Close)
 }
@@ -409,8 +410,8 @@ func (s *splitter) logError(err error) {
 }
 
 // stop stops the splitter once: it closes the done channel, interrupts the loops with interrupt, waits for them
-// to return, and drops the writes left. It returns the error of interrupt, or net.ErrClosed if the splitter
-// has been stopped already.
+// to return, and drops the writes left and the packets of the split connections the read loop won't serve.
+// It returns the error of interrupt, or net.ErrClosed if the splitter has been stopped already.
 func (s *splitter) stop(interrupt func() error) error {
 	err := errSplitClosed
 	s.once.Do(func() {
@@ -428,8 +429,10 @@ func (s *splitter) stop(interrupt func() error) error {
 		// Wait until the internal goroutines return.
 		s.wg.Wait()
 
-		// Drop the packets queued once the write loop has returned, e.g. as the underlying connection has closed.
+		// Drop the packets queued once the write loop has returned, e.g. as the underlying connection has closed,
+		// and those of the split connections left to the read loop, which won't serve them any more.
 		s.drainWrites()
+		s.drainReads()
 	})
 	return err
 }

@@ -150,7 +150,8 @@ func testSplitFallbackDrops(t *testing.T) {
 }
 
 // testSplitConnCloseDrops ensures the packets left unread on a split connection are dropped and counted
-// once it's closed by its handler or expires.
+// once it's closed by its handler or expires, including when the splitter stops before the read loop deletes it,
+// or before Accept returns it.
 func testSplitConnCloseDrops(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 
@@ -183,6 +184,31 @@ func testSplitConnCloseDrops(t *testing.T) {
 		}
 		writeFrom(t, client, b, "b2")
 		waitSplitStats(t, ln, SplitStats{ConnClosed: 4}) // b1 too, as the connection of b has expired as well
+	})
+
+	t.Run("ClosedBeforeStop", func(t *testing.T) {
+		client, ln := splitTrunk(t, nil)
+		conn := queue(t, client, ln)
+		_ = conn.Close() // Left to the read loop, which reads no packet to delete it after
+		_ = ln.Close()
+		if got, want := ln.Stats(), (SplitStats{ConnClosed: 3}); got != want {
+			t.Errorf("Stats() = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("UnacceptedAtStop", func(t *testing.T) {
+		client, ln := splitTrunk(t, nil)
+		writeFrom(t, client, a, "a1")
+		writeFrom(t, client, b, "b1")
+		writeFrom(t, client, b, "b2")
+		writeFrom(t, client, a, "a2") // Read after those of b, as there is a single read loop
+		conn := acceptSplitConn(t, ln)
+		checkSplitPacket(t, conn, "a1")
+		checkSplitPacket(t, conn, "a2")
+		_ = ln.Close() // Closes the connection of b, which Accept no longer returns
+		if got, want := ln.Stats(), (SplitStats{ConnClosed: 2}); got != want {
+			t.Errorf("Stats() = %+v, want %+v", got, want)
+		}
 	})
 }
 

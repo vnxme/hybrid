@@ -209,13 +209,35 @@ func (sc *splitConnBase) receive(b []byte) (int, *splitConn, error) {
 // deleteConnection reports a closed or expired connection, for the read loop to delete its flow. It needs no
 // goroutine, so that it can't race with closing the splitter, which waits for the goroutines of the splitter.
 func (s *splitter) deleteConnection(c *splitConn) {
-	if isClosedChan(s.done) { // With no read loop to delete the flow any more, only drop and count the packets left
-		s.discard(c)
+	s.closed.Lock()
+	if !isClosedChan(s.done) { // Checked under the lock, so that drainReads either gets c or sees it discarded
+		s.closed.conns = append(s.closed.conns, c)
+		s.closed.Unlock()
 		return
 	}
-	s.closed.Lock()
-	s.closed.conns = append(s.closed.conns, c)
 	s.closed.Unlock()
+	s.discard(c) // With no read loop to delete the flow any more, only drop and count the packets left
+}
+
+// drainReads closes the split connections left in the accept queue, which Accept no longer returns, and drops
+// and counts their packets, along with those of the connections closed, but not deleted by the read loop.
+func (s *splitter) drainReads() {
+	for {
+		select {
+		case c := <-s.acceptQueue:
+			c.closeLocal()
+			s.discard(c)
+		default:
+			s.closed.Lock()
+			closed := s.closed.conns
+			s.closed.conns = nil
+			s.closed.Unlock()
+			for _, c := range closed {
+				s.discard(c)
+			}
+			return
+		}
+	}
 }
 
 // deleteLoop deletes the flows whose connections have been closed and reported so far.

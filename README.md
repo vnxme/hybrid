@@ -245,6 +245,9 @@ the `RemoteAddr` of a split connection is `127.0.0.1:1234` rather than `[::ffff:
 - A flow ends when its connection is closed, by its handler or by its idle timeout, and its next packet starts
   a new flow straight away: UDP has nothing like TCP's TIME_WAIT and RST to tell a late packet of an old flow
   from the first packet of a new one.
+- Once the splitter stops, `Accept` fails, and the split connections it hasn't returned are closed, while the others
+  and the fallback connection return the packets queued, then `net.ErrClosed`. A packet left unread is counted
+  as `ConnClosed` or `FallbackClosed` once its connection is closed.
 - Only packets read start flows: a write keeps the flow of its remote address going, but a reply to a remote
   address without a flow, e.g. written by the fallback connection, makes its response start a new flow, queued
   for `Accept` like any other.
