@@ -531,7 +531,9 @@ func BenchmarkPacketInfoUDPConn(b *testing.B) {
 	}
 }
 
-// localAddrs returns the addresses of each interface that is up, with zones for IPv6 link-local ones.
+// localAddrs returns the addresses of each interface that is up, with zones for IPv6 link-local ones,
+// except for the link-local addresses of point-to-point interfaces, e.g. macOS utun ones, as packets to them
+// may go to the peer, rather than loop back.
 func localAddrs(t *testing.T) [][]netip.Addr {
 	t.Helper()
 	ifs, err := net.Interfaces()
@@ -551,8 +553,13 @@ func localAddrs(t *testing.T) [][]netip.Addr {
 		for _, ip := range ips {
 			if ipNet, ok := ip.(*net.IPNet); ok {
 				addr, _ := netip.AddrFromSlice(ipNet.IP)
-				if addr = addr.Unmap(); addr.Is6() && addr.IsLinkLocalUnicast() {
-					addr = addr.WithZone(ifc.Name)
+				if addr = addr.Unmap(); addr.IsLinkLocalUnicast() {
+					if ifc.Flags&net.FlagPointToPoint != 0 {
+						continue
+					}
+					if addr.Is6() {
+						addr = addr.WithZone(ifc.Name)
+					}
 				}
 				ifcAddrs = append(ifcAddrs, addr)
 			}
