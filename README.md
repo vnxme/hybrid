@@ -1,5 +1,6 @@
 # hybrid
 
+[![CI](https://github.com/vnxme/hybrid/actions/workflows/ci.yml/badge.svg)](https://github.com/vnxme/hybrid/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/vnxme/hybrid.svg)](https://pkg.go.dev/github.com/vnxme/hybrid)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/vnxme/hybrid)](go.mod)
 [![License](https://img.shields.io/github/license/vnxme/hybrid)](LICENSE)
@@ -221,7 +222,14 @@ packet, so that a flow stays whole: a splitter that uses destination addresses d
 a connection that reports destination addresses by source address alone, e.g. a trunk emulating a UDP socket
 without packet info, wrap it so as to hide them, e.g. with `FakeAddressPacketConn(pc, nil, nil)`. The interface
 index isn't part of a flow, as it may change, e.g. with asymmetric routing: the latest one is kept and used for
-replies. A UDP flow is looked up without allocating.
+replies.
+
+How to read from and write to the connection is decided once too, by the interfaces it implements: a
+`FromToUDPConn`, any other `FromToPacketConn`, a `UDPConn`, with packet info enabled on it if
+`SplitConfig.PacketInfo` is set and possible, or any other `PacketConn`. A UDP connection is read with
+`netip.AddrPort` values, so that its packets are read and their flows looked up without allocating. IPv4 addresses
+read from a dual-stack socket are reported unmapped, with packet info or without, as flows are keyed by them: e.g.
+the `RemoteAddr` of a split connection is `127.0.0.1:1234` rather than `[::ffff:127.0.0.1]:1234`.
 
 ### Lifecycle
 
@@ -612,10 +620,21 @@ IPv6 packet info is the same everywhere: `IPV6_RECVPKTINFO` turns on `IPV6_PKTIN
 
 ## Testing
 
-The package is tested on Linux, with the race detector, and on Windows:
+[CI](.github/workflows/ci.yml) tests the package on Linux and macOS, with the race detector, and on Windows,
+with the minimum Go version of `go.mod` and the latest one, lints it with [golangci-lint](.golangci.yml), and vets
+it for the other platforms with code of their own, e.g. the BSDs, AIX, Solaris, Plan 9 and WebAssembly:
 
 ```sh
 go test -race -count=1 ./...
+golangci-lint run ./...
+GOOS=freebsd go vet ./...
+```
+
+Benchmarks measure the time and allocations of pipes, trunks, packet info and splitters, e.g. a round trip
+through a split connection and through the fallback connection over each kind of underlying connection:
+
+```sh
+go test -run '^$' -bench . -benchmem ./...
 ```
 
 The tests of pipes run against `net.Pipe` too, so that every difference is deliberate, and the tests of
