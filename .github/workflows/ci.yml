@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest, windows-11-arm] # macOS on arm64 only
         go: ['1.26.x', stable] # The minimum of go.mod, and the latest
     steps:
       - uses: actions/checkout@v7
