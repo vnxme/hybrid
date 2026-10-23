@@ -290,6 +290,11 @@ type splitter struct {
 
 // Split returns a SplitListener for the given PacketConn, configured by config, which may be nil for the defaults,
 // and starts its internal loops. It takes pc over, clearing its deadlines, until Close or Stop.
+//
+// The splitter leaves the socket options of pc as they are. Notably, macOS and the BSDs refuse to send a datagram
+// larger than the send buffer of a socket, which is 9216 bytes by default, so a larger packet written to a split
+// connection is counted as WriteFailed, unless the send buffer has been raised, e.g. with
+// [net.UDPConn.SetWriteBuffer].
 func Split(pc PacketConn, config *SplitConfig) SplitListener {
 	cfg := config.resolve()
 

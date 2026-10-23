@@ -267,6 +267,10 @@ it, and closes the splitter if the underlying connection fails for good. The wri
 how long the write loop waits on the underlying connection for one packet, so that a stuck write can't hold every
 flow up.
 
+The splitter leaves the socket options as they are. Notably, macOS and the BSDs refuse to send a datagram larger
+than the send buffer of a socket, which is 9216 bytes by default, so a larger packet is counted as `WriteFailed`,
+unless the send buffer has been raised, e.g. with `SetWriteBuffer`.
+
 The fallback connection is a plain `PacketConn`, whose `WriteTo` knows only the remote address. So it looks
 the remote address up in an index of the latest flow of each remote address, to write from the local address
 and through the interface that flow came to. It deliberately gives no access to the socket, e.g. no
