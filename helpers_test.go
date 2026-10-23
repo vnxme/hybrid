@@ -134,7 +134,8 @@ func logfIf(tb testing.TB, condition bool, format string, args ...any) {
 
 // newLocalPacketListeners listens twice on the loopback address of the given UDP network with ports chosen
 // by the system, skipping the test if the network isn't supported, e.g. udp6 without IPv6, and closes both
-// sockets once the test ends.
+// sockets once the test ends. Their send buffers fit a few of the largest datagrams, as macOS and the BSDs
+// refuse to send a datagram larger than the send buffer, which is 9216 bytes by default.
 func newLocalPacketListeners(tb testing.TB, network string) (PacketConn, PacketConn) {
 	tb.Helper()
 	skipIfNoUDP(tb)
@@ -145,6 +146,9 @@ func newLocalPacketListeners(tb testing.TB, network string) (PacketConn, PacketC
 			tb.Skipf("NewLocalPacketListener(%q) = %v", network, err)
 		}
 		tb.Cleanup(func() { _ = pc.Close() })
+		if err = pc.(*net.UDPConn).SetWriteBuffer(4 * packetSizeMax); err != nil {
+			tb.Fatal(err)
+		}
 		pcs[i] = pc
 	}
 	return pcs[0], pcs[1]
