@@ -80,27 +80,43 @@ func addrPortToUDPAddr(ap netip.AddrPort) *net.UDPAddr {
 	return nil
 }
 
-// cloneAddr returns a copy of a standard address, so that they don't share memory.
-// Any other address, including a nil pointer of a standard type, is returned as is.
+// addrWithIP is a copy of an address along with room for its IP, so that cloneAddr allocates them at once.
+type addrWithIP[A net.UDPAddr | net.TCPAddr | net.IPAddr] struct {
+	addr A
+	ip   [net.IPv6len]byte
+}
+
+// cloneIP copies ip into the room for it, or into a slice of its own if it doesn't fit, as an invalid IP may not.
+// A nil IP stays nil.
+func (c *addrWithIP[A]) cloneIP(ip net.IP) net.IP {
+	if ip == nil || len(ip) > len(c.ip) {
+		return slices.Clone(ip)
+	}
+	return c.ip[:copy(c.ip[:], ip)]
+}
+
+// cloneAddr returns a copy of a standard address, so that they don't share memory. A copy of an address
+// with an IP is allocated at once with its IP. Any other address, including a nil pointer of a standard type,
+// is returned as is.
 func cloneAddr(addr net.Addr) net.Addr {
 	switch a := addr.(type) {
 	case *net.UDPAddr:
 		if a != nil {
-			c := *a
-			c.IP = slices.Clone(a.IP)
-			return &c
+			c := &addrWithIP[net.UDPAddr]{addr: *a}
+			c.addr.IP = c.cloneIP(a.IP)
+			return &c.addr
 		}
 	case *net.TCPAddr:
 		if a != nil {
-			c := *a
-			c.IP = slices.Clone(a.IP)
-			return &c
+			c := &addrWithIP[net.TCPAddr]{addr: *a}
+			c.addr.IP = c.cloneIP(a.IP)
+			return &c.addr
 		}
 	case *net.IPAddr:
 		if a != nil {
-			c := *a
-			c.IP = slices.Clone(a.IP)
-			return &c
+			c := &addrWithIP[net.IPAddr]{addr: *a}
+			c.addr.IP = c.cloneIP(a.IP)
+			return &c.addr
 		}
 	case *net.UnixAddr:
 		if a != nil {

@@ -261,26 +261,49 @@ func TestAddrPortToUDPAddr(t *testing.T) {
 	}
 }
 
+// TestCloneAddr ensures cloneAddr copies a standard address into a single allocation along with its IP,
+// unless the IP doesn't fit, so that the copy is equal and modifying it leaves the original as is,
+// and returns any other address as is.
 func TestCloneAddr(t *testing.T) {
-	ip := func() net.IP { return net.IPv4(192, 0, 2, 1).To4() }
-	for _, addr := range []net.Addr{
-		&net.UDPAddr{IP: ip(), Port: 1, Zone: "z"},
-		&net.TCPAddr{IP: ip(), Port: 2, Zone: "z"},
-		&net.IPAddr{IP: ip(), Zone: "z"},
-		&net.UnixAddr{Name: "/tmp/sock", Net: "unixgram"},
+	ip4 := func() net.IP { return net.IPv4(192, 0, 2, 1).To4() }
+	ip6 := func() net.IP { return net.ParseIP("2001:db8::1") }
+	for _, test := range []struct {
+		addr   net.Addr
+		allocs float64
+	}{
+		{&net.UDPAddr{IP: ip4(), Port: 1, Zone: "z"}, 1},
+		{&net.UDPAddr{IP: ip6(), Port: 1}, 1},
+		{&net.UDPAddr{Port: 1}, 1},                                  // No IP, which stays nil
+		{&net.UDPAddr{IP: net.IP{}, Port: 1}, 1},                    // An empty IP, which stays non-nil
+		{&net.UDPAddr{IP: make(net.IP, net.IPv6len+1), Port: 1}, 2}, // An invalid IP, too long to fit
+		{&net.TCPAddr{IP: ip4(), Port: 2, Zone: "z"}, 1},
+		{&net.TCPAddr{IP: ip6(), Port: 2}, 1},
+		{&net.IPAddr{IP: ip4(), Zone: "z"}, 1},
+		{&net.IPAddr{IP: ip6()}, 1},
+		{&net.UnixAddr{Name: "/tmp/sock", Net: "unixgram"}, 1},
 	} {
+		addr := test.addr
 		c := cloneAddr(addr)
-		if c == addr || !equalAddr(c, addr) {
-			t.Errorf("cloneAddr(%v) = %v, want an equal copy", addr, c)
+		if c == addr || !reflect.DeepEqual(c, addr) {
+			t.Errorf("cloneAddr(%#v) = %#v, want an equal copy", addr, c)
 		}
+		if allocs := testing.AllocsPerRun(10, func() { c = cloneAddr(addr) }); allocs != test.allocs {
+			t.Errorf("cloneAddr(%v) allocates %v times, want %v", addr, allocs, test.allocs)
+		}
+
 		want := addr.String()
+		modify := func(ip net.IP) {
+			if len(ip) > 0 {
+				ip[len(ip)-1]++
+			}
+		}
 		switch a := c.(type) {
 		case *net.UDPAddr:
-			a.IP[3] = 99
+			modify(a.IP)
 		case *net.TCPAddr:
-			a.IP[3] = 99
+			modify(a.IP)
 		case *net.IPAddr:
-			a.IP[3] = 99
+			modify(a.IP)
 		case *net.UnixAddr:
 			a.Name = "/tmp/other"
 		}
