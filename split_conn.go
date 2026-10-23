@@ -52,7 +52,7 @@ func (s *splitter) newConnBase(queueSize int, local net.Addr) splitConnBase {
 // if there's none, e.g. for the fallback connection, which serves many flows.
 func (sc *splitConnBase) LocalAddr() net.Addr {
 	if sc.localAddr == nil {
-		return sc.splitter.pc.LocalAddr()
+		return sc.splitter.orig.LocalAddr()
 	}
 	return sc.localAddr
 }
@@ -100,7 +100,7 @@ func (sc *splitConnBase) closeLocal() (closed bool) {
 // opError wraps err in net.OpError the same way as a trunk, and so a UDP connection, does: Source is
 // the local address, and Addr is the remote one. Setting a deadline reports the local address as Addr only.
 func (sc *splitConnBase) opError(op string, local, remote net.Addr, err error) error {
-	network := sc.splitter.pc.LocalAddr().Network()
+	network := sc.splitter.orig.LocalAddr().Network()
 	if op == "set" {
 		return &net.OpError{Op: op, Net: network, Addr: local, Err: err}
 	}
@@ -127,8 +127,11 @@ type splitConn struct {
 // newConnection returns a new split connection for the flow of the given packet.
 func (s *splitter) newConnection(p *splitPacketInfo) *splitConn {
 	src, dst := p.src, p.dst
-	if s.udp != nil {
-		src, dst = addrPortToAddr(p.key.src.ap), addrPortToAddr(p.key.dst.ap)
+	if src == nil { // Read as a netip.AddrPort, if any, made a net.Addr only once a flow starts
+		src = addrPortToAddr(p.key.src.ap)
+	}
+	if dst == nil {
+		dst = addrPortToAddr(p.key.dst.ap)
 	}
 
 	sc := &splitConn{

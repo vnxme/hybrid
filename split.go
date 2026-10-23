@@ -39,6 +39,11 @@ import (
 // A flow of any other connection, e.g. of a UDP connection without packet info, is identified by its
 // source address alone. An address is held as a netip.AddrPort value for a *net.UDPAddr, or as the
 // string of any other address, in one comparable key type, so a UDP flow is looked up without allocating.
+// A UDP connection is read with netip.AddrPort values too, so that reading it allocates nothing, and its
+// addresses are made net.Addr values only once a flow starts. IPv4 addresses read from a dual-stack socket
+// are reported unmapped, with packet info or without, as flows are keyed by them. How to read from and write to the connection
+// is the mode Split picks once for the interfaces the connection implements: a FromToUDPConn, any other
+// FromToPacketConn, a UDPConn, with packet info enabled on it if configured, or any other PacketConn.
 // Which addresses identify a flow is decided once per splitter, not per packet, so that a flow stays
 // whole: a splitter that uses destination addresses drops a packet without one, and a connection reporting
 // them is split by source address alone only if wrapped so as to hide them, e.g. by FakeAddressPacketConn.
@@ -243,8 +248,7 @@ type SplitStats struct {
 type splitter struct {
 	// Set by Split, and read-only afterwards, as is cfg
 	orig        PacketConn        // Underlying PacketConn, as given to Split
-	pc          FromToPacketConn  // The same, wrapped as a FromToPacketConn if it isn't one
-	udp         FromToUDPConn     // The same as pc if it's a FromToUDPConn, which reports destination addresses
+	mode        splitMode         // How to read from and write to orig, or to a FromToUDPConn wrapping it
 	fallback    *splitFallback    // Fallback connection, if any
 	acceptQueue chan *splitConn   // Split connections of new flows, for Accept
 	writeQueue  chan *splitPacket // Packets of every connection, for the write loop
@@ -269,7 +273,7 @@ type splitter struct {
 
 	// Free of pointers, so placed after the fields holding them, for the garbage collector to scan less
 	cfg   splitConfig
-	byDst bool         // Set if pc reports destination addresses, so that they identify flows too
+	byDst bool         // Set if mode reports destination addresses, so that they identify flows too
 	clock atomic.Int64 // Time since the sweeper started, kept by it, coarse but cheap to read
 	drops struct {
 		truncated, noDestination, tableFull, acceptQueueFull, connQueueFull, connClosed atomic.Uint64 // Reading
@@ -290,15 +294,12 @@ func Split(pc PacketConn, config *SplitConfig) SplitListener {
 	s := &splitter{
 		cfg:         cfg,
 		orig:        pc,
-		pc:          PacketToFromToPacketConn(pc, cfg.packetInfo),
 		acceptQueue: make(chan *splitConn, cfg.acceptQueueSize),
 		writeQueue:  make(chan *splitPacket, cfg.writeQueueSize),
 		done:        make(chan struct{}),
 		flows:       make(map[flowKey]*splitConn),
 	}
-	s.udp, _ = s.pc.(FromToUDPConn)
-	_, plain := s.pc.(*packetToFromToPacketConn) // Which reports no destination addresses
-	s.byDst = !plain
+	s.mode, s.byDst = newSplitMode(pc, cfg.packetInfo)
 	s.remotes.m = make(map[addrKey]*splitConn)
 	s.swept.m = make(map[*splitConn]struct{})
 	if cfg.fallbackConn {
@@ -307,7 +308,7 @@ func Split(pc PacketConn, config *SplitConfig) SplitListener {
 
 	// Clear the deadlines the underlying PacketConn may have, as Stop does, since a deadline passed would make
 	// the read loop spin on timeouts without reading a packet, and fail every write without a write timeout
-	_ = s.pc.SetDeadline(time.Time{})
+	_ = s.orig.SetDeadline(time.Time{})
 
 	s.wg.Add(2)
 	go s.readLoop()
@@ -337,13 +338,13 @@ func (s *splitter) AcceptSplit() (SplitConn, error) {
 }
 
 // Addr returns the local address of the underlying PacketConn.
-func (s *splitter) Addr() net.Addr { return s.pc.LocalAddr() }
+func (s *splitter) Addr() net.Addr { return s.orig.LocalAddr() }
 
 // Close closes the underlying PacketConn and stops the internal goroutines. Accept returns an error,
 // while the split connections and the fallback connection return the packets queued, then net.ErrClosed.
 // It returns the error of closing the underlying PacketConn, or net.ErrClosed if the splitter has stopped.
 func (s *splitter) Close() error {
-	return s.stop(s.pc.Close)
+	return s.stop(s.orig.Close)
 }
 
 // Fallback returns the fallback connection of the splitter, or nil if it has none.
@@ -380,7 +381,7 @@ func (s *splitter) Stop() error {
 	var stopping bool
 	err := s.stop(func() error {
 		stopping = true
-		return s.pc.SetDeadline(time.Unix(1, 0))
+		return s.orig.SetDeadline(time.Unix(1, 0))
 	})
 
 	// Clear the deadlines that have interrupted the loops, which have returned by now, unless the splitter

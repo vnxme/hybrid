@@ -134,6 +134,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitFallbackWriteOtherNetworkName, testSplitFallbackWriteOtherNetwork)
 	t.Run(testSplitFallbackWriteUnmappedName, testSplitFallbackWriteUnmapped)
 	t.Run(testSplitIdleTimeoutName, testSplitIdleTimeout)
+	t.Run(testSplitModeName, testSplitMode)
 	t.Run(testSplitNegativeReadName, testSplitNegativeRead)
 	t.Run(testSplitPacketInfoFlowsName, testSplitPacketInfoFlows)
 	t.Run(testSplitPayloadSizesName, testSplitPayloadSizes)
@@ -860,6 +861,12 @@ func testSplitUDPSocketFlows(t *testing.T) {
 				if local := conn.LocalAddr().String(); local != wantLocal {
 					t.Errorf("LocalAddr() = %s, want %s", local, wantLocal)
 				}
+				// Unmapped, with packet info or without, though the socket reads an IPv4 address mapped,
+				// which String doesn't tell
+				wantRemote := netip.AddrPortFrom(to, client.LocalAddr().(*net.UDPAddr).AddrPort().Port())
+				if remote := conn.RemoteAddr().(*net.UDPAddr).AddrPort(); remote != wantRemote {
+					t.Errorf("RemoteAddr() = %s, want %s", remote, wantRemote)
+				}
 				if got := readSplitConn(t, conn); strings.Join(got, " ") != "ping" {
 					t.Errorf("packets of the flow = %q, want %q", got, "ping")
 				}
@@ -873,6 +880,48 @@ func testSplitUDPSocketFlows(t *testing.T) {
 				if err != nil || string(b[:n]) != "pong" || from.Addr().Unmap() != to {
 					t.Errorf("client.ReadFromUDPAddrPort() = %q from %s, %v, want %q from %s, nil", b[:n], from, err, "pong", to)
 				}
+			}
+		})
+	}
+}
+
+// testSplitMode ensures a splitter picks the mode for the interfaces its underlying connection implements,
+// and uses destination addresses to tell flows apart only if the mode reports them.
+func testSplitMode(t *testing.T) {
+	trunk, _ := BufferedTrunk(1, nil, nil)
+	defer func() { _ = trunk.Close() }()
+	udp := func(t *testing.T) *net.UDPConn {
+		skipIfNoUDP(t)
+		return listenLoopbackUDP(t)
+	}
+	packetInfoUDP := func(t *testing.T) FromToUDPConn {
+		u, err := PacketInfoUDPConn(udp(t))
+		if err != nil {
+			t.Skipf("PacketInfoUDPConn() = %v", err)
+		}
+		return u
+	}
+
+	for _, test := range []struct {
+		name  string
+		pc    func(t *testing.T) PacketConn
+		info  bool // Ignored unless pc is a UDPConn only
+		mode  splitMode
+		byDst bool
+	}{
+		{"PacketConn", func(*testing.T) PacketConn { return FakeAddressPacketConn(trunk, nil, nil) }, true,
+			splitPacketMode{}, false},
+		{"FromToPacketConn", func(*testing.T) PacketConn { return trunk }, true, splitFromToPacketMode{}, true},
+		{"UDPConn", func(t *testing.T) PacketConn { return udp(t) }, false, splitUDPMode{}, false},
+		{"UDPConnPacketInfo", func(t *testing.T) PacketConn {
+			return packetInfoUDP(t).(Wrapper[PacketConn]).Unwrap() // Packet info is enabled again by the splitter
+		}, true, splitFromToUDPMode{}, true},
+		{"FromToUDPConn", func(t *testing.T) PacketConn { return packetInfoUDP(t) }, false, splitFromToUDPMode{}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mode, byDst := newSplitMode(test.pc(t), test.info)
+			if fmt.Sprintf("%T", mode) != fmt.Sprintf("%T", test.mode) || byDst != test.byDst {
+				t.Errorf("newSplitMode() = %T, %v, want %T, %v", mode, byDst, test.mode, test.byDst)
 			}
 		})
 	}
@@ -899,6 +948,7 @@ const (
 	testSplitFallbackWriteOtherNetworkName = "FallbackWriteOtherNetwork"
 	testSplitFallbackWriteUnmappedName     = "FallbackWriteUnmapped"
 	testSplitIdleTimeoutName               = "IdleTimeout"
+	testSplitModeName                      = "Mode"
 	testSplitNegativeReadName              = "NegativeRead"
 	testSplitPacketInfoFlowsName           = "PacketInfoFlows"
 	testSplitPayloadSizesName              = "PayloadSizes"

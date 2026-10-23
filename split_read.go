@@ -29,7 +29,7 @@ type flowKey struct {
 
 // splitPacketInfo describes a packet read from the underlying connection.
 type splitPacketInfo struct {
-	src, dst net.Addr // Only if read from a connection other than a FromToUDPConn
+	src, dst net.Addr // Only if read as net.Addr, i.e. from a connection other than a UDPConn
 	key      flowKey
 	idx      int
 }
@@ -45,22 +45,23 @@ func (s *splitter) readLoop() {
 	// Linux only flags it, Windows and trunks report errors, and a net.PacketConn reports nothing at all.
 	buf := make([]byte, s.cfg.readBufferSize+1)
 	for !isClosedChan(s.done) {
-		// Read from the underlying FromToPacketConn and check for errors. Note: any error is ignored if at least
+		// Read from the underlying PacketConn and check for errors. Note: any error is ignored if at least
 		// one byte has been read, e.g. of a truncated packet, while a negative count, e.g. of a socket closed
 		// on Linux, reads nothing.
-		n, err := s.read(buf, &p)
+		p = splitPacketInfo{}
+		n, err := s.mode.read(buf, &p)
 		if n <= 0 && err != nil {
 			// A timeout interrupts reading when the splitter closes, so check it at the top of the loop
 			if isTimeout(err) {
 				continue
 			}
 
-			// Log an error, unless the underlying FromToPacketConn is closed.
+			// Log an error, unless the underlying PacketConn is closed.
 			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 				s.logError(err)
 			}
 
-			// If the underlying FromToPacketConn has unexpectedly closed while
+			// If the underlying PacketConn has unexpectedly closed while
 			// the splitter's done channel remains open, spawn a closing goroutine.
 			// Close() waits until readLoop() returns, so it can't be done synchronously.
 			if !isClosedChan(s.done) {
@@ -85,25 +86,6 @@ func (s *splitter) readLoop() {
 		}
 		s.route(buf[:n], &p)
 	}
-}
-
-// read reads a packet into b and fills in p, the key of its flow, its addresses and its interface index.
-// It returns the number of bytes read and an error, which matters only if no bytes have been read.
-func (s *splitter) read(b []byte, p *splitPacketInfo) (n int, err error) {
-	*p = splitPacketInfo{}
-	if s.udp != nil {
-		n, p.key.src.ap, p.key.dst.ap, p.idx, err = s.udp.ReadFromToUDPAddrPort(b)
-		return n, err
-	}
-
-	n, p.src, p.dst, p.idx, err = s.pc.ReadFromTo(b)
-	if p.src != nil {
-		p.key.src = addrKeyOf(p.src)
-	}
-	if s.byDst && p.dst != nil {
-		p.key.dst = addrKeyOf(p.dst)
-	}
-	return n, err
 }
 
 // route passes a packet to the split connection of its flow, or to the fallback connection if the flow

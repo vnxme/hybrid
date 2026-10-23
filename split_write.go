@@ -104,17 +104,17 @@ func (s *splitter) write(pkt *splitPacket) bool {
 
 	var err error
 	if s.cfg.writeTimeout > 0 { // The write loop is the only user of the write deadline of the underlying connection
-		err = s.pc.SetWriteDeadline(time.Now().Add(s.cfg.writeTimeout))
+		err = s.orig.SetWriteDeadline(time.Now().Add(s.cfg.writeTimeout))
 	}
 	if err == nil {
-		_, err = s.pc.WriteToFrom(pkt.buf, pkt.dst, pkt.src, pkt.idx)
+		err = s.mode.write(pkt)
 	}
 
 	switch {
 	case err == nil:
 		return true
 	case errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe):
-		// If the underlying FromToPacketConn has unexpectedly closed while
+		// If the underlying PacketConn has unexpectedly closed while
 		// the splitter's done channel remains open, spawn a closing goroutine.
 		// Close() waits until writeLoop() returns, so it can't be done synchronously.
 		if !isClosedChan(s.done) {
