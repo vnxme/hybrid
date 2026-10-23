@@ -288,23 +288,37 @@ func (sc *splitFallback) Close() error {
 	return err
 }
 
-// ReadFrom reads a packet of a released flow, and returns the remote address of the flow.
+// ReadFrom reads a packet of a released flow, and returns a copy of the remote address of the flow,
+// which the caller may change.
 func (sc *splitFallback) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, src, _, _, err := sc.ReadFromTo(b)
-	return n, src, err
+	n, c, err := sc.read(b)
+	if c == nil {
+		return 0, nil, err
+	}
+	return n, cloneAddr(c.remoteAddr), err
 }
 
-// ReadFromTo reads a packet of a released flow, and returns its remote address, the local address
-// it came to, and the latest interface index of its flow.
+// ReadFromTo reads a packet of a released flow, and returns copies of its remote address and of the local
+// address it came to, which the caller may change, and the latest interface index of its flow.
 func (sc *splitFallback) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
+	n, c, err := sc.read(b)
+	if c == nil {
+		return 0, nil, nil, 0, err
+	}
+	return n, cloneAddr(c.remoteAddr), cloneAddr(c.localAddr), c.LocalIfIdx(), err
+}
+
+// read reads a packet of a released flow, and returns the split connection of its flow if it has read one,
+// even with an error, e.g. io.ErrShortBuffer. Unlike ReadFrom and ReadFromTo, it copies no addresses.
+func (sc *splitFallback) read(b []byte) (int, *splitConn, error) {
 	n, c, err := sc.receive(b)
 	if c == nil { // No packet read
-		return 0, nil, nil, 0, sc.opError("read", sc.LocalAddr(), nil, err)
+		return 0, nil, sc.opError("read", sc.LocalAddr(), nil, err)
 	}
 	if err != nil {
 		err = sc.opError("read", sc.LocalAddr(), c.remoteAddr, err)
 	}
-	return n, cloneAddr(c.remoteAddr), cloneAddr(c.localAddr), c.LocalIfIdx(), err // Copies the caller may change
+	return n, c, err
 }
 
 // WriteTo writes a packet to addr, as WriteToFrom does with no local address.

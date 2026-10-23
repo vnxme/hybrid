@@ -29,10 +29,11 @@ import (
 	"time"
 )
 
-// BenchmarkSplit measures a round trip through a split connection over each kind of underlying connection
-// the splitter tells apart: a PacketConn, a FromToPacketConn, a UDPConn and a FromToUDPConn. Each operation
-// is a write to the splitter, the read of the packet from its split connection, the write of the packet back
-// and its read. A trunk of the first two kinds takes the same allocations of its own in each.
+// BenchmarkSplit measures a round trip through a split connection, and through the fallback connection
+// once the flow is released, over each kind of underlying connection the splitter tells apart: a PacketConn,
+// a FromToPacketConn, a UDPConn and a FromToUDPConn. Each operation is a write to the splitter, the read
+// of the packet from the split connection or with ReadFrom from the fallback connection, the write of
+// the packet back and its read. A trunk of the first two kinds takes the same allocations of its own in each.
 func BenchmarkSplit(b *testing.B) {
 	type peer struct {
 		write, read func(p []byte) error
@@ -72,9 +73,14 @@ func BenchmarkSplit(b *testing.B) {
 		{"UDPConn", udp, nil},
 		{"FromToUDPConn", udp, &SplitConfig{PacketInfo: true}},
 	} {
-		b.Run(bench.name, func(b *testing.B) {
+		run := func(b *testing.B, fallback bool) {
 			c, pc := bench.conn(b)
-			ln := Split(pc, bench.config)
+			var config SplitConfig
+			if bench.config != nil {
+				config = *bench.config
+			}
+			config.FallbackConn = fallback
+			ln := Split(pc, &config)
 			b.Cleanup(func() { _ = ln.Close() })
 
 			p := make([]byte, 64)
@@ -95,6 +101,23 @@ func BenchmarkSplit(b *testing.B) {
 				}
 				return c.read(p)
 			}
+			if fallback { // Hands the flow, with the packet, over to the fallback connection, as a QUIC server reads it
+				if err := sc.Release(); err != nil {
+					b.Fatal(err)
+				}
+				fb := ln.Fallback()
+				_ = fb.SetReadDeadline(time.Now().Add(time.Minute))
+				echo = func() error {
+					_, addr, err := fb.ReadFrom(p)
+					if err != nil {
+						return err
+					}
+					if _, err := fb.WriteTo(p, addr); err != nil {
+						return err
+					}
+					return c.read(p)
+				}
+			}
 			if err := echo(); err != nil {
 				b.Fatal(err)
 			}
@@ -108,6 +131,10 @@ func BenchmarkSplit(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+		}
+		b.Run(bench.name, func(b *testing.B) {
+			b.Run("SplitConn", func(b *testing.B) { run(b, false) })
+			b.Run("Fallback", func(b *testing.B) { run(b, true) })
 		})
 	}
 }
