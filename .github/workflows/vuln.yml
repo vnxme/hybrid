@@ -1,0 +1,27 @@
+name: Vulnerabilities
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1' # Weekly, as new vulnerabilities are reported without any change here
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: Govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Check the dependencies and the standard library for vulnerabilities the code calls
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

@@ -1,6 +1,7 @@
 # hybrid
 
 [![CI](https://github.com/vnxme/hybrid/actions/workflows/ci.yml/badge.svg)](https://github.com/vnxme/hybrid/actions/workflows/ci.yml)
+[![Vulnerabilities](https://github.com/vnxme/hybrid/actions/workflows/vuln.yml/badge.svg)](https://github.com/vnxme/hybrid/actions/workflows/vuln.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/vnxme/hybrid.svg)](https://pkg.go.dev/github.com/vnxme/hybrid)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/vnxme/hybrid)](go.mod)
 [![License](https://img.shields.io/github/license/vnxme/hybrid)](LICENSE)
@@ -39,6 +40,7 @@ code written for `net.Conn`.
 - [Platform support](#platform-support)
 - [Testing](#testing)
 - [Status](#status)
+- [Security](#security)
 - [Credits](#credits)
 - [License](#license)
 
@@ -649,6 +651,12 @@ over IPv4 and IPv6. Pooled buffers can be poisoned in tests, to detect any use o
 
 The module is under active development, ahead of its integration into caddy-l4. Until v1.0.0, minor versions
 may change the API, as allowed by [semantic versioning](https://semver.org).
+
+## Security
+
+Please report vulnerabilities privately, as [the security policy](SECURITY.md) describes.
+[`govulncheck`](https://go.dev/doc/security/vuln) checks the dependencies and the standard library weekly and on every change
+([workflow](.github/workflows/vuln.yml)).
 
 ## Credits
 
