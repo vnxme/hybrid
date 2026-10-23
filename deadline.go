@@ -72,10 +72,10 @@ func (f funcHook) run() { f() }
 // Once a timer set up by Set fires, it runs its hook, see [HookDeadline].
 type deadline[H deadlineHook] struct {
 	hook   H
-	timer  *time.Timer  // Created on first use, then reset
-	armed  bool         // Set while the timer is set to fire
 	cancel atomic.Value // Holds a chan struct{} created on first use, so that Wait needn't lock mu
+	timer  *time.Timer  // Created on first use, then reset
 	mu     sync.Mutex   // Guards timer, armed and replacing cancel
+	armed  bool         // Set while the timer is set to fire
 }
 
 // makeDeadline returns a deadline value to be embedded in a struct, avoiding a separate allocation.

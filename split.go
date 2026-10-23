@@ -273,7 +273,6 @@ type splitter struct {
 
 	// Free of pointers, so placed after the fields holding them, for the garbage collector to scan less
 	cfg   splitConfig
-	byDst bool         // Set if mode reports destination addresses, so that they identify flows too
 	clock atomic.Int64 // Time since the sweeper started, kept by it, coarse but cheap to read
 	drops struct {
 		truncated, noDestination, tableFull, acceptQueueFull, connQueueFull, connClosed atomic.Uint64 // Reading
@@ -284,6 +283,9 @@ type splitter struct {
 	// Stopping
 	wg   sync.WaitGroup
 	once sync.Once
+
+	// Set by Split, and placed last, so as to take the padding of once
+	byDst bool // Set if mode reports destination addresses, so that they identify flows too
 }
 
 // Split returns a SplitListener for the given PacketConn, configured by config, which may be nil for the defaults,
