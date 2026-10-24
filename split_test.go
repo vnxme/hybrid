@@ -378,7 +378,16 @@ func checkSplitPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 	go serverHandler(pc2, &wg)
 	go clientHandler(pc1, pc2.LocalAddr(), &wg)
 
+	// Count until every goroutine has returned, as the split connections still read the packets
+	// queued once the splitter has closed
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+
 	var acr, acw, anr, anw int
+	closing := done // Not done itself, which the client handler closes
 loop:
 	for {
 		select {
@@ -388,17 +397,18 @@ loop:
 		case n := <-chw:
 			acw++
 			anw += n
-		case <-done:
+		case <-closing:
 			_ = pc1.Close()
 			_ = pc2.Close()
+			closing = nil
+		case <-finished:
 			break loop
 		}
 	}
 
-	wg.Wait()
-
-	// The splitter drops a packet rather than wait for a slow reader, and counts it
-	dropped := int(stats.ConnQueueFull + stats.AcceptQueueFull + stats.TableFull + stats.NoDestination)
+	// The splitter drops a packet rather than wait for a slow reader, and counts it, as well as a packet
+	// of a split connection it closes before Accept returns the connection, once it has closed itself
+	dropped := int(stats.ConnQueueFull + stats.AcceptQueueFull + stats.TableFull + stats.NoDestination + stats.ConnClosed)
 	message := fmt.Sprintf("r/w statistics: count %d+%d/%d, bytes %d+%d/%d", acr, dropped, acw, anr, dropped*writeBufferSize, anw)
 	if pc2.LocalAddr().Network() == "udp" {
 		// The system may drop datagrams the splitter never sees, e.g. as the receive buffer of the socket overflows,
