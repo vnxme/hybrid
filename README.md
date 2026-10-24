@@ -666,6 +666,9 @@ go test -run '^$' -fuzz '^FuzzSplit$' -fuzztime 1m .
 
 The module is under active development, ahead of its integration into caddy-l4. Until v1.0.0, minor versions
 may change the API, as allowed by [semantic versioning](https://semver.org).
+[A check](.github/workflows/api.yml) of every change lists the API changes since the latest release
+with [apidiff](https://pkg.go.dev/golang.org/x/exp/cmd/apidiff), warning of incompatible ones until v1.0.0,
+and failing on them from then on.
 
 ## Security
 

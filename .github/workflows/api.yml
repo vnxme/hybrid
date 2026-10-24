@@ -1,0 +1,45 @@
+name: API
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  apidiff:
+    name: API compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # For the tags
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Compare the API with the latest release
+        run: |
+          # The highest version merged, a prerelease being lower than its release
+          base=$(git -c versionsort.suffix=- tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+          if [ -z "$base" ]; then
+            echo "No release to compare the API with yet" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          go install golang.org/x/exp/cmd/apidiff@v0.0.0-20261014143641-f0251eb4aa3e
+          mod=$(go list -m)
+          git worktree add -q "$RUNNER_TEMP/base" "$base"
+          (cd "$RUNNER_TEMP/base" && apidiff -m -w "$RUNNER_TEMP/base.api" "$mod")
+          apidiff -m -w "$RUNNER_TEMP/head.api" "$mod"
+
+          # Notices, e.g. of the internal packages ignored, go to stderr
+          report=$(apidiff -m "$RUNNER_TEMP/base.api" "$RUNNER_TEMP/head.api" 2>/dev/null)
+          incompatible=$(apidiff -m -incompatible "$RUNNER_TEMP/base.api" "$RUNNER_TEMP/head.api" 2>/dev/null)
+          printf '## API changes since %s\n\n```\n%s\n```\n' "$base" "${report:-None}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$incompatible" ]; then
+            case $base in
+            v0.*) echo "::warning::Incompatible API changes since $base, so the next release must bump the minor version" ;;
+            *) echo "::error::Incompatible API changes since $base, which need a new major version"; exit 1 ;;
+            esac
+          fi
