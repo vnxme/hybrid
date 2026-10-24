@@ -275,6 +275,37 @@ func testSplitReadDrops(t *testing.T) {
 // isClosedSplitConn reports whether a split connection has been closed, e.g. as its flow has expired.
 func isClosedSplitConn(c SplitConn) bool { return c.SetDeadline(time.Time{}) != nil }
 
+// keepFlow starts a flow with start, which returns its connection and a function that keeps the flow active,
+// calls this function every quarter of idle for three idle timeouts, and returns the connection, or fails if it
+// has been closed. The flow may still expire if the goroutines of the test and of the splitter stall, e.g. on
+// a busy machine, as the splitter's clock ticks every quarter of idle too, so keepFlow starts the flow anew,
+// up to 3 times, if it has expired after a call came over half a period late. A flow that never stays active
+// fails every time, whatever the stalls.
+func keepFlow(t *testing.T, idle time.Duration, start func() (SplitConn, func())) SplitConn {
+	t.Helper()
+	period := idle / 4
+	for attempt := 1; ; attempt++ {
+		last := time.Now() // Before the first packet, which start writes
+		conn, touch := start()
+		var stalled bool
+		for range 12 {
+			time.Sleep(period)
+			touch()
+			now := time.Now()
+			stalled = stalled || now.Sub(last) > period+period/2
+			last = now
+		}
+		switch {
+		case !isClosedSplitConn(conn):
+			return conn
+		case stalled && attempt < 3:
+			t.Logf("attempt %d stalled, so the flow may have expired; retrying", attempt)
+		default:
+			t.Fatalf("the connection of an active flow is closed, want open")
+		}
+	}
+}
+
 // testSplitIdleTimeout ensures a flow ends once it's been idle for the idle timeout, released or not,
 // so that its next packet starts a new flow, while packets read or written keep it going.
 func testSplitIdleTimeout(t *testing.T) {
@@ -297,42 +328,39 @@ func testSplitIdleTimeout(t *testing.T) {
 	})
 
 	t.Run("KeptByReads", func(t *testing.T) {
-		client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: idle})
-		writeFrom(t, client, a, "a0")
-		conn := acceptSplitConn(t, ln)
-		for i := range 12 { // Three idle timeouts in all
-			time.Sleep(idle / 4)
-			writeFrom(t, client, a, fmt.Sprintf("a%d", i+1))
-		}
-		if isClosedSplitConn(conn) {
-			t.Errorf("the connection of an active flow is closed, want open")
-		}
+		conn := keepFlow(t, idle, func() (SplitConn, func()) {
+			client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: idle})
+			writeFrom(t, client, a, "a0")
+			i := 0
+			return acceptSplitConn(t, ln), func() {
+				i++
+				writeFrom(t, client, a, fmt.Sprintf("a%d", i))
+			}
+		})
 		if got := readSplitConn(t, conn); len(got) != 13 {
 			t.Errorf("packets of the flow = %q, want 13 of them", got)
 		}
 	})
 
 	t.Run("KeptByWrites", func(t *testing.T) {
-		client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: idle})
-		writeFrom(t, client, a, "a0")
-		conn := acceptSplitConn(t, ln)
-		go func() { // Drain the trunk, so that writes never wait
-			b := make([]byte, 8)
-			for {
-				if _, _, err := client.ReadFrom(b); err != nil {
-					return
+		keepFlow(t, idle, func() (SplitConn, func()) {
+			client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: idle})
+			writeFrom(t, client, a, "a0")
+			conn := acceptSplitConn(t, ln)
+			go func() { // Drain the trunk, so that writes never wait
+				b := make([]byte, 8)
+				for {
+					if _, _, err := client.ReadFrom(b); err != nil {
+						return
+					}
+				}
+			}()
+			return conn, func() {
+				if _, err := conn.WriteTo([]byte("w"), conn.RemoteAddr()); err != nil && !isClosedSplitConn(conn) {
+					t.Fatalf("Write() = %v, want nil", err)
 				}
 			}
-		}()
-		for range 12 {
-			time.Sleep(idle / 4)
-			if _, err := conn.WriteTo([]byte("w"), conn.RemoteAddr()); err != nil {
-				t.Fatalf("Write() = %v, want nil", err)
-			}
-		}
-		if isClosedSplitConn(conn) {
-			t.Errorf("the connection of an active flow is closed, want open")
-		}
+		})
 	})
 
 	t.Run("Released", func(t *testing.T) {
