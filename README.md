@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/vnxme/hybrid/actions/workflows/ci.yml/badge.svg)](https://github.com/vnxme/hybrid/actions/workflows/ci.yml)
 [![Vulnerabilities](https://github.com/vnxme/hybrid/actions/workflows/vuln.yml/badge.svg)](https://github.com/vnxme/hybrid/actions/workflows/vuln.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/vnxme/hybrid/badges/coverage.json)](https://github.com/vnxme/hybrid/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/vnxme/hybrid.svg)](https://pkg.go.dev/github.com/vnxme/hybrid)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/vnxme/hybrid)](go.mod)
 [![License](https://img.shields.io/github/license/vnxme/hybrid)](LICENSE)
@@ -632,10 +633,12 @@ IPv6 packet info is the same everywhere: `IPV6_RECVPKTINFO` turns on `IPV6_PKTIN
 [CI](.github/workflows/ci.yml) tests the package on Linux and macOS, with the race detector, and on Windows,
 on amd64 and arm64 (macOS on arm64 only), with the minimum Go version of `go.mod` and the latest one, lints it with
 [golangci-lint](.golangci.yml), and vets it for the other platforms with code of their own, e.g. the BSDs, AIX,
-Solaris, Plan 9 and WebAssembly:
+Solaris, Plan 9 and WebAssembly. The coverage it reports counts a statement as covered if a test runs it
+on any of the platforms tested, as each of them has code of its own:
 
 ```sh
-go test -race -count=1 ./...
+go test -race -count=1 -coverpkg=./... -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out
 golangci-lint run ./...
 GOOS=freebsd go vet ./...
 ```

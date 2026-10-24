@@ -28,10 +28,49 @@ jobs:
           go-version: ${{ matrix.go }}
       - name: Test
         if: runner.os != 'Windows'
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
       - name: Test without the race detector, which needs cgo on Windows
         if: runner.os == 'Windows'
-        run: go test -count=1 ./...
+        run: go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
+      - uses: actions/upload-artifact@v5
+        if: matrix.go == 'stable'
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.out
+
+  coverage:
+    name: Coverage
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # To push the badge
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: coverage-*
+          path: ${{ runner.temp }}/coverage
+      - name: Merge the profiles, as each platform runs code of its own
+        id: total
+        run: |
+          # A block is covered if any platform runs it, and is counted once, as the profiles share its position
+          pct=$(awk 'FNR == 1 { next } { n[$1] = $2; if ($3 > 0) hit[$1] = 1 }
+            END { for (k in n) { t += n[k]; if (k in hit) c += n[k] }; printf "%.1f", 100 * c / t }' \
+            "$RUNNER_TEMP"/coverage/*/coverage.out)
+          echo "pct=$pct" >> "$GITHUB_OUTPUT"
+          echo "Coverage: **$pct%** of statements, on all the platforms tested" >> "$GITHUB_STEP_SUMMARY"
+      - name: Push the badge to the badges branch, replacing its only commit
+        if: github.event_name == 'push'
+        env:
+          PCT: ${{ steps.total.outputs.pct }}
+        run: |
+          color=$(awk -v p="$PCT" 'BEGIN { print (p >= 90 ? "brightgreen" : p >= 75 ? "green" : p >= 60 ? "yellow" : "red") }')
+          git switch --orphan badges
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' "$PCT" "$color" > coverage.json
+          git add coverage.json
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "coverage: $PCT%"
+          git push -f origin badges
 
   lint:
     name: Lint

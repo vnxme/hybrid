@@ -2,3 +2,4 @@ _gitignore/
 
 .idea/
 .vscode/
+coverage.out
