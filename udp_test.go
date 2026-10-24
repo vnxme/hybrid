@@ -532,8 +532,8 @@ func BenchmarkPacketInfoUDPConn(b *testing.B) {
 }
 
 // localAddrs returns the addresses of each interface that is up, with zones for IPv6 link-local ones,
-// except for the link-local addresses of point-to-point interfaces, e.g. macOS utun ones, as packets to them
-// may go to the peer, rather than loop back.
+// except for those packets to which don't loop back, e.g. link-local addresses of macOS utun interfaces,
+// whose packets may go to the peer, and of awdl0 and llw0, which may stay up while inactive.
 func localAddrs(t *testing.T) [][]netip.Addr {
 	t.Helper()
 	ifs, err := net.Interfaces()
@@ -553,13 +553,12 @@ func localAddrs(t *testing.T) [][]netip.Addr {
 		for _, ip := range ips {
 			if ipNet, ok := ip.(*net.IPNet); ok {
 				addr, _ := netip.AddrFromSlice(ipNet.IP)
-				if addr = addr.Unmap(); addr.IsLinkLocalUnicast() {
-					if ifc.Flags&net.FlagPointToPoint != 0 {
-						continue
-					}
-					if addr.Is6() {
-						addr = addr.WithZone(ifc.Name)
-					}
+				if addr = addr.Unmap(); addr.Is6() && addr.IsLinkLocalUnicast() {
+					addr = addr.WithZone(ifc.Name)
+				}
+				if !loopsBack(addr) {
+					t.Logf("skipping %s, as packets to it don't loop back", addr)
+					continue
 				}
 				ifcAddrs = append(ifcAddrs, addr)
 			}
@@ -567,6 +566,40 @@ func localAddrs(t *testing.T) [][]netip.Addr {
 		addrs = append(addrs, ifcAddrs)
 	}
 	return addrs
+}
+
+// loopsBack reports whether a packet to addr reaches a plain UDP socket bound to it, and a reply comes back.
+func loopsBack(addr netip.Addr) bool {
+	network := "udp6"
+	if addr.Is4() {
+		network = "udp4"
+	}
+	server, err := net.ListenUDP(network, net.UDPAddrFromAddrPort(netip.AddrPortFrom(addr, 0)))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = server.Close() }()
+	client, err := net.ListenUDP(network, nil)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = client.Close() }()
+
+	b, deadline := make([]byte, 1), time.Now().Add(250*time.Millisecond)
+	_ = server.SetReadDeadline(deadline)
+	_ = client.SetReadDeadline(deadline)
+	if _, err = client.WriteToUDPAddrPort(b, server.LocalAddr().(*net.UDPAddr).AddrPort()); err != nil {
+		return false
+	}
+	_, from, err := server.ReadFromUDPAddrPort(b)
+	if err != nil {
+		return false
+	}
+	if _, err = server.WriteToUDPAddrPort(b, from); err != nil {
+		return false
+	}
+	_, _, err = client.ReadFromUDPAddrPort(b)
+	return err == nil
 }
 
 // TestPacketInfoUDPConnInterfaces ensures a packet to any local address is read with this address as dst
