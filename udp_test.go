@@ -300,6 +300,7 @@ func TestPacketInfoUDPConnWriteCount(t *testing.T) {
 // messages truncated, so that packet info is read again, rather than lost for every packet afterwards.
 func TestPacketInfoUDPConnTruncatedOOB(t *testing.T) {
 	skipIfNoUDP(t)
+	skipIfEmulated(t, "MSG_CTRUNC on control messages truncated for the guest only") // QEMU overwrites it with the host's flags
 
 	lo := netip.MustParseAddr("127.0.0.1")
 	pc, c := listenLoopbackPacketInfoUDP(t)
@@ -607,6 +608,7 @@ func loopsBack(addr netip.Addr) bool {
 // as well as a reply written with another address of the same kind on the same interface as src.
 func TestPacketInfoUDPConnInterfaces(t *testing.T) {
 	skipIfNoUDP(t)
+	skipIfEmulated(t, "netlink messages listing addresses that Go can parse")
 
 	addrs := localAddrs(t)
 	for _, socket := range []struct{ network, address string }{
