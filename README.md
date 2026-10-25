@@ -631,7 +631,8 @@ IPv6 packet info is the same everywhere: `IPV6_RECVPKTINFO` turns on `IPV6_PKTIN
 ## Testing
 
 [CI](.github/workflows/ci.yml) tests the package on Linux and macOS, with the race detector, and on Windows,
-on amd64 and arm64 (macOS on arm64 only), with the minimum Go version of `go.mod` and the latest one, lints it with
+on amd64 and arm64 (macOS on arm64 only), with the minimum Go version of `go.mod` and the latest one, on big-endian
+Linux, i.e. s390x under QEMU, lints it with
 [golangci-lint](.golangci.yml), and vets it for the other platforms with code of their own, e.g. the BSDs, AIX,
 Solaris, Plan 9 and WebAssembly. The coverage it reports counts a statement as covered if a test runs it
 on any of the platforms tested, as each of them has code of its own:
