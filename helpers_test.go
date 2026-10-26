@@ -198,6 +198,15 @@ func skipIfNoUDP(tb testing.TB) {
 	}
 }
 
+// skipIfEmulated skips the test or benchmark of a feature that the emulator the tests run under lacks, as named by
+// the HYBRID_TEST_EMULATOR environment variable, e.g. QEMU user mode, which CI runs the big-endian tests under.
+func skipIfEmulated(tb testing.TB, feature string) {
+	tb.Helper()
+	if emulator := os.Getenv("HYBRID_TEST_EMULATOR"); emulator != "" {
+		tb.Skipf("%s lacks %s", emulator, feature)
+	}
+}
+
 // TestAddrKeyOf ensures addrKeyOf holds a UDP, TCP or IP address by its netip.AddrPort, unmapped and with
 // the zone of an IPv6 address only, so that it matches however it's written, and any other address by its string.
 func TestAddrKeyOf(t *testing.T) {

@@ -260,6 +260,9 @@ func testSplitPayloadSizes(t *testing.T) {
 func checkSplitPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, readQueueSize, readBufferSize, writeBufferSize, packetCount int) {
 	t.Helper()
 	pc1, pc2 := ctor(t)
+	if writeBufferSize == 0 && pc1.LocalAddr().Network() == "udp" {
+		skipIfEmulated(t, "sending empty UDP datagrams") // The QEMU of Ubuntu 24.04 fails them with EFAULT
+	}
 
 	timeout := 50 * time.Millisecond
 	chr, chw, done := make(chan int), make(chan int), make(chan struct{})

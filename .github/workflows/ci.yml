@@ -38,6 +38,22 @@ jobs:
           name: coverage-${{ matrix.os }}
           path: coverage.out
 
+  big-endian:
+    name: Test (linux/s390x, big-endian, under QEMU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Install QEMU, which runs the tests on the system of the runner
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+      - name: Test without the race detector, which needs cgo, i.e. a cross compiler
+        env:
+          GOARCH: s390x
+          HYBRID_TEST_EMULATOR: QEMU user mode # Skips the tests of features it lacks
+        run: go test -count=1 -timeout 30m -exec qemu-s390x ./... # Emulated, so slower
+
   coverage:
     name: Coverage
     needs: test
