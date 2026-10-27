@@ -3,6 +3,7 @@
 [![CI](https://github.com/vnxme/hybrid/actions/workflows/ci.yml/badge.svg)](https://github.com/vnxme/hybrid/actions/workflows/ci.yml)
 [![Vulnerabilities](https://github.com/vnxme/hybrid/actions/workflows/vuln.yml/badge.svg)](https://github.com/vnxme/hybrid/actions/workflows/vuln.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/vnxme/hybrid/badges/coverage.json)](https://github.com/vnxme/hybrid/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vnxme/hybrid/badge)](https://scorecard.dev/viewer/?uri=github.com/vnxme/hybrid)
 [![Go Reference](https://pkg.go.dev/badge/github.com/vnxme/hybrid.svg)](https://pkg.go.dev/github.com/vnxme/hybrid)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/vnxme/hybrid)](go.mod)
 [![License](https://img.shields.io/github/license/vnxme/hybrid)](LICENSE)
@@ -675,7 +676,9 @@ and failing on them from then on.
 
 Please report vulnerabilities privately, as [the security policy](SECURITY.md) describes.
 [`govulncheck`](https://go.dev/doc/security/vuln) checks the dependencies and the standard library weekly and on every change
-([workflow](.github/workflows/vuln.yml)).
+([workflow](.github/workflows/vuln.yml)). [OpenSSF Scorecard](https://scorecard.dev) grades the security practices
+of the repository weekly and on every change, and publishes the results
+([workflow](.github/workflows/scorecard.yml)).
 
 ## Credits
 

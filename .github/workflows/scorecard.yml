@@ -1,0 +1,33 @@
+name: Scorecard
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '0 8 * * 1' # Weekly, as some checks depend on the settings and activity of the repository
+  branch_protection_rule: # So that the Branch-Protection check follows its changes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # To upload the results to code scanning
+      id-token: write # To publish the results, for the badge
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif
