@@ -675,10 +675,11 @@ and failing on them from then on.
 ## Security
 
 Please report vulnerabilities privately, as [the security policy](SECURITY.md) describes.
-[`govulncheck`](https://go.dev/doc/security/vuln) checks the dependencies and the standard library weekly and on every change
-([workflow](.github/workflows/vuln.yml)). [OpenSSF Scorecard](https://scorecard.dev) grades the security practices
-of the repository weekly and on every change, and publishes the results
-([workflow](.github/workflows/scorecard.yml)).
+Weekly and on every change, [`govulncheck`](https://go.dev/doc/security/vuln) checks the dependencies and
+the standard library ([workflow](.github/workflows/vuln.yml)), [CodeQL](https://codeql.github.com) analyzes
+the code ([workflow](.github/workflows/codeql.yml)), and [OpenSSF Scorecard](https://scorecard.dev) grades
+the security practices of the repository, publishing the results ([workflow](.github/workflows/scorecard.yml)).
+The workflows pin each action to a commit, which Dependabot updates.
 
 ## Credits
 
