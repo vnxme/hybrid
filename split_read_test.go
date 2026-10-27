@@ -155,8 +155,9 @@ func (c *scriptedUDPConn) Close() error {
 	return nil
 }
 
-// SetDeadline does nothing, as reads wait until the connection is closed.
-func (c *scriptedUDPConn) SetDeadline(time.Time) error { return nil }
+// SetDeadline and SetWriteDeadline do nothing, as reads wait until the connection is closed.
+func (c *scriptedUDPConn) SetDeadline(time.Time) error      { return nil }
+func (c *scriptedUDPConn) SetWriteDeadline(time.Time) error { return nil }
 
 // LocalAddr returns an unspecified address, as of a socket that needs packet info.
 func (c *scriptedUDPConn) LocalAddr() net.Addr { return &net.UDPAddr{IP: net.IPv4zero, Port: 53} }
@@ -550,5 +551,129 @@ func testSplitUDPTruncated(t *testing.T) {
 			waitSplitStats(t, ln, SplitStats{Truncated: 2})
 			checkSplitPacket(t, acceptSplitConn(t, ln), strings.Repeat("z", size))
 		})
+	}
+}
+
+// sharedUDPConn is a user of a UDP socket shared with other users, closed as Caddy closes one on a reload, where
+// the socket can't be reused: with a read deadline passed, which interrupts the read in progress, and which its
+// reader clears once it takes the timeout, so that the other users read on.
+type sharedUDPConn struct {
+	net.PacketConn
+	closed atomic.Bool
+}
+
+// ReadFrom reads a packet, or fails with net.ErrClosed once the connection is closed, dropping the packet read,
+// if any, as the reader of a closed connection has left.
+func (c *sharedUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(b)
+	if c.closed.Load() {
+		if isTimeout(err) {
+			_ = c.PacketConn.SetReadDeadline(time.Time{})
+		}
+		return 0, nil, net.ErrClosed
+	}
+	return n, addr, err
+}
+
+// Close closes the connection, leaving the socket open, with a read deadline passed.
+func (c *sharedUDPConn) Close() error {
+	c.closed.Store(true)
+	return c.PacketConn.SetReadDeadline(time.Now())
+}
+
+// testSplitSharedReload ensures a splitter replacing another one over a shared socket, as on a reload, neither
+// keeps the other from stopping without traffic, by clearing the read deadline that stops it, nor loses the next
+// packet to the other, whatever the order of starting one and closing the other is.
+func testSplitSharedReload(t *testing.T) {
+	skipIfNoUDP(t)
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pc.Close() }()
+	client, err := net.DialUDP("udp4", nil, pc.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	ln := Split(&sharedUDPConn{PacketConn: pc}, nil)
+	defer func() { _ = ln.Close() }()
+	for i := range 20 {
+		started := make(chan SplitListener, 1)
+		go func() { started <- Split(&sharedUDPConn{PacketConn: pc}, nil) }()
+		closed := make(chan error, 1)
+		go func() { closed <- ln.Close() }()
+		select {
+		case err := <-closed:
+			if err != nil {
+				t.Fatalf("reload %d: Close() = %v, want nil", i, err)
+			}
+		case <-time.After(time.Second):
+			_ = pc.Close() // So that Close returns
+			t.Fatalf("reload %d: Close() hasn't returned with no traffic", i)
+		}
+		ln = <-started
+
+		data := fmt.Sprint("reload ", i)
+		if _, err := client.Write([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+		checkSplitPacket(t, acceptSplitConn(t, ln), data)
+	}
+}
+
+// timeoutCountingConn is a PacketConn that counts the read timeouts it reports.
+type timeoutCountingConn struct {
+	net.PacketConn
+	timeouts atomic.Int64
+}
+
+// ReadFrom reads a packet, counting a timeout.
+func (c *timeoutCountingConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(b)
+	if isTimeout(err) {
+		c.timeouts.Add(1)
+	}
+	return n, addr, err
+}
+
+// testSplitForeignDeadline ensures a read deadline passed that the splitter hasn't set, and that no one clears,
+// e.g. as another reader of a shared socket has left without reading again, neither makes the read loop spin
+// on timeouts, nor keeps it from reading for long.
+func testSplitForeignDeadline(t *testing.T) {
+	skipIfNoUDP(t)
+	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := net.DialUDP("udp4", nil, pc.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	c := &timeoutCountingConn{PacketConn: pc}
+	ln := Split(c, nil)
+	defer func() { _ = ln.Close() }()
+
+	if _, err := client.Write([]byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	conn := acceptSplitConn(t, ln)
+	checkSplitPacket(t, conn, "before")
+
+	_ = pc.SetReadDeadline(time.Unix(1, 0)) // By another reader
+	for deadline := time.Now().Add(time.Second); c.timeouts.Load() == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no read has timed out")
+		}
+	}
+	if _, err := client.Write([]byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	checkSplitPacket(t, conn, "after")
+	time.Sleep(10 * time.Millisecond) // Let the read loop spin, if it did
+	if n := c.timeouts.Load(); n != splitForeignTimeouts {
+		t.Errorf("read timeouts = %d, want %d, after which the read deadline is cleared", n, splitForeignTimeouts)
 	}
 }

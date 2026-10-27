@@ -70,8 +70,10 @@ import (
 // like any net.Conn or net.PacketConn. Each flow has an idle timeout, which every packet read or written
 // refreshes: an atomic timestamp per flow, checked by a periodic sweeper, keeps that cheap. Only the read
 // loop sets the read deadline of the underlying connection, to be interrupted when the splitter closes, and
-// only the write loop sets its write deadline, to apply the write timeout of the splitter: as the deadlines
-// of a socket are shared by everything using it, each has a single user.
+// only the write loop sets its write deadline, to apply the write timeout of the splitter. As the deadlines
+// of a socket are shared by everything using it, other readers of the socket, e.g. another splitter during
+// a reload, may set its read deadline too: the read loop backs off from a timeout it hasn't caused, for them
+// to take their own, and clears the read deadline itself only after a few such timeouts in a row.
 //
 // Reading. Only the read loop changes the flow table, so it takes no lock on the way of a packet:
 // closed and expired flows reach it over a channel. It reads into a buffer as large as the largest
@@ -284,13 +286,19 @@ type splitter struct {
 	// Stopping
 	wg   sync.WaitGroup
 	once sync.Once
+	mu   sync.Mutex // Held to interrupt the loops, or to clear a read deadline the splitter hasn't set
 
 	// Set by Split, and placed last, so as to take the padding of once
 	byDst bool // Set if mode reports destination addresses, so that they identify flows too
 }
 
 // Split returns a SplitListener for the given PacketConn, configured by config, which may be nil for the defaults,
-// and starts its internal loops. It takes pc over, clearing its deadlines, until Close or Stop.
+// and starts its internal loops. It takes pc over, clearing its write deadline, until Close or Stop.
+//
+// The splitter may share a socket with other readers, e.g. in another splitter over another PacketConn of it,
+// which set its read deadline as they need: it backs off from a read timeout it hasn't caused, for them to take
+// their own, and clears the read deadline after 20 of them in a row, e.g. one left passed
+// before Split. Stop sets a deadline passed in order to interrupt its read, so it interrupts theirs as well.
 //
 // The splitter leaves the socket options of pc as they are. Notably, macOS and the BSDs refuse to send a datagram
 // larger than the send buffer of a socket, which is 9216 bytes by default, so a larger packet written to a split
@@ -314,9 +322,10 @@ func Split(pc PacketConn, config *SplitConfig) SplitListener {
 		s.fallback = s.newFallback()
 	}
 
-	// Clear the deadlines the underlying PacketConn may have, as Stop does, since a deadline passed would make
-	// the read loop spin on timeouts without reading a packet, and fail every write without a write timeout
-	_ = s.orig.SetDeadline(time.Time{})
+	// Clear the write deadline the underlying PacketConn may have, since a deadline passed would fail every write
+	// without a write timeout. Its read deadline may be another reader's, e.g. interrupting its own read, so it's
+	// left to the read loop, which clears it only if it seems to be no one's
+	_ = s.orig.SetWriteDeadline(time.Time{})
 
 	s.wg.Add(2)
 	go s.readLoop()
@@ -425,8 +434,12 @@ func (s *splitter) stop(interrupt func() error) error {
 		// - let the writeLoop goroutine return before it writes again.
 		close(s.done)
 
-		// Interrupt the read and write in progress, if any, so that the loops return.
+		// Interrupt the read and write in progress, if any, so that the loops return. The read loop never clears
+		// a read deadline interrupt sets, e.g. one passed, which a PacketConn may set to close as well, since it
+		// checks the done channel before, holding the same lock.
+		s.mu.Lock()
 		err = interrupt()
+		s.mu.Unlock()
 
 		// Wait until the internal goroutines return.
 		s.wg.Wait()
@@ -501,6 +514,11 @@ const (
 	DefaultSplitWriteTimeout      = 500 * time.Millisecond
 
 	minSplitReadBufferSize = 512 // A read buffer of less than 512 bytes seems impractical
+
+	// The read loop backs off from a read timeout it hasn't caused, for another reader of a shared socket
+	// to take its own, and clears the read deadline after that many of them in a row
+	splitForeignTimeoutBackoff = time.Millisecond
+	splitForeignTimeouts       = 20
 )
 
 // Shared variables

@@ -160,6 +160,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitFallbackWriteCopiesAddrsName, testSplitFallbackWriteCopiesAddrs)
 	t.Run(testSplitFallbackWriteOtherNetworkName, testSplitFallbackWriteOtherNetwork)
 	t.Run(testSplitFallbackWriteUnmappedName, testSplitFallbackWriteUnmapped)
+	t.Run(testSplitForeignDeadlineName, testSplitForeignDeadline)
 	t.Run(testSplitIdleTimeoutName, testSplitIdleTimeout)
 	t.Run(testSplitModeName, testSplitMode)
 	t.Run(testSplitNegativeReadName, testSplitNegativeRead)
@@ -170,6 +171,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitReadDropsName, testSplitReadDrops)
 	t.Run(testSplitReleaseName, testSplitRelease)
 	t.Run(testSplitReleaseWithoutFallbackName, testSplitReleaseWithoutFallback)
+	t.Run(testSplitSharedReloadName, testSplitSharedReload)
 	t.Run(testSplitShortBufferName, testSplitShortBuffer)
 	t.Run(testSplitShortBufferReadsOnName, testSplitShortBufferReadsOn)
 	t.Run(testSplitStopName, testSplitStop)
@@ -669,8 +671,9 @@ func testSplitCloseError(t *testing.T) {
 	}
 }
 
-// testSplitUnderlyingDeadline ensures a splitter clears the deadlines of the connection it takes over, so that
-// a deadline passed neither keeps the read loop from reading, nor fails writes without a write timeout.
+// testSplitUnderlyingDeadline ensures a deadline passed of the connection a splitter takes over neither keeps
+// the read loop from reading, as it clears the read deadline after a few timeouts, nor fails writes without
+// a write timeout, as Split clears the write deadline.
 func testSplitUnderlyingDeadline(t *testing.T) {
 	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
 	client, server := BufferedTrunk(16, nil, nil)
@@ -989,6 +992,7 @@ const (
 	testSplitFallbackWriteCopiesAddrsName  = "FallbackWriteCopiesAddrs"
 	testSplitFallbackWriteOtherNetworkName = "FallbackWriteOtherNetwork"
 	testSplitFallbackWriteUnmappedName     = "FallbackWriteUnmapped"
+	testSplitForeignDeadlineName           = "ForeignDeadline"
 	testSplitIdleTimeoutName               = "IdleTimeout"
 	testSplitModeName                      = "Mode"
 	testSplitNegativeReadName              = "NegativeRead"
@@ -999,6 +1003,7 @@ const (
 	testSplitReadDropsName                 = "ReadDrops"
 	testSplitReleaseName                   = "Release"
 	testSplitReleaseWithoutFallbackName    = "ReleaseWithoutFallback"
+	testSplitSharedReloadName              = "SharedReload"
 	testSplitShortBufferName               = "ShortBuffer"
 	testSplitShortBufferReadsOnName        = "ShortBufferReadsOn"
 	testSplitStopName                      = "Stop"

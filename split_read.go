@@ -44,6 +44,7 @@ func (s *splitter) readLoop() {
 	// tells a larger packet, as filling the buffer is the only sign of truncation every connection gives:
 	// Linux only flags it, Windows and trunks report errors, and a net.PacketConn reports nothing at all.
 	buf := make([]byte, s.cfg.readBufferSize+1)
+	var timeouts int // Read timeouts in a row the splitter hasn't caused
 	for !isClosedChan(s.done) {
 		// Read from the underlying PacketConn and check for errors. Note: any error is ignored if at least
 		// one byte has been read, e.g. of a truncated packet, while a negative count, e.g. of a socket closed
@@ -51,8 +52,11 @@ func (s *splitter) readLoop() {
 		p = splitPacketInfo{}
 		n, err := s.mode.read(buf, &p)
 		if n <= 0 && err != nil {
-			// A timeout interrupts reading when the splitter closes, so check it at the top of the loop
+			// A timeout interrupts reading when the splitter stops, so check it at the top of the loop
 			if isTimeout(err) {
+				if !isClosedChan(s.done) {
+					timeouts = s.foreignTimeout(timeouts)
+				}
 				continue
 			}
 
@@ -71,6 +75,7 @@ func (s *splitter) readLoop() {
 			}
 			return
 		}
+		timeouts = 0
 
 		// Drain the read channels of the connections closed so far, e.g. while reading,
 		// and delete them from the flow table, so that their flows end before routing.
@@ -90,6 +95,25 @@ func (s *splitter) readLoop() {
 		}
 		s.route(buf[:n], &p)
 	}
+}
+
+// foreignTimeout handles a read timeout the splitter hasn't caused, given the number of such timeouts in a row
+// before it, and returns the number after it. Another reader of a shared socket may have set a deadline passed
+// in order to interrupt its own read, which a socket serves one at a time, so the read loop backs off rather than
+// spin, for that reader to take its timeout and clear the deadline. After too many timeouts in a row, the deadline
+// seems to be no one's, e.g. as that reader has left without reading again, so the read loop clears it itself.
+func (s *splitter) foreignTimeout(timeouts int) int {
+	if timeouts++; timeouts < splitForeignTimeouts {
+		time.Sleep(splitForeignTimeoutBackoff)
+		return timeouts
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !isClosedChan(s.done) { // Stopping interrupts the read loop only once done is closed, so it's never undone
+		_ = s.orig.SetReadDeadline(time.Time{})
+	}
+	return 0
 }
 
 // route passes a packet to the split connection of its flow, or to the fallback connection if the flow

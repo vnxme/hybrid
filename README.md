@@ -260,8 +260,15 @@ the `RemoteAddr` of a split connection is `127.0.0.1:1234` rather than `[::ffff:
 Split connections and the fallback connection have read and write deadlines of their own, like any `net.Conn`
 or `net.PacketConn`. Each flow has an idle timeout, which every packet read or written refreshes; a periodic
 sweeper ends idle flows within one and a quarter idle timeouts of their last packet. Only the read loop sets the
-read deadline of the underlying connection, and only the write loop sets its write deadline: as the deadlines of
-a socket are shared by everything using it, each has a single user.
+read deadline of the underlying connection, and only the write loop sets its write deadline. `Split` clears the
+write deadline the connection may have, but leaves its read deadline.
+
+As the deadlines of a socket are shared by everything using it, a splitter may share a socket with other readers,
+e.g. with another splitter during a reload, which interrupts its read with a read deadline passed. The read loop
+backs off for a millisecond from a timeout it hasn't caused, so that the other reader can take its own, as
+a socket serves one read at a time. After 20 such timeouts in a row, the deadline seems to be no one's, e.g. left
+passed before `Split`, so the read loop clears it. `Stop` and `Close` interrupt the read in progress, so they
+interrupt that of another reader as well.
 
 ### Reading and writing
 
