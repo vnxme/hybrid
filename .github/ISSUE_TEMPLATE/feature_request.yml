@@ -1,0 +1,16 @@
+name: Feature request
+description: Propose a feature or a change of the API.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you're trying to do, and why hybrid doesn't let you do it, or makes it hard.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How hybrid could solve it, e.g. the API you'd like, and any alternatives you've considered.

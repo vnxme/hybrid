@@ -42,6 +42,7 @@ code written for `net.Conn`.
 - [Platform support](#platform-support)
 - [Testing](#testing)
 - [Status](#status)
+- [Contributing](#contributing)
 - [Security](#security)
 - [Credits](#credits)
 - [License](#license)
@@ -671,6 +672,10 @@ may change the API, as allowed by [semantic versioning](https://semver.org).
 [A check](.github/workflows/api.yml) of every change lists the API changes since the latest release
 with [apidiff](https://pkg.go.dev/golang.org/x/exp/cmd/apidiff), warning of incompatible ones until v1.0.0,
 and failing on them from then on.
+
+## Contributing
+
+Bug reports, fixes, tests and documentation are welcome, as [the contributing guide](CONTRIBUTING.md) describes.
 
 ## Security
 

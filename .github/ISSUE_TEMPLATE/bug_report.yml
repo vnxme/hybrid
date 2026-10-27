@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a bug, e.g. a wrong result, a panic, a deadlock or a leak.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please report vulnerabilities privately, as the security policy describes, rather than here.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version or commit of hybrid, e.g. from `go list -m github.com/vnxme/hybrid`.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: The output of `go version`, which includes the platform.
+      placeholder: go version go1.26.0 linux/amd64
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead, including any error or panic.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: The smallest program or test that reproduces the bug, if possible.
+      render: go
