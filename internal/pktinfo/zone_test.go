@@ -18,6 +18,7 @@ package pktinfo
 
 import (
 	"errors"
+	"math"
 	"net"
 	"strconv"
 	"sync"
@@ -132,6 +133,12 @@ func TestZoneCache(t *testing.T) {
 	age(2 * zoneMaxAge)
 	check(zc.name(1), "a", zc.index("b"), 2, 3)
 	check(zc.name(9), "9", zc.index("b"), 2, 3)
+
+	// A numeric zone out of the range of indices is a name, here of no interface, rather than an index wrapped around
+	check(zc.name(9), "9", zc.index("2147483647"), math.MaxInt32, 3)
+	for _, zone := range []string{"-1", "2147483648", "4294967297", "+1"} {
+		check(zc.name(9), "9", zc.index(zone), 0, 3)
+	}
 }
 
 // TestZoneCacheConcurrent ensures concurrent lookups list the interfaces once.

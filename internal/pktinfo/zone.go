@@ -100,13 +100,14 @@ func (zc *ipv6ZoneCache) name(index int) string {
 }
 
 // index returns the index of the interface with the given name. A numeric name is taken as an index,
-// unless an interface has this name. If no interface has the name, it returns 0.
+// unless an interface has this name, or it's out of the range of indices, which are positive 32-bit ints,
+// so that it never wraps around into another index. If no interface has the name, it returns 0.
 func (zc *ipv6ZoneCache) index(name string) int {
 	if index, ok := zc.get(zoneMaxAge).toIndex[name]; ok {
 		return index
 	}
-	if index, err := strconv.Atoi(name); err == nil {
-		return index
+	if index, err := strconv.ParseUint(name, 10, 31); err == nil {
+		return int(index)
 	}
 	return zc.get(zoneMissAge).toIndex[name]
 }
