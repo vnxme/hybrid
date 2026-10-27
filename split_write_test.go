@@ -259,24 +259,35 @@ func (c *failingWrites) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, 
 	return c.FromToPacketConn.WriteToFrom(b, dst, src, idx)
 }
 
-// testSplitWriteFailed ensures the write loop drops and counts a packet it fails to write, and goes on
-// writing, unless the underlying connection is closed, which closes the splitter.
+// testSplitWriteFailed ensures the write loop drops and counts a packet it fails to write, passing the error
+// to ErrorFunc, and goes on writing, unless the underlying connection is closed, which stops the splitter.
 func testSplitWriteFailed(t *testing.T) {
 	a, bad := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 66), Port: 66}
-	setup := func(t *testing.T, err error) (FromToPacketConn, SplitListener) {
+	setup := func(t *testing.T, err error) (FromToPacketConn, SplitListener, <-chan error) {
 		client, server := BufferedTrunk(16, nil, nil)
 		t.Cleanup(func() { _ = client.Close() })
-		ln := Split(&failingWrites{server, bad, err}, &SplitConfig{FallbackConn: true})
+		reported := make(chan error, 2)
+		config := &SplitConfig{FallbackConn: true, ErrorFunc: func(err error) { reported <- err }}
+		ln := Split(&failingWrites{server, bad, err}, config)
 		t.Cleanup(func() { _ = ln.Close() })
-		return client, ln
+		return client, ln, reported
 	}
 
 	t.Run("Failed", func(t *testing.T) {
-		client, ln := setup(t, errors.New("unreachable"))
+		errUnreachable := errors.New("unreachable")
+		client, ln, reported := setup(t, errUnreachable)
 		if _, err := ln.Fallback().WriteTo([]byte("x"), bad); err != nil {
 			t.Fatalf("WriteTo(%s) = %v, want nil, as the write fails later", bad, err)
 		}
 		waitSplitStats(t, ln, SplitStats{WriteFailed: 1})
+		select {
+		case err := <-reported:
+			if !errors.Is(err, errUnreachable) {
+				t.Errorf("ErrorFunc() got %v, want %v", err, errUnreachable)
+			}
+		default:
+			t.Errorf("ErrorFunc() hasn't been called, want %v", errUnreachable)
+		}
 
 		if _, err := ln.Fallback().WriteTo([]byte("y"), a); err != nil {
 			t.Fatal(err)
@@ -289,7 +300,7 @@ func testSplitWriteFailed(t *testing.T) {
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		_, ln := setup(t, net.ErrClosed)
+		_, ln, _ := setup(t, net.ErrClosed)
 		if _, err := ln.Fallback().WriteTo([]byte("x"), bad); err != nil {
 			t.Fatal(err)
 		}
@@ -300,8 +311,9 @@ func testSplitWriteFailed(t *testing.T) {
 		}()
 		select {
 		case err := <-accepted:
-			if !errors.Is(err, net.ErrClosed) {
-				t.Errorf("Accept() = %v, want net.ErrClosed", err)
+			var stopped splitStoppedError
+			if !errors.Is(err, net.ErrClosed) || !errors.As(err, &stopped) {
+				t.Errorf("Accept() = %v, want net.ErrClosed, as the underlying connection has stopped the splitter", err)
 			}
 		case <-time.After(time.Second):
 			t.Errorf("Accept() hasn't returned, as the splitter hasn't closed")

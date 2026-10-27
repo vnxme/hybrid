@@ -205,7 +205,7 @@ a `net.Listener` is expected, e.g. to a generic proxy server loop.
 
 | Method                         | Description                                                                                         |
 |--------------------------------|-----------------------------------------------------------------------------------------------------|
-| `Split(pc, config)`            | Returns a `SplitListener` over `pc` and starts its loops. It takes `pc` over, clearing its deadlines |
+| `Split(pc, config)`            | Returns a `SplitListener` over `pc` and starts its loops. It takes `pc` over, clearing its write deadline |
 | `SplitListener.AcceptSplit()`  | Returns the split connection of the next new flow                                                   |
 | `SplitListener.Accept()`       | The same as `AcceptSplit`, returning a `StreamConn`                                                 |
 | `SplitListener.Fallback()`     | Returns the fallback connection, or nil if `SplitConfig.FallbackConn` isn't set                     |
@@ -248,9 +248,11 @@ the `RemoteAddr` of a split connection is `127.0.0.1:1234` rather than `[::ffff:
 - A flow ends when its connection is closed, by its handler or by its idle timeout, and its next packet starts
   a new flow straight away: UDP has nothing like TCP's TIME_WAIT and RST to tell a late packet of an old flow
   from the first packet of a new one.
-- Once the splitter stops, `Accept` fails, and the split connections it hasn't returned are closed, while the others
-  and the fallback connection return the packets queued, then `net.ErrClosed`. A packet left unread is counted
-  as `ConnClosed` or `FallbackClosed` once its connection is closed.
+- Once the splitter stops, `Accept` fails with `net.ErrClosed`, wrapping the error of `pc` if that has stopped
+  the splitter, e.g. as it has failed, or has been closed other than by `Close`. The split connections `Accept`
+  hasn't returned are closed, while the others and the fallback connection return the packets queued, then
+  `net.ErrClosed`. A packet left unread is counted as `ConnClosed` or `FallbackClosed` once its connection
+  is closed.
 - Only packets read start flows: a write keeps the flow of its remote address going, but a reply to a remote
   address without a flow, e.g. written by the fallback connection, makes its response start a new flow, queued
   for `Accept` like any other.
@@ -315,10 +317,12 @@ Every drop is counted by its reason.
 | `WriteTimeout`      | 500ms    | How long the write loop waits for one packet to be written; negative waits as long as it takes   |
 | `FallbackConn`      | false    | Gives the splitter a fallback connection; without one, packets of released flows are dropped     |
 | `PacketInfo`        | false    | Enables [packet info](#packet-info) on a `UDPConn`, so that flows are told apart by destination too |
+| `ErrorFunc`         | nil      | Called with the error of `pc` that stops the splitter, and with that of each write counted as `WriteFailed` |
 
 As the next packet of an expired released flow goes to `Accept` again, `IdleTimeout` should be no shorter than
 that of the application serving the fallback connection. `PacketInfo` matters for a socket listening on
 an unspecified address: without it, replies may go from an address other than the one a client sent to.
+`ErrorFunc` is called on the goroutines of the splitter, so it shouldn't block, e.g. it may log the error.
 
 ### Statistics
 

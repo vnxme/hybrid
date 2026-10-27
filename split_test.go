@@ -175,6 +175,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitShortBufferName, testSplitShortBuffer)
 	t.Run(testSplitShortBufferReadsOnName, testSplitShortBufferReadsOn)
 	t.Run(testSplitStopName, testSplitStop)
+	t.Run(testSplitStoppedErrorName, testSplitStoppedError)
 	t.Run(testSplitTrunkFlowsName, testSplitTrunkFlows)
 	t.Run(testSplitUDPMaxDatagramName, testSplitUDPMaxDatagram)
 	t.Run(testSplitUDPSocketFlowsName, testSplitUDPSocketFlows)
@@ -671,6 +672,84 @@ func testSplitCloseError(t *testing.T) {
 	}
 }
 
+// failingReads is a FromToPacketConn whose reads fail with the given error.
+type failingReads struct {
+	FromToPacketConn
+	err error
+}
+
+// ReadFromTo fails with the error.
+func (c failingReads) ReadFromTo([]byte) (int, net.Addr, net.Addr, int, error) {
+	return 0, nil, nil, 0, c.err
+}
+
+// testSplitStoppedError ensures Accept fails with net.ErrClosed alone once Close has stopped the splitter, and
+// wrapping the error of the underlying connection once that has stopped it, which ErrorFunc gets as well.
+func testSplitStoppedError(t *testing.T) {
+	errRead := errors.New("read failed")
+	for _, test := range []struct {
+		name  string
+		split func(FromToPacketConn, *SplitConfig) SplitListener
+		cause error // Nil if Close stops the splitter
+	}{
+		{"Close", func(pc FromToPacketConn, config *SplitConfig) SplitListener {
+			ln := Split(pc, config)
+			_ = ln.Close()
+			return ln
+		}, nil},
+		{"ReadFailed", func(pc FromToPacketConn, config *SplitConfig) SplitListener {
+			return Split(failingReads{pc, errRead}, config)
+		}, errRead},
+		{"UnderlyingClosed", func(pc FromToPacketConn, config *SplitConfig) SplitListener {
+			ln := Split(pc, config)
+			_ = pc.Close()
+			return ln
+		}, net.ErrClosed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, server := BufferedTrunk(16, nil, nil)
+			defer func() { _ = client.Close() }()
+			reported := make(chan error, 2)
+			ln := test.split(server, &SplitConfig{ErrorFunc: func(err error) { reported <- err }})
+			defer func() { _ = ln.Close() }()
+
+			accepted := make(chan error, 1)
+			go func() {
+				_, err := ln.Accept()
+				accepted <- err
+			}()
+			var err error
+			select {
+			case err = <-accepted:
+			case <-time.After(time.Second):
+				t.Fatal("Accept() hasn't returned, as the splitter hasn't stopped")
+			}
+			var stopped splitStoppedError
+			if test.cause == nil {
+				if err != net.ErrClosed { //nolint:errorlint // Not wrapped
+					t.Errorf("Accept() = %v, want net.ErrClosed alone", err)
+				}
+			} else if !errors.Is(err, net.ErrClosed) || !errors.Is(err, test.cause) || !errors.As(err, &stopped) {
+				t.Errorf("Accept() = %v, want net.ErrClosed wrapping %v", err, test.cause)
+			}
+
+			_ = ln.Close() // Returns once the splitter has stopped, and ErrorFunc has returned, if called
+			select {
+			case got := <-reported:
+				if test.cause == nil {
+					t.Errorf("ErrorFunc() got %v, want no call", got)
+				} else if got != err { //nolint:errorlint // The same error
+					t.Errorf("ErrorFunc() got %v, want %v", got, err)
+				}
+			default:
+				if test.cause != nil {
+					t.Errorf("ErrorFunc() hasn't been called, want %v", err)
+				}
+			}
+		})
+	}
+}
+
 // testSplitUnderlyingDeadline ensures a deadline passed of the connection a splitter takes over neither keeps
 // the read loop from reading, as it clears the read deadline after a few timeouts, nor fails writes without
 // a write timeout, as Split clears the write deadline.
@@ -1007,6 +1086,7 @@ const (
 	testSplitShortBufferName               = "ShortBuffer"
 	testSplitShortBufferReadsOnName        = "ShortBufferReadsOn"
 	testSplitStopName                      = "Stop"
+	testSplitStoppedErrorName              = "StoppedError"
 	testSplitTrunkFlowsName                = "TrunkFlows"
 	testSplitUDPMaxDatagramName            = "UDPMaxDatagram"
 	testSplitUDPSocketFlowsName            = "UDPSocketFlows"

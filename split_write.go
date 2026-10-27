@@ -114,13 +114,9 @@ func (s *splitter) write(pkt *splitPacket) bool {
 	case err == nil:
 		return true
 	case errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe):
-		// If the underlying PacketConn has unexpectedly closed while
-		// the splitter's done channel remains open, spawn a closing goroutine.
-		// Close() waits until writeLoop() returns, so it can't be done synchronously.
+		// The underlying PacketConn has been closed other than by the splitter, unless the splitter is stopping
 		if !isClosedChan(s.done) {
-			go func() {
-				_ = s.Close()
-			}()
+			s.fail(err)
 		}
 		s.drops.writeUnsent.Add(1)
 		return false
@@ -128,7 +124,7 @@ func (s *splitter) write(pkt *splitPacket) bool {
 		s.drops.writeTimedOut.Add(1)
 	default: // E.g. an address unreachable or of the wrong IP version, which another packet may not have
 		s.drops.writeFailed.Add(1)
-		s.logError(err)
+		s.reportError(err)
 	}
 	return true
 }

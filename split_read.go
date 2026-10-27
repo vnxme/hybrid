@@ -15,8 +15,6 @@
 package hybrid
 
 import (
-	"errors"
-	"io"
 	"net"
 	"time"
 )
@@ -60,18 +58,10 @@ func (s *splitter) readLoop() {
 				continue
 			}
 
-			// Log an error, unless the underlying PacketConn is closed.
-			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
-				s.logError(err)
-			}
-
-			// If the underlying PacketConn has unexpectedly closed while
-			// the splitter's done channel remains open, spawn a closing goroutine.
-			// Close() waits until readLoop() returns, so it can't be done synchronously.
+			// The underlying PacketConn has failed, or has been closed other than by the splitter, unless
+			// the splitter is stopping
 			if !isClosedChan(s.done) {
-				go func() {
-					_ = s.Close()
-				}()
+				s.fail(err)
 			}
 			return
 		}

@@ -101,6 +101,12 @@ import (
 
 // SplitConfig configures a splitter. The zero value of a field gives its default, as does a nil *SplitConfig.
 type SplitConfig struct {
+	// ErrorFunc, if set, is called with each error of the underlying PacketConn that the splitter can't return
+	// otherwise: the one that stops the splitter, e.g. as the PacketConn fails, or is closed other than by Close,
+	// which matches net.ErrClosed, as Accept returns it then, and that of each write counted as WriteFailed.
+	// It's called on the goroutines of the splitter, so it shouldn't block.
+	ErrorFunc func(error)
+
 	// AcceptQueueSize is the maximum number of split connections waiting for Accept,
 	// [DefaultSplitAcceptQueueSize] by default. The first packet of a new flow is dropped
 	// if the accept queue is full.
@@ -256,6 +262,10 @@ type splitter struct {
 	acceptQueue chan *splitConn   // Split connections of new flows, for Accept
 	writeQueue  chan *splitPacket // Packets of every connection, for the write loop
 	done        chan struct{}     // Closed once the splitter stops
+	errorFunc   func(error)       // SplitConfig.ErrorFunc, if any
+
+	// Set by stop before done is closed, and read-only afterwards
+	err error // Returned by Accept once the splitter has stopped
 
 	// Owned by the read loop
 	flows map[flowKey]*splitConn // Flow table
@@ -315,6 +325,9 @@ func Split(pc PacketConn, config *SplitConfig) SplitListener {
 		done:        make(chan struct{}),
 		flows:       make(map[flowKey]*splitConn),
 	}
+	if config != nil {
+		s.errorFunc = config.ErrorFunc
+	}
 	s.mode, s.byDst = newSplitMode(pc, cfg.packetInfo)
 	s.remotes.m = make(map[addrKey]*splitConn)
 	s.swept.m = make(map[*splitConn]struct{})
@@ -340,17 +353,18 @@ func Split(pc PacketConn, config *SplitConfig) SplitListener {
 // Accept waits for and returns the split connection of the next new flow as a StreamConn, as AcceptSplit does.
 func (s *splitter) Accept() (StreamConn, error) { return s.AcceptSplit() }
 
-// AcceptSplit waits for and returns the split connection of the next new flow, or fails once the splitter stops.
+// AcceptSplit waits for and returns the split connection of the next new flow, or fails once the splitter stops,
+// with net.ErrClosed, wrapping the error of the underlying PacketConn that has stopped it, if any.
 func (s *splitter) AcceptSplit() (SplitConn, error) {
 	if isClosedChan(s.done) {
-		return nil, errSplitClosed
+		return nil, s.err
 	}
 
 	select {
 	case conn := <-s.acceptQueue:
 		return conn, nil
 	case <-s.done:
-		return nil, errSplitClosed
+		return nil, s.err
 	}
 }
 
@@ -362,7 +376,7 @@ func (s *splitter) Addr() net.Addr { return s.orig.LocalAddr() }
 // queued, then net.ErrClosed. It returns the error of closing the underlying PacketConn, or net.ErrClosed
 // if the splitter has stopped.
 func (s *splitter) Close() error {
-	return s.stop(s.orig.Close)
+	return s.stop(s.orig.Close, nil)
 }
 
 // Fallback returns the fallback connection of the splitter, or nil if it has none.
@@ -401,7 +415,7 @@ func (s *splitter) Stop() error {
 	err := s.stop(func() error {
 		stopping = true
 		return s.orig.SetDeadline(time.Unix(1, 0))
-	})
+	}, nil)
 
 	// Clear the deadlines that have interrupted the loops, which have returned by now, unless the splitter
 	// had stopped before, so as to keep any deadlines the caller has set since
@@ -414,18 +428,34 @@ func (s *splitter) Stop() error {
 // Unwrap returns the underlying PacketConn, as given to Split.
 func (s *splitter) Unwrap() PacketConn { return s.orig }
 
-// logError would log an unexpected error of reading from or writing to the underlying PacketConn,
-// had the splitter a logger.
-func (s *splitter) logError(err error) {
-	// TODO(vnxme): Log an unexpected reading/writing error
+// fail stops the splitter as the underlying PacketConn has failed with err, or has been closed other than by Close,
+// unless the splitter is stopping already, so that Accept returns err, which ErrorFunc gets as well. As stopping
+// waits until the loops return, a loop calls it on a goroutine of its own.
+func (s *splitter) fail(err error) {
+	go func() {
+		_ = s.stop(s.orig.Close, err)
+	}()
+}
+
+// reportError passes an error of the underlying PacketConn that the splitter can't return to ErrorFunc, if any.
+func (s *splitter) reportError(err error) {
+	if s.errorFunc != nil {
+		s.errorFunc(err)
+	}
 }
 
 // stop stops the splitter once: it closes the done channel, interrupts the loops with interrupt, waits for them
 // to return, and drops the writes left and the packets of the split connections the read loop won't serve.
+// If cause is set, i.e. the underlying PacketConn has failed, Accept returns it, wrapped, and so does ErrorFunc.
 // It returns the error of interrupt, or net.ErrClosed if the splitter has been stopped already.
-func (s *splitter) stop(interrupt func() error) error {
+func (s *splitter) stop(interrupt func() error, cause error) error {
 	err := errSplitClosed
 	s.once.Do(func() {
+		s.err = errSplitClosed
+		if cause != nil {
+			s.err = splitStoppedError{cause}
+		}
+
 		// Close the done channel in order to:
 		// - unblock Accept and make it return an error;
 		// - make reads of the split connections and of the fallback connection return
@@ -448,6 +478,10 @@ func (s *splitter) stop(interrupt func() error) error {
 		// and those of the split connections left to the read loop, which won't serve them any more.
 		s.drainWrites()
 		s.drainReads()
+
+		if cause != nil {
+			s.reportError(s.err)
+		}
 	})
 	return err
 }
@@ -529,6 +563,13 @@ var (
 	errSplitShortBuffer      = shortBufferError{}                    // Reported by reading a packet longer than the read buffer
 	errSplitWriteToConnected = net.ErrWriteToConnected               // Reported by writing to an address other than that of the flow
 )
+
+// splitStoppedError reports that the underlying PacketConn has stopped the splitter, as it has failed, or has been
+// closed other than by Close. It's net.ErrClosed, so that a server stops accepting as usual, and its cause as well.
+type splitStoppedError struct{ cause error }
+
+func (e splitStoppedError) Error() string   { return "hybrid: splitter stopped: " + e.cause.Error() }
+func (e splitStoppedError) Unwrap() []error { return []error{errSplitClosed, e.cause} }
 
 // Interface guards
 var (
