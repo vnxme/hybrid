@@ -26,6 +26,7 @@ package hybrid
 
 import (
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"slices"
@@ -173,3 +174,20 @@ func isTimeout(err error) bool {
 	var nrr net.Error
 	return errors.As(err, &nrr) && nrr.Timeout()
 }
+
+// shortBufferError reports reading a packet longer than the read buffer. It is io.ErrShortBuffer,
+// and a temporary net.Error, so that a server, e.g. of QUIC, which stops on a read error unless it is temporary,
+// skips the packet, as it skips a packet a UDP socket fails to read on Windows, and reads the next one: otherwise,
+// a remote address could stop it with a single long packet, maybe spoofed. It's no timeout, so as not to be
+// taken for an exceeded deadline.
+type shortBufferError struct{}
+
+func (shortBufferError) Error() string   { return io.ErrShortBuffer.Error() }
+func (shortBufferError) Temporary() bool { return true }
+func (shortBufferError) Timeout() bool   { return false }
+func (shortBufferError) Unwrap() error   { return io.ErrShortBuffer }
+
+// Interface guards
+var (
+	_ net.Error = shortBufferError{}
+)

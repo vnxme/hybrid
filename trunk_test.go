@@ -613,7 +613,8 @@ func testTrunkPacketSizes(t *testing.T, ctor trunkCtor) {
 	}
 }
 
-// testTrunkShortBuffer ensures a packet longer than the read buffer is truncated,
+// testTrunkShortBuffer ensures a packet longer than the read buffer is truncated, with io.ErrShortBuffer as
+// a temporary net.Error, so that a server, e.g. of QUIC, goes on reading,
 // its remaining bytes are dropped, and its addresses are still returned.
 func testTrunkShortBuffer(t *testing.T, ctor trunkCtor) {
 	addr1 := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 53}
@@ -627,8 +628,12 @@ func testTrunkShortBuffer(t *testing.T, ctor trunkCtor) {
 	for _, size := range []int{0, 4} {
 		wait := trunkWrite(t, c1, "long payload", nil, nil, 0)
 		b := make([]byte, size)
-		if n, src, err := c2.ReadFrom(b); n != size || !equalAddr(src, addr1) || !errors.Is(err, io.ErrShortBuffer) {
+		n, src, err := c2.ReadFrom(b)
+		if n != size || !equalAddr(src, addr1) || !errors.Is(err, io.ErrShortBuffer) {
 			t.Errorf("c2.ReadFrom() into %d bytes = %d, %v, %v, want %d, %v, %v", size, n, src, err, size, addr1, io.ErrShortBuffer)
+		}
+		if ne, ok := err.(net.Error); !ok || !ne.Temporary() || ne.Timeout() { // Checked as quic-go does
+			t.Errorf("c2.ReadFrom() into %d bytes = %v, want a temporary net.Error, but no timeout", size, err)
 		}
 		wait()
 	}

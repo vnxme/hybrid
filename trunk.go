@@ -25,7 +25,6 @@
 package hybrid
 
 import (
-	"io"
 	"net"
 	"os"
 	"sync"
@@ -46,9 +45,10 @@ import (
 // the queue is full. There is no semi-sync trunk, as a read never leaves bytes of a packet for the next one.
 //
 // Packets. Unlike a pipe, a trunk keeps the boundaries of writes: a read takes a single whole packet, and if
-// its buffer is shorter, it returns the bytes copied with io.ErrShortBuffer, and drops the rest. As no read
-// leaves anything for the next one, reads needn't be serialized, while writes still are, so that each
-// acknowledgement of an unbuffered trunk matches its write. An empty packet is carried like any other, as by UDP.
+// its buffer is shorter, it returns the bytes copied with io.ErrShortBuffer, as a temporary net.Error, and drops
+// the rest, so that a server, e.g. of QUIC, skips the packet and reads on. As no read leaves anything for the next
+// one, reads needn't be serialized, while writes still are, so that each acknowledgement of an unbuffered trunk
+// matches its write. An empty packet is carried like any other, as by UDP.
 //
 // Addresses. A packet carries the source and destination addresses and the interface index its writer gives,
 // cloned, as the writer and the reader may change them. A packet goes to the other end whatever its destination
@@ -119,7 +119,7 @@ type trunk struct {
 // a trunk, told apart by addresses.
 //
 // A packet longer than the read buffer is truncated: a read returns the bytes copied along with
-// io.ErrShortBuffer, and the rest of the packet is dropped.
+// io.ErrShortBuffer, as a temporary net.Error, and the rest of the packet is dropped.
 //
 // BufferedTrunk panics if queueSize isn't positive.
 func BufferedTrunk(queueSize int, addr1, addr2 net.Addr) (FromToPacketConn, FromToPacketConn) {
@@ -200,7 +200,8 @@ func (tr *trunk) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
 //
 // It blocks until a packet is received or the trunk is closed or a deadline expires. Reads needn't
 // be serialized, since each of them receives a whole packet, the same way as UDP reads do.
-// If the provided buffer is too small, it returns io.ErrShortBuffer and drops the excess bytes.
+// If the provided buffer is too small, it returns io.ErrShortBuffer, as a temporary net.Error, and drops
+// the excess bytes.
 func (tr *trunk) read(b []byte) (int, net.Addr, net.Addr, int, error) {
 	switch {
 	case isClosedChan(tr.localDone):
@@ -383,7 +384,7 @@ const trunkNetwork = "trunk"
 var (
 	errTrunkClosed           = net.ErrClosed // Reported by using a trunk after closure of either end, the same way as by UDP after local closure
 	errTrunkDeadlineExceeded = os.ErrDeadlineExceeded
-	errTrunkShortBuffer      = io.ErrShortBuffer // Reported by reading a packet longer than the read buffer
+	errTrunkShortBuffer      = shortBufferError{} // Reported by reading a packet longer than the read buffer
 
 	oneTrunkAddr = trunkAddr{}
 )

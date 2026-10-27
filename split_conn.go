@@ -157,7 +157,7 @@ func (sc *splitConn) Close() error {
 func (sc *splitConn) LocalIfIdx() int { return int(sc.localIfIdx.Load()) }
 
 // Read reads a packet of the flow, as ReadFrom does. Unlike a connected UDP socket, which truncates a packet longer
-// than b silently, it returns io.ErrShortBuffer then.
+// than b silently, it returns io.ErrShortBuffer then, as a temporary net.Error, along with the bytes read.
 func (sc *splitConn) Read(b []byte) (int, error) {
 	n, _, err := sc.read(b)
 	return n, err

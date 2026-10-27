@@ -214,7 +214,7 @@ a `net.Listener` is expected, e.g. to a generic proxy server loop.
 | `SplitListener.Stop()`         | Stops the splitter, but leaves `pc` open, with no deadlines, for the caller to take over            |
 | `SplitListener.Unwrap()`       | Returns `pc` as given to `Split`                                                                    |
 | `SplitConn.Release(pkts...)`   | Hands the flow over to the fallback connection, the packets given first, and closes the connection  |
-| `SplitConn.Read`, `ReadFrom`, `ReadFromTo` | Read a packet of the flow; a short buffer gives `io.ErrShortBuffer`                     |
+| `SplitConn.Read`, `ReadFrom`, `ReadFromTo` | Read a packet of the flow; a short buffer gives a temporary `io.ErrShortBuffer`           |
 | `SplitConn.Write`, `WriteTo`, `WriteToFrom` | Write a packet to the client; another address fails with `net.ErrWriteToConnected`     |
 
 ### Flows
@@ -461,8 +461,8 @@ a stream of bytes.
 There is no semi-sync trunk, as a read never leaves bytes of a packet for the next one.
 
 - **Packets.** A trunk keeps the boundaries of writes: a read takes a single whole packet, and if its buffer is
-  shorter, it returns the bytes copied with `io.ErrShortBuffer`, and drops the rest. An empty packet is carried
-  like any other, as by UDP. Reads needn't be serialized, while writes still are.
+  shorter, it returns the bytes copied with `io.ErrShortBuffer`, as a temporary `net.Error`, and drops the rest.
+  An empty packet is carried like any other, as by UDP. Reads needn't be serialized, while writes still are.
 - **Addresses.** The ends have local addresses `addr1` and `addr2`, or a generic trunk address if nil. A packet
   carries the source and destination addresses and the interface index its writer gives, cloned, as the writer
   and the reader may change them. A packet goes to the other end whatever its destination address is, so that
@@ -606,7 +606,10 @@ behaves the same over sockets:
 | Short read buffer                | the rest is read next                    | `io.ErrShortBuffer`, the rest is dropped         |
 | Error type                       | `*net.OpError`, except `io.EOF`          | `*net.OpError`                                   |
 
-All errors can be checked with `errors.Is`, e.g. `errors.Is(err, net.ErrClosed)`.
+All errors can be checked with `errors.Is`, e.g. `errors.Is(err, net.ErrClosed)`. The `io.ErrShortBuffer`
+of a trunk, a split connection or the fallback connection is a temporary `net.Error`, though no timeout, so that
+a server, e.g. of QUIC, which stops on a read error unless it is temporary, skips the packet and reads on, as it
+does after a UDP socket fails such a read on Windows: otherwise, a single long packet could stop it for good.
 
 ## Platform support
 

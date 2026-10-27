@@ -170,6 +170,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitReleaseName, testSplitRelease)
 	t.Run(testSplitReleaseWithoutFallbackName, testSplitReleaseWithoutFallback)
 	t.Run(testSplitShortBufferName, testSplitShortBuffer)
+	t.Run(testSplitShortBufferReadsOnName, testSplitShortBufferReadsOn)
 	t.Run(testSplitStopName, testSplitStop)
 	t.Run(testSplitTrunkFlowsName, testSplitTrunkFlows)
 	t.Run(testSplitUDPMaxDatagramName, testSplitUDPMaxDatagram)
@@ -997,6 +998,7 @@ const (
 	testSplitReleaseName                   = "Release"
 	testSplitReleaseWithoutFallbackName    = "ReleaseWithoutFallback"
 	testSplitShortBufferName               = "ShortBuffer"
+	testSplitShortBufferReadsOnName        = "ShortBufferReadsOn"
 	testSplitStopName                      = "Stop"
 	testSplitTrunkFlowsName                = "TrunkFlows"
 	testSplitUDPMaxDatagramName            = "UDPMaxDatagram"

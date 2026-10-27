@@ -16,7 +16,6 @@ package hybrid
 
 import (
 	"errors"
-	"io"
 	"math"
 	"net"
 	"os"
@@ -216,7 +215,8 @@ type SplitListener interface {
 	// AcceptSplit returns the split connection of the next new flow.
 	AcceptSplit() (SplitConn, error)
 
-	// Fallback returns the fallback connection of the splitter, or nil if it has none.
+	// Fallback returns the fallback connection of the splitter, or nil if it has none. Like a split connection,
+	// it reads a packet longer than the buffer in part, with io.ErrShortBuffer as a temporary net.Error.
 	Fallback() FromToPacketConn
 
 	// Stats returns the numbers of packets dropped so far, by reason.
@@ -506,7 +506,7 @@ var (
 	errSplitClosed           = net.ErrClosed // Reported by using a closed connection, or one of a stopped splitter, the same way as by UDP after local closure
 	errSplitDeadlineExceeded = os.ErrDeadlineExceeded
 	errSplitMissingAddress   = errors.New("hybrid: missing address") // Reported by writing to the fallback connection with no remote address
-	errSplitShortBuffer      = io.ErrShortBuffer                     // Reported by reading a packet longer than the read buffer
+	errSplitShortBuffer      = shortBufferError{}                    // Reported by reading a packet longer than the read buffer
 	errSplitWriteToConnected = net.ErrWriteToConnected               // Reported by writing to an address other than that of the flow
 )
 

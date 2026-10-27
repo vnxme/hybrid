@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -335,7 +336,8 @@ func testSplitConcurrentReads(t *testing.T) {
 }
 
 // testSplitShortBuffer ensures a packet longer than the buffer of a read is read in part, with
-// io.ErrShortBuffer, and the rest of it dropped, from a split connection and the fallback connection.
+// io.ErrShortBuffer as a temporary net.Error, so that a server, e.g. of QUIC, goes on reading,
+// and the rest of it dropped, from a split connection and the fallback connection.
 func testSplitShortBuffer(t *testing.T) {
 	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
 	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
@@ -364,8 +366,56 @@ func testSplitShortBuffer(t *testing.T) {
 				!errors.As(err, &oe) || oe.Op != "read" || oe.Addr.String() != test.src.String() {
 				t.Errorf("ReadFromTo() = %q from %v, %v, want %q from %s, a read net.OpError of io.ErrShortBuffer", buf[:n], src, err, test.out, test.src)
 			}
+			if ne, ok := err.(net.Error); !ok || !ne.Temporary() || ne.Timeout() { // Checked as quic-go does
+				t.Errorf("ReadFromTo() = %v, want a temporary net.Error, but no timeout", err)
+			}
 			if n, _, err := test.pc.ReadFrom(buf); err != nil || string(buf[:n]) != test.nxt {
 				t.Errorf("ReadFrom() = %q, %v, want %q, nil, the rest of the packet before dropped", buf[:n], err, test.nxt)
+			}
+		})
+	}
+}
+
+// testSplitShortBufferReadsOn ensures a server reading as quic-go does, into a buffer of 1452 bytes, and stopping
+// on a read error unless it is temporary, skips a longer packet of a split connection or of the fallback connection,
+// and reads the next one, so that a remote address can't stop it with a single long packet.
+func testSplitShortBufferReadsOn(t *testing.T) {
+	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+	client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
+	long := strings.Repeat("x", 2000)
+	writeFrom(t, client, a, "first")
+	conn := acceptSplitConn(t, ln)
+	writeFrom(t, client, a, long)
+	writeFrom(t, client, a, "last")
+	for _, data := range []string{"first", long, "last"} {
+		writeFrom(t, client, b, data)
+	}
+	releaseSplitConn(t, ln)
+
+	for _, test := range []struct {
+		name string
+		pc   PacketConn
+	}{
+		{"Conn", conn},
+		{"Fallback", ln.Fallback()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_ = test.pc.SetReadDeadline(time.Now().Add(time.Second))
+			var pkts []string
+			for skipped := 0; len(pkts) < 2; {
+				buf := make([]byte, 1452)
+				n, _, err := test.pc.ReadFrom(buf)
+				if ne, ok := err.(net.Error); ok && ne.Temporary() {
+					skipped++
+					continue
+				}
+				if err != nil || skipped > 1 {
+					t.Fatalf("ReadFrom() = %v after %d packets skipped, want nil after 1 at most", err, skipped)
+				}
+				pkts = append(pkts, string(buf[:n]))
+			}
+			if !slices.Equal(pkts, []string{"first", "last"}) {
+				t.Errorf("packets read = %q, want %q", pkts, []string{"first", "last"})
 			}
 		})
 	}
