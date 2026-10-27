@@ -139,8 +139,8 @@ func FuzzSplit(f *testing.F) {
 		_ = ln.Close() // Waits until the splitter, closing as it has read the closed trunk, counts the packets left
 
 		s := ln.Stats()
-		dropped := s.Truncated + s.NoDestination + s.TableFull + s.AcceptQueueFull + s.ConnQueueFull + s.ConnClosed +
-			s.NoFallback + s.FallbackQueueFull + s.FallbackClosed
+		dropped := s.Truncated + s.NoSource + s.NoDestination + s.TableFull + s.AcceptQueueFull + s.ConnQueueFull +
+			s.ConnClosed + s.NoFallback + s.FallbackQueueFull + s.FallbackClosed
 		if got := uint64(len(read)) + dropped; got != uint64(len(data)) {
 			t.Errorf("read %d packets and dropped %d (%+v), want %d in all", len(read), dropped, s, len(data))
 		}

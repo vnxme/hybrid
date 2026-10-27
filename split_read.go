@@ -80,6 +80,10 @@ func (s *splitter) readLoop() {
 			s.drops.truncated.Add(1)
 			continue
 		}
+		if !p.key.src.valid() { // E.g. a read reported no packet and no error, or an unbound Unix socket sent it
+			s.drops.noSource.Add(1)
+			continue
+		}
 		if s.byDst && !p.key.dst.valid() { // E.g. packet info is missing, as it has been truncated
 			s.drops.noDestination.Add(1)
 			continue

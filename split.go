@@ -227,6 +227,7 @@ type SplitListener interface {
 type SplitStats struct {
 	// Reading, in the order a packet meets the checks
 	Truncated       uint64 // The packet was larger than ReadBufferSize
+	NoSource        uint64 // The packet had no source address
 	NoDestination   uint64 // The packet had no destination address, while the splitter uses them
 	TableFull       uint64 // The flow table was full when the packet started a new flow
 	AcceptQueueFull uint64 // The accept queue was full when the packet started a new flow
@@ -275,9 +276,9 @@ type splitter struct {
 	cfg   splitConfig
 	clock atomic.Int64 // Time since the sweeper started, kept by it, coarse but cheap to read
 	drops struct {
-		truncated, noDestination, tableFull, acceptQueueFull, connQueueFull, connClosed atomic.Uint64 // Reading
-		noFallback, fallbackQueueFull, fallbackClosed                                   atomic.Uint64 // Releasing
-		writeTimedOut, writeFailed, writeUnsent                                         atomic.Uint64 // Writing
+		truncated, noSource, noDestination, tableFull, acceptQueueFull, connQueueFull, connClosed atomic.Uint64 // Reading
+		noFallback, fallbackQueueFull, fallbackClosed                                             atomic.Uint64 // Releasing
+		writeTimedOut, writeFailed, writeUnsent                                                   atomic.Uint64 // Writing
 	}
 
 	// Stopping
@@ -367,6 +368,7 @@ func (s *splitter) Fallback() FromToPacketConn {
 func (s *splitter) Stats() SplitStats {
 	return SplitStats{
 		Truncated:         s.drops.truncated.Load(),
+		NoSource:          s.drops.noSource.Load(),
 		NoDestination:     s.drops.noDestination.Load(),
 		TableFull:         s.drops.tableFull.Load(),
 		AcceptQueueFull:   s.drops.acceptQueueFull.Load(),

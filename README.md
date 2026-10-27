@@ -320,6 +320,7 @@ an unspecified address: without it, replies may go from an address other than th
 | Stage     | Counter             | The packet was dropped because                                                     |
 |-----------|---------------------|------------------------------------------------------------------------------------|
 | Reading   | `Truncated`         | it was larger than `ReadBufferSize`                                                |
+|           | `NoSource`          | it had no source address                                                           |
 |           | `NoDestination`     | it had no destination address, while the splitter uses them                       |
 |           | `TableFull`         | the flow table was full when it started a new flow                                 |
 |           | `AcceptQueueFull`   | the accept queue was full when it started a new flow                               |

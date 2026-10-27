@@ -163,6 +163,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitIdleTimeoutName, testSplitIdleTimeout)
 	t.Run(testSplitModeName, testSplitMode)
 	t.Run(testSplitNegativeReadName, testSplitNegativeRead)
+	t.Run(testSplitNoSourceName, testSplitNoSource)
 	t.Run(testSplitPacketInfoFlowsName, testSplitPacketInfoFlows)
 	t.Run(testSplitPayloadSizesName, testSplitPayloadSizes)
 	t.Run(testSplitReadCopiesAddrsName, testSplitReadCopiesAddrs)
@@ -412,7 +413,7 @@ loop:
 
 	// The splitter drops a packet rather than wait for a slow reader, and counts it, as well as a packet
 	// of a split connection it closes before Accept returns the connection, once it has closed itself
-	dropped := int(stats.ConnQueueFull + stats.AcceptQueueFull + stats.TableFull + stats.NoDestination + stats.ConnClosed)
+	dropped := int(stats.ConnQueueFull + stats.AcceptQueueFull + stats.TableFull + stats.NoSource + stats.NoDestination + stats.ConnClosed)
 	message := fmt.Sprintf("r/w statistics: count %d+%d/%d, bytes %d+%d/%d", acr, dropped, acw, anr, dropped*writeBufferSize, anw)
 	if pc2.LocalAddr().Network() == "udp" {
 		// The system may drop datagrams the splitter never sees, e.g. as the receive buffer of the socket overflows,
@@ -991,6 +992,7 @@ const (
 	testSplitIdleTimeoutName               = "IdleTimeout"
 	testSplitModeName                      = "Mode"
 	testSplitNegativeReadName              = "NegativeRead"
+	testSplitNoSourceName                  = "NoSource"
 	testSplitPacketInfoFlowsName           = "PacketInfoFlows"
 	testSplitPayloadSizesName              = "PayloadSizes"
 	testSplitReadCopiesAddrsName           = "ReadCopiesAddrs"

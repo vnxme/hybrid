@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -160,7 +162,7 @@ func (c *scriptedUDPConn) SetDeadline(time.Time) error { return nil }
 func (c *scriptedUDPConn) LocalAddr() net.Addr { return &net.UDPAddr{IP: net.IPv4zero, Port: 53} }
 
 // testSplitPacketInfoFlows ensures a UDP connection that reports destination addresses makes a flow per source
-// and destination address, and that a packet without a destination address is dropped and counted.
+// and destination address, and that a packet without a source or a destination address is dropped and counted.
 func testSplitPacketInfoFlows(t *testing.T) {
 	s1, s2 := netip.MustParseAddrPort("192.0.2.1:1"), netip.MustParseAddrPort("192.0.2.2:2")
 	d1, d2 := netip.MustParseAddrPort("198.51.100.1:53"), netip.MustParseAddrPort("198.51.100.2:53")
@@ -168,6 +170,8 @@ func testSplitPacketInfoFlows(t *testing.T) {
 		scriptedPacket{s1, d1, "x"},
 		scriptedPacket{s1, d2, "y"}, // Another flow, as it's to another destination address
 		scriptedPacket{s1, netip.AddrPort{}, "z"},
+		scriptedPacket{netip.AddrPort{}, d1, "u"},
+		scriptedPacket{netip.AddrPort{}, netip.AddrPort{}, "t"}, // Counted once, as of no source address
 		scriptedPacket{s2, d1, "w"},
 		scriptedPacket{s1, d1, "v"},
 	), nil)
@@ -181,7 +185,7 @@ func testSplitPacketInfoFlows(t *testing.T) {
 			t.Errorf("packets of flow %s = %q, want %q", flow, got, want[flow])
 		}
 	}
-	waitSplitStats(t, ln, SplitStats{NoDestination: 1})
+	waitSplitStats(t, ln, SplitStats{NoSource: 2, NoDestination: 1})
 }
 
 // testSplitReadDrops ensures the splitter drops and counts a packet rather than wait for a full queue
@@ -429,6 +433,59 @@ func testSplitNegativeRead(t *testing.T) {
 		t.Fatalf("Accept() hasn't returned, as the splitter hasn't closed")
 	}
 	waitSplitStats(t, ln, SplitStats{})
+}
+
+// sourcelessRead is a FromToPacketConn whose first read reports no packet, no address and no error, as Caddy's
+// fakeClosePacketConn does once it resets the read deadline it closes itself with, and whose later reads
+// are those of the connection embedded.
+type sourcelessRead struct {
+	FromToPacketConn
+	done atomic.Bool
+}
+
+// ReadFrom reads as ReadFromTo does, but returns no destination address.
+func (c *sourcelessRead) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, src, _, _, err := c.ReadFromTo(b)
+	return n, src, err
+}
+
+// ReadFromTo reports nothing at all the first time, then reads as the connection embedded does.
+func (c *sourcelessRead) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
+	if c.done.CompareAndSwap(false, true) {
+		return 0, nil, nil, 0, nil
+	}
+	return c.FromToPacketConn.ReadFromTo(b)
+}
+
+// testSplitNoSource ensures a read with no source address, which can't make a flow, is dropped and counted,
+// rather than accepted, and that the next packet makes a flow as usual, whether the splitter reads source
+// addresses only, or destination addresses too, which are missing then as well.
+func testSplitNoSource(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	for _, test := range []struct {
+		name string
+		wrap func(*sourcelessRead) PacketConn
+	}{
+		{"Packet", func(c *sourcelessRead) PacketConn { return struct{ PacketConn }{c} }},
+		{"FromTo", func(c *sourcelessRead) PacketConn { return c }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, server := BufferedTrunk(16, nil, nil)
+			defer func() { _ = client.Close() }()
+			ln := Split(test.wrap(&sourcelessRead{FromToPacketConn: server}), nil)
+			defer func() { _ = ln.Close() }()
+
+			writeFrom(t, client, a, "x")
+			conn := acceptSplitConn(t, ln)
+			if src := fmt.Sprint(conn.RemoteAddr()); src != a.String() {
+				t.Errorf("RemoteAddr() = %s, want %s", src, a)
+			}
+			if got := readSplitConn(t, conn); !slices.Equal(got, []string{"x"}) {
+				t.Errorf("packets read = %q, want %q", got, []string{"x"})
+			}
+			waitSplitStats(t, ln, SplitStats{NoSource: 1})
+		})
+	}
 }
 
 // checkSplitPacket reads a packet from a split connection, and fails unless it's the one wanted.
