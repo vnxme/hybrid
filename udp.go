@@ -261,6 +261,8 @@ func (u *packetInfoUDPConn) WriteToFromUDPAddrPort(b []byte, dst, src netip.Addr
 
 	// Since Go 1.26, WriteMsgUDPAddrPort returns 0 bytes written on Windows, though it sends
 	// the whole datagram, as WriteMsgInet4 and WriteMsgInet6 in internal/poll ignore the count.
+	// TODO(golang/go#82335): remove once the minimum Go version includes the fix,
+	// i.e. Go 1.28, or the 1.26 and 1.27 backports (golang/go#82337, golang/go#82338).
 	if err == nil && n == 0 {
 		n = len(b) // A datagram is sent either whole or not at all
 	}
