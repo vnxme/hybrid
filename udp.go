@@ -200,7 +200,8 @@ func (u *packetInfoUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort
 		u.rdOOBSize.CompareAndSwap(stored, int32(min(max(2*size, oobN), 1<<bufPoolMaxBits))) //nolint:gosec // G115
 	}
 	if err != nil { // Like [net.UDPConn.ReadFrom], return no addresses, as src is made of an empty sockaddr,
-		// and no negative count, which Linux gives for a socket closed while reading
+		// and no negative count, which Linux gives for a read past its deadline or on a closed socket.
+		// TODO(golang/go#82746): return n as is once the minimum Go version includes the fix.
 		return max(n, 0), netip.AddrPort{}, netip.AddrPort{}, 0, err
 	}
 	src = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
