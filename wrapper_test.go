@@ -537,15 +537,19 @@ func testWrapperPacketToStreamConn(t *testing.T) {
 
 	// readClosed ensures Read returns net.ErrClosed, rather than goes on reading.
 	readClosed := func(t *testing.T, w StreamOverPacketConn) {
-		done := make(chan error, 1)
+		type result struct {
+			n   int
+			err error
+		}
+		done := make(chan result, 1)
 		go func() {
-			_, err := w.Read(make([]byte, 8))
-			done <- err
+			n, err := w.Read(make([]byte, 8))
+			done <- result{n, err}
 		}()
 		select {
-		case err := <-done:
-			if !errors.Is(err, net.ErrClosed) {
-				t.Errorf("Read() = %v, want net.ErrClosed", err)
+		case r := <-done:
+			if r.n != 0 || !errors.Is(r.err, net.ErrClosed) {
+				t.Errorf("Read() = %d, %v, want 0, net.ErrClosed", r.n, r.err)
 			}
 		case <-time.After(time.Second):
 			t.Fatal("Read() hasn't returned once closed")
@@ -562,6 +566,10 @@ func testWrapperPacketToStreamConn(t *testing.T) {
 
 	t.Run("FilterStaleSource", func(t *testing.T) { // A failed read returns, whatever address it reports
 		readClosed(t, PacketToStreamConn(&staleSourcePacketConn{src: other}, remote, true))
+	})
+
+	t.Run("FilterStaleSourceNegative", func(t *testing.T) { // So does one reporting a negative count
+		readClosed(t, PacketToStreamConn(&staleSourcePacketConn{src: other, n: -1}, remote, true))
 	})
 }
 
@@ -615,14 +623,15 @@ func (c *closeCountingStreamConn) Close() error {
 }
 
 // staleSourcePacketConn is a closed PacketConn whose ReadFrom reports a stale source address with its error,
-// as the PacketConn contract allows.
+// as the PacketConn contract allows, and the count given, which may be negative, as Linux reports for ReadMsgUDP.
 type staleSourcePacketConn struct {
 	PacketConn
 	src net.Addr
+	n   int
 }
 
 func (c *staleSourcePacketConn) ReadFrom([]byte) (int, net.Addr, error) {
-	return 0, c.src, net.ErrClosed
+	return c.n, c.src, net.ErrClosed
 }
 
 const (

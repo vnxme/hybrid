@@ -400,8 +400,9 @@ type packetToStreamConn struct {
 // If filter is set and the remote address isn't nil, Read accepts a packet from the remote address only,
 // as a dialed UDP socket does, and drops a packet from any other address, along with any error of its read,
 // e.g. of its truncation if the underlying PacketConn reports the source of a truncated packet.
-// A failed read, i.e. one reading nothing, returns its error whatever address it reports, e.g. once
-// the connection closes or its read deadline passes. A UDP or IP address matches regardless of IPv4 mapping.
+// A failed read, i.e. one reading nothing or reporting a negative count, returns its error and no bytes read
+// whatever address it reports, e.g. once the connection closes or its read deadline passes.
+// A UDP or IP address matches regardless of IPv4 mapping.
 // Without the filter, Read accepts a packet from any address. ReadFrom of the underlying PacketConn applies
 // no filter. Each Read reads a single packet, which is truncated if longer than the buffer, silently or with
 // an error, e.g. io.ErrShortBuffer, depending on the underlying PacketConn, so that reading a packet in parts,
@@ -416,13 +417,14 @@ func PacketToStreamConn(pc PacketConn, remote net.Addr, filter bool) StreamOverP
 
 // Read reads a packet from the underlying PacketConn, from the remote address given if filtered,
 // or from any address otherwise. It drops a packet read from another address, along with any error of its read,
-// and goes on, while a failed read returns its error, as nothing has been read: any address it reports is stale.
+// and goes on, while a failed read returns its error, as nothing has been read: any address it reports is stale,
+// and any negative count, as ReadMsgUDP gives on Linux (golang/go#82746), is reported as none.
 func (w *packetToStreamConn) Read(b []byte) (n int, err error) {
 	for {
 		var src net.Addr
 		n, src, err = w.ReadFrom(b)
-		if !w.filter || n == 0 && err != nil || src == nil || addrKeyOf(src) == w.remoteKey {
-			return n, err
+		if !w.filter || n <= 0 && err != nil || src == nil || addrKeyOf(src) == w.remoteKey {
+			return max(n, 0), err
 		}
 	}
 }
