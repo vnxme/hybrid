@@ -208,16 +208,17 @@ type SplitConn interface {
 // SplitListener is a listener of a splitter, accepting split connections, with its fallback connection
 // and statistics.
 type SplitListener interface {
-	// Accept returns the split connection of the next new flow as a StreamConn, as AcceptSplit does,
-	// Addr returns the local address of the underlying PacketConn, and Close closes it and stops the splitter.
+	// PacketListener provides Accept, which returns the split connection of the next new flow as a StreamConn,
+	// as AcceptSplit does, Addr, which returns the local address of the underlying PacketConn, and Close,
+	// which closes it and stops the splitter.
 	PacketListener
 
-	// Stop stops the splitter like Close does, but leaves the underlying PacketConn open, with no deadlines,
-	// for the caller to take it over, e.g. with Unwrap.
+	// Stopper provides Stop, which stops the splitter like Close does, but leaves the underlying PacketConn
+	// open, with no deadlines, for the caller to take it over, e.g. with Unwrap.
 	Stopper
 
-	// Unwrap returns the underlying PacketConn as given to Split, which the splitter reads from and writes to
-	// until it's stopped by Close or Stop.
+	// Wrapper provides Unwrap, which returns the underlying PacketConn as given to Split, which the splitter
+	// reads from and writes to until it's stopped by Close or Stop.
 	Wrapper[PacketConn]
 
 	// AcceptSplit returns the split connection of the next new flow.
