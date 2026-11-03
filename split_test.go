@@ -357,7 +357,7 @@ func checkSplitPayloads(t *testing.T, ctor packetConnPairCtor, acceptQueueSize, 
 
 		var err error
 		var n int
-		for i := 0; i < packetCount; i++ {
+		for range packetCount {
 			err = pc.SetWriteDeadline(time.Now().Add(2 * timeout))
 			if err != nil {
 				t.Errorf("%v: pc.SetWriteDeadline() = %v, want nil", me, err)
