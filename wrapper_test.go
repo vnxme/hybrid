@@ -375,7 +375,7 @@ func testWrapperIdleTimeout(t *testing.T) {
 }
 
 // testWrapperPacketToFromToPacketConn ensures PacketToFromToPacketConn returns a FromToPacketConn as is, enables
-// packet info on a UDP connection if asked to and supported, and otherwise wraps a PacketConn, so that it reads
+// packet info on a UDP connection if asked and supported, and otherwise wraps a PacketConn, so that it reads
 // no destination address and interface index, and ignores the source address and interface index it writes.
 func testWrapperPacketToFromToPacketConn(t *testing.T) {
 	a1 := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 1}

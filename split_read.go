@@ -234,7 +234,7 @@ func (s *splitter) deleteConnection(c *splitConn) {
 		return
 	}
 	s.closed.Unlock()
-	s.discard(c) // With no read loop to delete the flow any more, only drop and count the packets left
+	s.discard(c) // With no read loop to delete the flow anymore, only drop and count the packets left
 }
 
 // drainReads closes the split connections left in the accept queue, which Accept no longer returns, and drops

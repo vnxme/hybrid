@@ -476,7 +476,7 @@ func (s *splitter) stop(interrupt func() error, cause error) error {
 		s.wg.Wait()
 
 		// Drop the packets queued once the write loop has returned, e.g. as the underlying connection has closed,
-		// and those of the split connections left to the read loop, which won't serve them any more.
+		// and those of the split connections left to the read loop, which won't serve them anymore.
 		s.drainWrites()
 		s.drainReads()
 

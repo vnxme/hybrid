@@ -278,7 +278,7 @@ func (s *splitter) newFallback() *splitFallback {
 }
 
 // Close closes the fallback connection, so that the packets queued are dropped, and the flows released end:
-// the next packet of each starts a new flow, queued for Accept.
+// the next packet starts a new flow, queued for Accept.
 func (sc *splitFallback) Close() error {
 	var err error
 	if !sc.closeLocal() {
