@@ -57,19 +57,19 @@ Go 1.26 or newer is required.
 
 ## Overview
 
-| Type or function                                                                                       | Kind        | What it is                                                               |
-|--------------------------------------------------------------------------------------------------------|-------------|--------------------------------------------------------------------------|
-| [`Split`](#splitter)                                                                                    | constructor | A listener of split connections over a packet connection                 |
-| [`SplitListener`](#splitter), [`SplitConn`](#splitter), [`SplitConfig`](#configuration), [`SplitStats`](#statistics) | types       | The listener, its connections, configuration and drop counters           |
-| [`PacketInfoUDPConn`](#packet-info)                                                                     | constructor | A UDP connection that reads and writes local addresses and interfaces    |
-| [`NeedPacketInfoUDPConn`](#packet-info), [`ControlUDPPacketInfo`](#packet-info)                         | functions   | Whether a socket needs packet info, and enabling it at socket creation   |
-| [`UnbufferedPipe`](#pipes), [`BufferedPipe`](#pipes)                                                    | constructors| In-memory `StreamConn` pairs behaving like TCP                           |
-| [`UnbufferedTrunk`](#trunks), [`BufferedTrunk`](#trunks)                                                | constructors| In-memory `FromToPacketConn` pairs behaving like UDP                     |
-| [`FakeAddressPacketConn`](#addresses), [`FakeAddressStreamConn`](#addresses)                            | wrappers    | Shadow local and remote addresses                                        |
-| [`FakeClosePacketConn`](#close), [`FakeCloseStreamConn`](#close)                                        | wrappers    | Shadow `Close`                                                           |
-| [`IdleTimeoutPacketConn`](#idle-timeout), [`IdleTimeoutStreamConn`](#idle-timeout)                      | wrappers    | Close a connection once idle                                             |
-| [`PacketToStreamConn`](#adapters), [`StreamToPacketConn`](#adapters), [`PacketToFromToPacketConn`](#adapters) | adapters    | Change the orientation or capabilities of a connection                   |
-| [`SimpleDeadline`](#deadlines), [`HookDeadline`](#deadlines)                                            | constructors| Channel-based deadlines, without or with a hook                          |
+| Type or function                                                                                                     | Kind         | What it is                                                             |
+|----------------------------------------------------------------------------------------------------------------------|--------------|------------------------------------------------------------------------|
+| [`Split`](#splitter)                                                                                                 | constructor  | A listener of split connections over a packet connection               |
+| [`SplitListener`](#splitter), [`SplitConn`](#splitter), [`SplitConfig`](#configuration), [`SplitStats`](#statistics) | types        | The listener, its connections, configuration and drop counters         |
+| [`PacketInfoUDPConn`](#packet-info)                                                                                  | constructor  | A UDP connection that reads and writes local addresses and interfaces  |
+| [`NeedPacketInfoUDPConn`](#packet-info), [`ControlUDPPacketInfo`](#packet-info)                                      | functions    | Whether a socket needs packet info, and enabling it at socket creation |
+| [`UnbufferedPipe`](#pipes), [`BufferedPipe`](#pipes)                                                                 | constructors | In-memory `StreamConn` pairs behaving like TCP                         |
+| [`UnbufferedTrunk`](#trunks), [`BufferedTrunk`](#trunks)                                                             | constructors | In-memory `FromToPacketConn` pairs behaving like UDP                   |
+| [`FakeAddressPacketConn`](#addresses), [`FakeAddressStreamConn`](#addresses)                                         | wrappers     | Shadow local and remote addresses                                      |
+| [`FakeClosePacketConn`](#close), [`FakeCloseStreamConn`](#close)                                                     | wrappers     | Shadow `Close`                                                         |
+| [`IdleTimeoutPacketConn`](#idle-timeout), [`IdleTimeoutStreamConn`](#idle-timeout)                                   | wrappers     | Close a connection once idle                                           |
+| [`PacketToStreamConn`](#adapters), [`StreamToPacketConn`](#adapters), [`PacketToFromToPacketConn`](#adapters)        | adapters     | Change the orientation or capabilities of a connection                 |
+| [`SimpleDeadline`](#deadlines), [`HookDeadline`](#deadlines)                                                         | constructors | Channel-based deadlines, without or with a hook                        |
 
 ## Interfaces
 
@@ -77,27 +77,27 @@ The package builds on the standard library rather than replacing it: `PacketConn
 `StreamListener` and `PacketListener` are aliases of `net` types, so any `net` connection or listener fits,
 and every type of the package can be used wherever a `net` type is expected.
 
-| Interface              | Definition                                    | Satisfied by                                                        |
-|------------------------|-----------------------------------------------|---------------------------------------------------------------------|
-| `PacketConn`           | alias of `net.PacketConn`                     | `*net.UDPConn`, trunks, the fallback connection of a splitter       |
-| `StreamConn`           | alias of `net.Conn`                           | `*net.TCPConn`, pipes, split connections                            |
-| `StreamListener`       | alias of `net.Listener`                       | `*net.TCPListener`                                                  |
-| `PacketListener`       | alias of `net.Listener`                       | `SplitListener`                                                     |
-| `Conn`                 | `PacketConn` + `Read`, `Write`, `RemoteAddr`  | dialed `*net.UDPConn`, split connections                            |
-| `FromToReader`         | `ReadFromTo`                                  | trunks, `FromToUDPConn`, split and fallback connections             |
-| `FromToWriter`         | `WriteToFrom`                                 | trunks, `FromToUDPConn`, split and fallback connections             |
-| `FromToPacketConn`     | `PacketConn` + `FromToReader` + `FromToWriter`| trunks, split connections, the fallback connection                  |
-| `UDPConn`              | the methods of `*net.UDPConn`                 | `*net.UDPConn`                                                      |
-| `FromToUDPConn`        | `UDPConn` + `FromTo*` + UDP-specific variants | `PacketInfoUDPConn`                                                 |
-| `Wrapper[T]`           | `Unwrap() T`                                  | wrappers, adapters, `PacketInfoUDPConn`, `SplitListener`            |
-| `WrappingPacketConn`   | `PacketConn` + `Wrapper[PacketConn]`          | the `PacketConn` wrappers                                           |
-| `WrappingStreamConn`   | `StreamConn` + `Wrapper[StreamConn]`          | the `StreamConn` wrappers                                           |
-| `Stopper`              | `Stop() error`                                | idle timeout wrappers, `SplitListener`                              |
-| `StoppablePacketConn`  | `WrappingPacketConn` + `Stopper`              | `IdleTimeoutPacketConn`                                             |
-| `StoppableStreamConn`  | `WrappingStreamConn` + `Stopper`              | `IdleTimeoutStreamConn`                                             |
-| `StreamOverPacketConn` | `StreamConn` + `Wrapper[PacketConn]`          | `PacketToStreamConn`                                                |
-| `PacketOverStreamConn` | `PacketConn` + `Wrapper[StreamConn]`          | `StreamToPacketConn`                                                |
-| `Deadline`             | `Set(time.Time)`, `Wait() <-chan struct{}`    | `SimpleDeadline`, `HookDeadline`                                    |
+| Interface              | Definition                                     | Satisfied by                                                  |
+|------------------------|------------------------------------------------|---------------------------------------------------------------|
+| `PacketConn`           | alias of `net.PacketConn`                      | `*net.UDPConn`, trunks, the fallback connection of a splitter |
+| `StreamConn`           | alias of `net.Conn`                            | `*net.TCPConn`, pipes, split connections                      |
+| `StreamListener`       | alias of `net.Listener`                        | `*net.TCPListener`                                            |
+| `PacketListener`       | alias of `net.Listener`                        | `SplitListener`                                               |
+| `Conn`                 | `PacketConn` + `Read`, `Write`, `RemoteAddr`   | dialed `*net.UDPConn`, split connections                      |
+| `FromToReader`         | `ReadFromTo`                                   | trunks, `FromToUDPConn`, split and fallback connections       |
+| `FromToWriter`         | `WriteToFrom`                                  | trunks, `FromToUDPConn`, split and fallback connections       |
+| `FromToPacketConn`     | `PacketConn` + `FromToReader` + `FromToWriter` | trunks, split connections, the fallback connection            |
+| `UDPConn`              | the methods of `*net.UDPConn`                  | `*net.UDPConn`                                                |
+| `FromToUDPConn`        | `UDPConn` + `FromTo*` + UDP-specific variants  | `PacketInfoUDPConn`                                           |
+| `Wrapper[T]`           | `Unwrap() T`                                   | wrappers, adapters, `PacketInfoUDPConn`, `SplitListener`      |
+| `WrappingPacketConn`   | `PacketConn` + `Wrapper[PacketConn]`           | the `PacketConn` wrappers                                     |
+| `WrappingStreamConn`   | `StreamConn` + `Wrapper[StreamConn]`           | the `StreamConn` wrappers                                     |
+| `Stopper`              | `Stop() error`                                 | idle timeout wrappers, `SplitListener`                        |
+| `StoppablePacketConn`  | `WrappingPacketConn` + `Stopper`               | `IdleTimeoutPacketConn`                                       |
+| `StoppableStreamConn`  | `WrappingStreamConn` + `Stopper`               | `IdleTimeoutStreamConn`                                       |
+| `StreamOverPacketConn` | `StreamConn` + `Wrapper[PacketConn]`           | `PacketToStreamConn`                                          |
+| `PacketOverStreamConn` | `PacketConn` + `Wrapper[StreamConn]`           | `StreamToPacketConn`                                          |
+| `Deadline`             | `Set(time.Time)`, `Wait() <-chan struct{}`     | `SimpleDeadline`, `HookDeadline`                              |
 
 ### Conn
 
@@ -203,19 +203,19 @@ a `net.Listener` is expected, e.g. to a generic proxy server loop.
 
 ### Key methods
 
-| Method                         | Description                                                                                         |
-|--------------------------------|-----------------------------------------------------------------------------------------------------|
-| `Split(pc, config)`            | Returns a `SplitListener` over `pc` and starts its loops. It takes `pc` over, clearing its write deadline |
-| `SplitListener.AcceptSplit()`  | Returns the split connection of the next new flow                                                   |
-| `SplitListener.Accept()`       | The same as `AcceptSplit`, returning a `StreamConn`                                                 |
-| `SplitListener.Fallback()`     | Returns the fallback connection, or nil if `SplitConfig.FallbackConn` isn't set                     |
-| `SplitListener.Stats()`        | Returns the numbers of packets dropped so far, by reason                                            |
-| `SplitListener.Close()`        | Stops the splitter and closes `pc`                                                                  |
-| `SplitListener.Stop()`         | Stops the splitter, but leaves `pc` open, with no deadlines, for the caller to take over            |
-| `SplitListener.Unwrap()`       | Returns `pc` as given to `Split`                                                                    |
-| `SplitConn.Release(pkts...)`   | Hands the flow over to the fallback connection, the packets given first, and closes the connection  |
-| `SplitConn.Read`, `ReadFrom`, `ReadFromTo` | Read a packet of the flow; a short buffer gives a temporary `io.ErrShortBuffer`           |
-| `SplitConn.Write`, `WriteTo`, `WriteToFrom` | Write a packet to the client; another address fails with `net.ErrWriteToConnected`     |
+| Method                                      | Description                                                                                               |
+|---------------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| `Split(pc, config)`                         | Returns a `SplitListener` over `pc` and starts its loops. It takes `pc` over, clearing its write deadline |
+| `SplitListener.AcceptSplit()`               | Returns the split connection of the next new flow                                                         |
+| `SplitListener.Accept()`                    | The same as `AcceptSplit`, returning a `StreamConn`                                                       |
+| `SplitListener.Fallback()`                  | Returns the fallback connection, or nil if `SplitConfig.FallbackConn` isn't set                           |
+| `SplitListener.Stats()`                     | Returns the numbers of packets dropped so far, by reason                                                  |
+| `SplitListener.Close()`                     | Stops the splitter and closes `pc`                                                                        |
+| `SplitListener.Stop()`                      | Stops the splitter, but leaves `pc` open, with no deadlines, for the caller to take over                  |
+| `SplitListener.Unwrap()`                    | Returns `pc` as given to `Split`                                                                          |
+| `SplitConn.Release(pkts...)`                | Hands the flow over to the fallback connection, the packets given first, and closes the connection        |
+| `SplitConn.Read`, `ReadFrom`, `ReadFromTo`  | Read a packet of the flow; a short buffer gives a temporary `io.ErrShortBuffer`                           |
+| `SplitConn.Write`, `WriteTo`, `WriteToFrom` | Write a packet to the client; another address fails with `net.ErrWriteToConnected`                        |
 
 ### Flows
 
@@ -305,19 +305,19 @@ Every drop is counted by its reason.
 
 `SplitConfig` configures a splitter. The zero value of a field gives its default, as does a nil `*SplitConfig`.
 
-| Field               | Default  | Description                                                                                      |
-|---------------------|----------|--------------------------------------------------------------------------------------------------|
-| `AcceptQueueSize`   | 8        | Split connections waiting for `Accept`; the first packet of a new flow is dropped beyond it      |
-| `ReadQueueSize`     | 32       | Packets waiting to be read from each split connection                                            |
-| `FallbackQueueSize` | 1024     | Packets waiting to be read from the fallback connection, which may serve many flows              |
-| `IdleTimeout`       | 30s      | How long a flow may go without a packet; negative keeps flows until closed                       |
-| `MaxFlows`          | 8192     | The maximum number of flows; the first packet of a new flow is dropped beyond it                 |
-| `ReadBufferSize`    | 65527    | The maximum size of a packet read, at least 512; a larger packet is dropped                      |
-| `WriteQueueSize`    | 64       | Packets waiting to be written; a write waits for room until its write deadline                   |
-| `WriteTimeout`      | 500ms    | How long the write loop waits for one packet to be written; negative waits as long as it takes   |
-| `FallbackConn`      | false    | Gives the splitter a fallback connection; without one, packets of released flows are dropped     |
-| `PacketInfo`        | false    | Enables [packet info](#packet-info) on a `UDPConn`, so that flows are told apart by destination too |
-| `ErrorFunc`         | nil      | Called with the error of `pc` that stops the splitter, and with that of each write counted as `WriteFailed` |
+| Field               | Default | Description                                                                                                 |
+|---------------------|---------|-------------------------------------------------------------------------------------------------------------|
+| `AcceptQueueSize`   | 8       | Split connections waiting for `Accept`; the first packet of a new flow is dropped beyond it                 |
+| `ReadQueueSize`     | 32      | Packets waiting to be read from each split connection                                                       |
+| `FallbackQueueSize` | 1024    | Packets waiting to be read from the fallback connection, which may serve many flows                         |
+| `IdleTimeout`       | 30s     | How long a flow may go without a packet; negative keeps flows until closed                                  |
+| `MaxFlows`          | 8192    | The maximum number of flows; the first packet of a new flow is dropped beyond it                            |
+| `ReadBufferSize`    | 65527   | The maximum size of a packet read, at least 512; a larger packet is dropped                                 |
+| `WriteQueueSize`    | 64      | Packets waiting to be written; a write waits for room until its write deadline                              |
+| `WriteTimeout`      | 500ms   | How long the write loop waits for one packet to be written; negative waits as long as it takes              |
+| `FallbackConn`      | false   | Gives the splitter a fallback connection; without one, packets of released flows are dropped                |
+| `PacketInfo`        | false   | Enables [packet info](#packet-info) on a `UDPConn`, so that flows are told apart by destination too         |
+| `ErrorFunc`         | nil     | Called with the error of `pc` that stops the splitter, and with that of each write counted as `WriteFailed` |
 
 As the next packet of an expired released flow goes to `Accept` again, `IdleTimeout` should be no shorter than
 that of the application serving the fallback connection. `PacketInfo` matters for a socket listening on
@@ -328,21 +328,21 @@ an unspecified address: without it, replies may go from an address other than th
 
 `SplitStats`, returned by `Stats`, counts the packets a splitter has dropped, by reason:
 
-| Stage     | Counter             | The packet was dropped because                                                     |
-|-----------|---------------------|------------------------------------------------------------------------------------|
-| Reading   | `Truncated`         | it was larger than `ReadBufferSize`                                                |
-|           | `NoSource`          | it had no source address                                                           |
-|           | `NoDestination`     | it had no destination address, while the splitter uses them                       |
-|           | `TableFull`         | the flow table was full when it started a new flow                                 |
-|           | `AcceptQueueFull`   | the accept queue was full when it started a new flow                               |
-|           | `ConnQueueFull`     | the queue of its split connection was full                                         |
-|           | `ConnClosed`        | its split connection was closed before reading it                                  |
-| Releasing | `NoFallback`        | its flow was released, and there was no open fallback connection                   |
-|           | `FallbackQueueFull` | the queue of the fallback connection was full                                      |
-|           | `FallbackClosed`    | the fallback connection was closed before reading it                               |
-| Writing   | `WriteTimedOut`     | the write loop timed out writing it                                                |
-|           | `WriteFailed`       | the write loop failed to write it, e.g. to an unreachable address                  |
-|           | `WriteUnsent`       | the splitter, or its underlying connection, closed before writing it               |
+| Stage     | Counter             | The packet was dropped because                                       |
+|-----------|---------------------|----------------------------------------------------------------------|
+| Reading   | `Truncated`         | it was larger than `ReadBufferSize`                                  |
+|           | `NoSource`          | it had no source address                                             |
+|           | `NoDestination`     | it had no destination address, while the splitter uses them          |
+|           | `TableFull`         | the flow table was full when it started a new flow                   |
+|           | `AcceptQueueFull`   | the accept queue was full when it started a new flow                 |
+|           | `ConnQueueFull`     | the queue of its split connection was full                           |
+|           | `ConnClosed`        | its split connection was closed before reading it                    |
+| Releasing | `NoFallback`        | its flow was released, and there was no open fallback connection     |
+|           | `FallbackQueueFull` | the queue of the fallback connection was full                        |
+|           | `FallbackClosed`    | the fallback connection was closed before reading it                 |
+| Writing   | `WriteTimedOut`     | the write loop timed out writing it                                  |
+|           | `WriteFailed`       | the write loop failed to write it, e.g. to an unreachable address    |
+|           | `WriteUnsent`       | the splitter, or its underlying connection, closed before writing it |
 
 ## Packet info
 
@@ -354,11 +354,11 @@ a socket, each packet read comes with a control message carrying the local addre
 the interface it came through, and a packet written with such a message goes from the address and through
 the interface given.
 
-| Function                      | Description                                                                                          |
-|-------------------------------|------------------------------------------------------------------------------------------------------|
-| `PacketInfoUDPConn(conn)`     | Enables packet info on `conn` and wraps it as a `FromToUDPConn`; returns `conn` as is if it's one     |
-| `NeedPacketInfoUDPConn(conn)` | Reports whether `conn` is bound to an unspecified address, so that it needs packet info              |
-| `ControlUDPPacketInfo`        | Enables packet info as a socket is created, as `net.ListenConfig.Control`                            |
+| Function                      | Description                                                                                       |
+|-------------------------------|---------------------------------------------------------------------------------------------------|
+| `PacketInfoUDPConn(conn)`     | Enables packet info on `conn` and wraps it as a `FromToUDPConn`; returns `conn` as is if it's one |
+| `NeedPacketInfoUDPConn(conn)` | Reports whether `conn` is bound to an unspecified address, so that it needs packet info           |
+| `ControlUDPPacketInfo`        | Enables packet info as a socket is created, as `net.ListenConfig.Control`                         |
 
 ```go
 lc := net.ListenConfig{Control: hybrid.ControlUDPPacketInfo} // Optional: PacketInfoUDPConn enables it too
@@ -465,9 +465,9 @@ code, e.g. a splitter, without sockets. It's based on pipes, and so on `net.Pipe
 channels, deadlines and closing, but carries whole packets with their addresses, the way UDP does, rather than
 a stream of bytes.
 
-| Constructor                              | Mode  | A write returns once                                     |
-|------------------------------------------|-------|----------------------------------------------------------|
-| `UnbufferedTrunk(addr1, addr2)`          | sync  | its packet has been copied by a read                     |
+| Constructor                              | Mode  | A write returns once                                      |
+|------------------------------------------|-------|-----------------------------------------------------------|
+| `UnbufferedTrunk(addr1, addr2)`          | sync  | its packet has been copied by a read                      |
 | `BufferedTrunk(queueSize, addr1, addr2)` | async | it has been queued, unless `queueSize` packets are queued |
 
 There is no semi-sync trunk, as a read never leaves bytes of a packet for the next one.
@@ -609,14 +609,14 @@ case <-d.Wait(): // The hook has run by now
 The types of the package report errors the way the protocol they emulate does, so that code tested over them
 behaves the same over sockets:
 
-| Situation                        | Pipe (like TCP)                          | Trunk, split connection (like UDP)               |
-|----------------------------------|------------------------------------------|--------------------------------------------------|
-| Read after remote closure        | queued bytes, then `io.EOF`              | queued packets, then `net.ErrClosed` (trunk)     |
-| Write after remote closure       | `EPIPE`                                  | `net.ErrClosed` (trunk)                          |
-| Use or `Close` after local closure | `net.ErrClosed`                        | `net.ErrClosed`                                  |
-| Deadline exceeded                | `os.ErrDeadlineExceeded`                 | `os.ErrDeadlineExceeded`                         |
-| Short read buffer                | the rest is read next                    | `io.ErrShortBuffer`, the rest is dropped         |
-| Error type                       | `*net.OpError`, except `io.EOF`          | `*net.OpError`                                   |
+| Situation                          | Pipe (like TCP)                 | Trunk, split connection (like UDP)           |
+|------------------------------------|---------------------------------|----------------------------------------------|
+| Read after remote closure          | queued bytes, then `io.EOF`     | queued packets, then `net.ErrClosed` (trunk) |
+| Write after remote closure         | `EPIPE`                         | `net.ErrClosed` (trunk)                      |
+| Use or `Close` after local closure | `net.ErrClosed`                 | `net.ErrClosed`                              |
+| Deadline exceeded                  | `os.ErrDeadlineExceeded`        | `os.ErrDeadlineExceeded`                     |
+| Short read buffer                  | the rest is read next           | `io.ErrShortBuffer`, the rest is dropped     |
+| Error type                         | `*net.OpError`, except `io.EOF` | `*net.OpError`                               |
 
 All errors can be checked with `errors.Is`, e.g. `errors.Is(err, net.ErrClosed)`. The `io.ErrShortBuffer`
 of a trunk, a split connection or the fallback connection is a temporary `net.Error`, though no timeout, so that
