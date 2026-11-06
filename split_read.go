@@ -140,9 +140,6 @@ func (s *splitter) route(data []byte, p *splitPacketInfo) {
 		s.swept.Lock()
 		s.swept.m[c] = struct{}{}
 		s.swept.Unlock()
-		s.remotes.Lock()
-		s.remotes.m[p.key.src] = c
-		s.remotes.Unlock()
 	}
 	c.touch()
 	c.localIfIdx.Store(int64(p.idx)) // The latest one is used for replies
@@ -276,21 +273,17 @@ func (s *splitter) deleteLoop() {
 	}
 }
 
-// deleteFlow discards a closed connection, and deletes its flow from the flow table
-// and from the index of remote addresses.
+// deleteFlow discards a closed connection, and deletes its flow from the flow table.
 func (s *splitter) deleteFlow(c *splitConn) {
 	s.discard(c)
 	delete(s.flows, c.key)
-	s.remotes.Lock()
-	if s.remotes.m[c.key.src] == c {
-		delete(s.remotes.m, c.key.src)
-	}
-	s.remotes.Unlock()
 }
 
 // discard drops and counts the packets left unread on a closed connection, and removes the connection
-// from those the sweeper checks.
+// from those the sweeper checks and from the index of remote addresses.
 func (s *splitter) discard(c *splitConn) {
+	s.unindexRemote(c)
+
 	for {
 		select {
 		case pkt := <-c.rdRx:

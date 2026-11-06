@@ -69,6 +69,108 @@ func testSplitFallbackWrite(t *testing.T) {
 	}
 }
 
+// testSplitFallbackWriteFlows ensures the fallback connection writes to a remote address from the local address
+// and through the interface of its released flow touched last, among several to different local addresses,
+// of another one once that flow ends, and from those the system chooses for a flow that isn't released.
+func testSplitFallbackWriteFlows(t *testing.T) {
+	const idle = 200 * time.Millisecond // Long enough for the scheduling stalls of a busy machine
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	local1 := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 53}
+	local2 := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 2), Port: 53}
+	local3 := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 3), Port: 53}
+
+	b := make([]byte, 8)
+	writeTo := func(t *testing.T, client FromToPacketConn, fb PacketConn, data string) (net.Addr, int) {
+		t.Helper()
+		if _, err := fb.WriteTo([]byte(data), a); err != nil {
+			t.Fatalf("WriteTo(%s) = %v, want nil", a, err)
+		}
+		_ = client.SetReadDeadline(time.Now().Add(time.Second))
+		n, src, _, idx, err := client.ReadFromTo(b)
+		if err != nil || string(b[:n]) != data {
+			t.Fatalf("ReadFromTo() = %q, %v, want %q, nil", b[:n], err, data)
+		}
+		return src, idx
+	}
+	send := func(t *testing.T, client FromToPacketConn, local net.Addr, idx int) {
+		t.Helper()
+		if _, err := client.WriteToFrom([]byte("p"), local, a, idx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("NotReleased", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
+		send(t, client, local1, 1)
+		_ = acceptSplitConn(t, ln) // Served by its handler, not by the fallback connection
+		if src, idx := writeTo(t, client, ln.Fallback(), "x"); src.String() == local1.String() || idx != 0 {
+			t.Errorf("WriteTo() from %s through %d, want from the system's choice through 0", src, idx)
+		}
+	})
+
+	t.Run("TouchedLast", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true, IdleTimeout: idle})
+		send(t, client, local1, 1)
+		releaseSplitConn(t, ln)
+		send(t, client, local2, 2)
+		releaseSplitConn(t, ln)
+		send(t, client, local3, 3)
+		_ = acceptSplitConn(t, ln) // Not released, so ignored, though created last
+		fb := ln.Fallback()
+
+		// Both released flows are touched at the same coarse time, so the one released last wins
+		if src, idx := writeTo(t, client, fb, "x"); src.String() != local2.String() || idx != 2 {
+			t.Errorf("WriteTo() from %s through %d, want from %s through 2", src, idx, local2)
+		}
+
+		// Once the clock ticks, a packet of the first flow makes it the one touched last
+		time.Sleep(idle / 2)
+		send(t, client, local1, 1)
+		if got := readFallback(t, fb); len(got) != 3 {
+			t.Fatalf("packets of the fallback connection = %q, want 3", got)
+		}
+		if src, idx := writeTo(t, client, fb, "y"); src.String() != local1.String() || idx != 1 {
+			t.Errorf("WriteTo() from %s through %d, want from %s through 1", src, idx, local1)
+		}
+	})
+
+	t.Run("OtherFlowEnded", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true, IdleTimeout: idle})
+		send(t, client, local1, 1)
+		releaseSplitConn(t, ln)
+		send(t, client, local2, 2)
+		releaseSplitConn(t, ln)
+		fb := ln.Fallback()
+
+		// Keep the first flow going until the second one, released last, has expired
+		for range 8 {
+			time.Sleep(idle / 4)
+			send(t, client, local1, 1)
+		}
+		_ = readFallback(t, fb)
+		if src, idx := writeTo(t, client, fb, "x"); src.String() != local1.String() || idx != 1 {
+			t.Errorf("WriteTo() from %s through %d, want from %s through 1", src, idx, local1)
+		}
+	})
+
+	t.Run("ReleasedAfterDiscard", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
+		send(t, client, local1, 1)
+		c := acceptSplitConn(t, ln).(*splitConn)
+		s := ln.(*splitter)
+		s.unindexRemote(c) // As if it's expired and been discarded while its handler releases it
+		if err := c.Release(); err != nil {
+			t.Fatal(err)
+		}
+		s.remotes.RLock()
+		n := len(s.remotes.m)
+		s.remotes.RUnlock()
+		if n != 0 {
+			t.Errorf("remote addresses indexed = %d, want 0", n)
+		}
+	})
+}
+
 // testSplitFallbackFromTo ensures the fallback connection reads the local address and interface index
 // of the flow of each packet, and writes from a local address and through an interface given,
 // or from those of the latest flow of the remote address if none is given.

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"time"
 )
 
@@ -64,11 +65,48 @@ func (sc *splitConnBase) send(b []byte, c *splitConn, dst, src net.Addr, idx int
 	return len(b), nil
 }
 
-// lookupRemote returns the split connection of the latest flow of the given remote address, if any.
+// lookupRemote returns the split connection of the released flow of the given remote address touched last,
+// or of the one released last among those touched at the same coarse time, if any.
 func (s *splitter) lookupRemote(addr net.Addr) *splitConn {
 	s.remotes.RLock()
 	defer s.remotes.RUnlock()
-	return s.remotes.m[addrKeyOf(addr)]
+	var latest *splitConn
+	for _, c := range s.remotes.m[addrKeyOf(addr)] {
+		if latest == nil || c.touched.Load() >= latest.touched.Load() {
+			latest = c
+		}
+	}
+	return latest
+}
+
+// indexRemote adds a released connection to the index of remote addresses, unless it's been discarded already,
+// e.g. as it's expired while being released, so that the fallback connection writes to its remote address from
+// its local address. Only released flows are indexed, as the fallback connection serves no other flows.
+func (s *splitter) indexRemote(c *splitConn) {
+	if s.fallback == nil { // Nothing to write from
+		return
+	}
+	s.remotes.Lock()
+	defer s.remotes.Unlock()
+	if !c.discarded {
+		s.remotes.m[c.key.src] = append(s.remotes.m[c.key.src], c)
+	}
+}
+
+// unindexRemote removes a discarded connection from the index of remote addresses, if it's there,
+// and marks it discarded, so that it isn't indexed again.
+func (s *splitter) unindexRemote(c *splitConn) {
+	if s.fallback == nil { // Nothing indexed
+		return
+	}
+	s.remotes.Lock()
+	defer s.remotes.Unlock()
+	c.discarded = true
+	if conns := slices.DeleteFunc(s.remotes.m[c.key.src], func(e *splitConn) bool { return e == c }); len(conns) > 0 {
+		s.remotes.m[c.key.src] = conns
+	} else {
+		delete(s.remotes.m, c.key.src)
+	}
 }
 
 // writeLoop writes the packets of the write queue to the underlying connection, until the splitter closes

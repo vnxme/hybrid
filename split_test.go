@@ -158,6 +158,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitFallbackFromToName, testSplitFallbackFromTo)
 	t.Run(testSplitFallbackWriteName, testSplitFallbackWrite)
 	t.Run(testSplitFallbackWriteCopiesAddrsName, testSplitFallbackWriteCopiesAddrs)
+	t.Run(testSplitFallbackWriteFlowsName, testSplitFallbackWriteFlows)
 	t.Run(testSplitFallbackWriteOtherNetworkName, testSplitFallbackWriteOtherNetwork)
 	t.Run(testSplitFallbackWriteUnmappedName, testSplitFallbackWriteUnmapped)
 	t.Run(testSplitForeignDeadlineName, testSplitForeignDeadline)
@@ -1069,6 +1070,7 @@ const (
 	testSplitFallbackFromToName            = "FallbackFromTo"
 	testSplitFallbackWriteName             = "FallbackWrite"
 	testSplitFallbackWriteCopiesAddrsName  = "FallbackWriteCopiesAddrs"
+	testSplitFallbackWriteFlowsName        = "FallbackWriteFlows"
 	testSplitFallbackWriteOtherNetworkName = "FallbackWriteOtherNetwork"
 	testSplitFallbackWriteUnmappedName     = "FallbackWriteUnmapped"
 	testSplitForeignDeadlineName           = "ForeignDeadline"

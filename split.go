@@ -280,8 +280,8 @@ type splitter struct {
 		m map[*splitConn]struct{}
 		sync.Mutex
 	}
-	remotes struct { // The latest flow of each remote address, for the writes of the fallback connection
-		m map[addrKey]*splitConn
+	remotes struct { // The released flows of each remote address, for the writes of the fallback connection
+		m map[addrKey][]*splitConn
 		sync.RWMutex
 	}
 
@@ -330,7 +330,7 @@ func Split(pc PacketConn, config *SplitConfig) SplitListener {
 		s.errorFunc = config.ErrorFunc
 	}
 	s.mode, s.byDst = newSplitMode(pc, cfg.packetInfo)
-	s.remotes.m = make(map[addrKey]*splitConn)
+	s.remotes.m = make(map[addrKey][]*splitConn)
 	s.swept.m = make(map[*splitConn]struct{})
 	if cfg.fallbackConn {
 		s.fallback = s.newFallback()

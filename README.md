@@ -289,8 +289,10 @@ than the send buffer of a socket, which is 9216 bytes by default, so a larger pa
 unless the send buffer has been raised, e.g. with `SetWriteBuffer`.
 
 The fallback connection is a plain `PacketConn`, whose `WriteTo` knows only the remote address. So it looks
-the remote address up in an index of the latest flow of each remote address, to write from the local address
-and through the interface that flow came to. It deliberately gives no access to the socket, e.g. no
+the remote address up in an index of the released flows of each remote address, to write from the local address
+and through the interface of the one touched last. A remote address with released flows to several local
+addresses thus gets replies from that of the flow touched last, even those meant for another flow, as `WriteTo`
+can't tell them apart. It deliberately gives no access to the socket, e.g. no
 `SyscallConn`, so that a QUIC server can't change socket options or read from the socket past the splitter.
 
 ### Dropping

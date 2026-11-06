@@ -122,6 +122,8 @@ type splitConn struct {
 	releaseMu sync.Mutex // Keeps the packets of the flow in order while it's being released
 
 	released atomic.Bool // Set before closing localDone, if the flow goes on to the fallback connection
+
+	discarded bool // Set once the connection is discarded, so that a late Release doesn't index it, guarded by remotes
 }
 
 // newConnection returns a new split connection for the flow of the given packet.
@@ -204,6 +206,7 @@ func (sc *splitConn) Release(pkts ...[]byte) error {
 	}
 
 	sc.released.Store(true)
+	sc.splitter.indexRemote(sc)
 	for _, b := range pkts {
 		pkt := newSplitPacket(b)
 		pkt.conn = sc
@@ -327,15 +330,17 @@ func (sc *splitFallback) WriteTo(b []byte, addr net.Addr) (int, error) {
 }
 
 // WriteToFrom writes a packet to dst from src and through the interface idx. If src is nil, it writes
-// from the local address and through the interface of the latest flow of dst, or from those the system
-// chooses if the splitter hasn't seen dst. A write keeps the flow of dst going, but doesn't start one,
+// from the local address and through the interface of the released flow of dst touched last, or from those
+// the system chooses if dst has no released flow. A write keeps that flow going, but doesn't start one,
 // so a reply from a dst without a flow is queued for Accept, rather than read by the fallback connection.
+// As WriteTo tells only dst, a dst with released flows to several local addresses gets replies from that
+// of the flow touched last, even those meant for another flow.
 func (sc *splitFallback) WriteToFrom(b []byte, dst, src net.Addr, idx int) (int, error) {
 	if dst == nil {
 		return 0, sc.opError("write", sc.LocalAddr(), nil, errSplitMissingAddress)
 	}
 	// The packet is written once this write returns, so don't queue the addresses of the caller, which may
-	// change them by then: use those of the latest flow of dst if any, or copies otherwise, as trunks do
+	// change them by then: use those of a released flow of dst if any, or copies otherwise, as trunks do
 	var to net.Addr
 	c := sc.splitter.lookupRemote(dst)
 	switch {
