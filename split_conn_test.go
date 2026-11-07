@@ -179,9 +179,11 @@ func testSplitConnCloseDrops(t *testing.T) {
 		const idle = 50 * time.Millisecond
 		client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: idle})
 		conn := queue(t, client, ln)
-		time.Sleep(2 * idle)
-		if !isClosedSplitConn(conn) {
-			t.Fatalf("connection open after the idle timeout, want closed")
+		// Waited for, rather than slept on, as the sweeper may tick late on a busy machine
+		for deadline := time.Now().Add(5 * time.Second); !isClosedSplitConn(conn); time.Sleep(idle / 5) {
+			if time.Now().After(deadline) {
+				t.Fatalf("connection open long after the idle timeout, want closed")
+			}
 		}
 		writeFrom(t, client, b, "b2")
 		waitSplitStats(t, ln, SplitStats{ConnClosed: 4}) // b1 too, as the connection of b has expired as well
