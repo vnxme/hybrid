@@ -123,8 +123,15 @@ func testSplitFallbackWriteFlows(t *testing.T) {
 			t.Errorf("WriteTo() from %s through %d, want from %s through 2", src, idx, local2)
 		}
 
-		// Once the clock ticks, a packet of the first flow makes it the one touched last
-		time.Sleep(idle / 2)
+		// Once the clock ticks, a packet of the first flow makes it the one touched last. The clock is waited for,
+		// rather than slept on, as the sweeper keeping it may tick late on a busy machine
+		s := ln.(*splitter)
+		for start, deadline := s.clock.Load(), time.Now().Add(5*time.Second); s.clock.Load() == start; {
+			if time.Now().After(deadline) {
+				t.Fatal("the clock of the splitter hasn't ticked")
+			}
+			time.Sleep(idle / 10)
+		}
 		send(t, client, local1, 1)
 		if got := readFallback(t, fb); len(got) != 3 {
 			t.Fatalf("packets of the fallback connection = %q, want 3", got)
