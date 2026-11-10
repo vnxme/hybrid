@@ -146,6 +146,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitBlockedWritesName, testSplitBlockedWrites)
 	t.Run(testSplitCloseName, testSplitClose)
 	t.Run(testSplitCloseErrorName, testSplitCloseError)
+	t.Run(testSplitCloseLeftOpenName, testSplitCloseLeftOpen)
 	t.Run(testSplitClosedErrorsName, testSplitClosedErrors)
 	t.Run(testSplitConcurrentReadsName, testSplitConcurrentReads)
 	t.Run(testSplitConfigName, testSplitConfig)
@@ -673,6 +674,36 @@ func testSplitCloseError(t *testing.T) {
 	}
 }
 
+// testSplitCloseLeftOpen ensures Close stops a splitter over a connection that closing leaves open, which a deadline
+// passed interrupts instead, and leaves the connection with no deadlines, for its owner to read on.
+func testSplitCloseLeftOpen(t *testing.T) {
+	a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+	client, server := BufferedTrunk(16, nil, nil)
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+	ln := Split(FakeClosePacketConn(server, nil), nil)
+	writeFrom(t, client, a, "a0")
+	_ = acceptSplitConn(t, ln)
+	time.Sleep(10 * time.Millisecond) // Let the read loop wait for the next packet, which closing doesn't interrupt
+
+	closed := make(chan error, 1)
+	go func() { closed <- ln.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close() = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() hasn't returned")
+	}
+
+	writeFrom(t, client, a, "a1")
+	b := make([]byte, 8)
+	if n, _, err := server.ReadFrom(b); err != nil || string(b[:n]) != "a1" {
+		t.Errorf("ReadFrom() after Close() = %q, %v, want %q, nil", b[:n], err, "a1")
+	}
+}
+
 // failingReads is a FromToPacketConn whose reads fail with the given error.
 type failingReads struct {
 	FromToPacketConn
@@ -1084,6 +1115,7 @@ const (
 	testSplitBlockedWritesName             = "BlockedWrites"
 	testSplitCloseName                     = "Close"
 	testSplitCloseErrorName                = "CloseError"
+	testSplitCloseLeftOpenName             = "CloseLeftOpen"
 	testSplitClosedErrorsName              = "ClosedErrors"
 	testSplitConcurrentReadsName           = "ConcurrentReads"
 	testSplitConfigName                    = "Config"

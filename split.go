@@ -312,7 +312,8 @@ type splitter struct {
 // The splitter may share a socket with other readers, e.g. in another splitter over another PacketConn of it,
 // which set its read deadline as they need: it backs off from a read timeout it hasn't caused, for them to take
 // their own, and clears the read deadline after 20 of them in a row, e.g. one left passed
-// before Split. Stop sets a deadline passed in order to interrupt its read, so it interrupts theirs as well.
+// before Split. Stop and Close set a deadline passed in order to interrupt its read, so they interrupt theirs
+// as well.
 //
 // The splitter leaves the socket options of pc as they are. Notably, macOS and the BSDs refuse to send a datagram
 // larger than the send buffer of a socket, which is 9216 bytes by default, so a larger packet written to a split
@@ -383,9 +384,27 @@ func (s *splitter) Addr() net.Addr { return s.orig.LocalAddr() }
 // Close closes the underlying PacketConn and stops the internal goroutines. Accept returns an error, and the split
 // connections it hasn't returned are closed, while the others and the fallback connection return the packets
 // queued, then net.ErrClosed. It returns the error of closing the underlying PacketConn, or net.ErrClosed
-// if the splitter has stopped.
+// if the splitter has stopped. A PacketConn that closing leaves open, e.g. a [FakeClosePacketConn], is left
+// with no deadlines, as by Stop.
 func (s *splitter) Close() error {
-	return s.stop(s.orig.Close, nil)
+	return s.closeStop(nil)
+}
+
+// closeStop stops the splitter, closing the underlying PacketConn, as Close does, or as fail does with the cause.
+// It interrupts the loops with a deadline passed too, in case closing doesn't, as it leaves the PacketConn open,
+// and clears the deadline once they have returned, for whoever owns the PacketConn then.
+func (s *splitter) closeStop(cause error) error {
+	var stopping bool
+	err := s.stop(func() error {
+		stopping = true
+		err := s.orig.Close()
+		_ = s.orig.SetDeadline(time.Unix(1, 0)) // Fails once the PacketConn is closed, which interrupts the loops then
+		return err
+	}, cause)
+	if stopping {
+		_ = s.orig.SetDeadline(time.Time{})
+	}
+	return err
 }
 
 // Fallback returns the fallback connection of the splitter, or nil if it has none.
@@ -442,7 +461,7 @@ func (s *splitter) Unwrap() PacketConn { return s.orig }
 // waits until the loops return, a loop calls it on a goroutine of its own.
 func (s *splitter) fail(err error) {
 	go func() {
-		_ = s.stop(s.orig.Close, err)
+		_ = s.closeStop(err)
 	}()
 }
 
