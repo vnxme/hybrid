@@ -14,10 +14,6 @@
 
 package hybrid
 
-import (
-	"net/netip"
-)
-
 // splitMode is how a splitter reads from and writes to its underlying connection, as Split picks it once
 // for the interfaces the connection implements, so that the read loop and the write loop needn't tell them apart.
 type splitMode interface {
@@ -93,7 +89,7 @@ type splitUDPMode struct{ pc UDPConn }
 
 func (m splitUDPMode) read(b []byte, p *splitPacketInfo) (int, error) {
 	n, src, err := m.pc.ReadFromUDPAddrPort(b)
-	p.key.src.ap = netip.AddrPortFrom(src.Addr().Unmap(), src.Port()) // Zero if src is
+	p.key.src.ap = unmapAddrPort(src)
 	return n, err
 }
 
@@ -103,12 +99,13 @@ func (m splitUDPMode) write(pkt *splitPacket) error {
 }
 
 // splitFromToUDPMode reads the source and destination addresses of each packet from a FromToUDPConn
-// as netip.AddrPort values, which allocates nothing, along with its interface index, and writes packets
-// with them.
+// as netip.AddrPort values, which allocates nothing, unmapped, as a FromToUDPConn other than PacketInfoUDPConn
+// may not unmap them, along with its interface index, and writes packets with them.
 type splitFromToUDPMode struct{ pc FromToUDPConn }
 
-func (m splitFromToUDPMode) read(b []byte, p *splitPacketInfo) (n int, err error) {
-	n, p.key.src.ap, p.key.dst.ap, p.idx, err = m.pc.ReadFromToUDPAddrPort(b)
+func (m splitFromToUDPMode) read(b []byte, p *splitPacketInfo) (int, error) {
+	n, src, dst, idx, err := m.pc.ReadFromToUDPAddrPort(b)
+	p.key.src.ap, p.key.dst.ap, p.idx = unmapAddrPort(src), unmapAddrPort(dst), idx
 	return n, err
 }
 

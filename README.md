@@ -399,9 +399,10 @@ Notable behavior:
 - **Sockets.** IPv4-only, IPv6-only and dual-stack sockets are told apart once, from the local address and,
   for an IPv6 socket bound to `::`, from `IPV6_V6ONLY`, so as to enable packet info for each IP version
   the socket accepts, and to reject a write of a version it doesn't.
-- **Addresses.** As a dual-stack socket reports IPv4 sources as IPv4-mapped IPv6 addresses, reads return IPv4
-  addresses unmapped, so that source and destination addresses are in the same form on every platform, while
-  writes take either form. Packet info carries no port: the local port of every packet read is that of
+- **Addresses.** As a dual-stack socket reports IPv4 sources as IPv4-mapped IPv6 addresses, the `ReadFromTo*`
+  reads return IPv4 addresses unmapped, so that source and destination addresses are in the same form on every
+  platform, while writes take either form. The methods of the `UDPConn` wrapped, e.g. `ReadFrom`, return them
+  as it does. Packet info carries no port: the local port of every packet read is that of
   the socket, which must have one.
 - **Reading.** A read takes a pooled buffer for control messages. Other socket options may add messages of their
   own, which truncate packet info: then the read returns no local address and index (or fails on Windows),

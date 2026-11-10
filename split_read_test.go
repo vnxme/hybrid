@@ -187,6 +187,19 @@ func testSplitPacketInfoFlows(t *testing.T) {
 		}
 	}
 	waitSplitStats(t, ln, SplitStats{NoSource: 2, NoDestination: 1})
+
+	// IPv4 addresses read mapped, as a FromToUDPConn over a dual-stack socket may report them, are unmapped, so that
+	// they make the same flow as unmapped ones, and match the remote address of the flow, which is unmapped too
+	m1, n1 := netip.MustParseAddrPort("[::ffff:192.0.2.1]:1"), netip.MustParseAddrPort("[::ffff:198.51.100.1]:53")
+	ln = Split(newScriptedUDPConn(scriptedPacket{m1, n1, "x"}, scriptedPacket{s1, d1, "y"}), nil)
+	defer func() { _ = ln.Close() }()
+	conn := acceptSplitConn(t, ln)
+	if got := strings.Join(readSplitConn(t, conn), " "); got != "x y" {
+		t.Errorf("packets of the flow of mapped and unmapped addresses = %q, want %q", got, "x y")
+	}
+	if src, dst := conn.RemoteAddr().String(), conn.LocalAddr().String(); src != s1.String() || dst != d1.String() {
+		t.Errorf("RemoteAddr(), LocalAddr() = %s, %s, want %s, %s", src, dst, s1, d1)
+	}
 }
 
 // testSplitReadDrops ensures the splitter drops and counts a packet rather than wait for a full queue

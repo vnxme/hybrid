@@ -42,8 +42,9 @@ import (
 // Sockets. PacketInfoUDPConn tells an IPv4-only socket, an IPv6-only one and a dual-stack one apart once, from
 // the local address and, for an IPv6 socket bound to ::, from IPV6_V6ONLY, so as to enable packet info for each
 // IP version the socket accepts, and to reject a write of a version it doesn't. As a dual-stack socket reports
-// the source addresses of IPv4 packets as IPv4-mapped IPv6 ones, reads return IPv4 addresses unmapped, so that
-// source and destination addresses are in the same form on every platform, while writes take either form.
+// the source addresses of IPv4 packets as IPv4-mapped IPv6 ones, the reads of FromToUDPConn, e.g. ReadFromTo,
+// return IPv4 addresses unmapped, so that source and destination addresses are in the same form on every platform,
+// while writes take either form. The methods of the UDPConn wrapped, e.g. ReadFrom, return them as it does.
 // Packet info carries no port: the local port of every packet read is that of the socket, which must have one.
 //
 // Reading. A read takes a pooled buffer for control messages, of the size that holds packet info of either IP
@@ -204,7 +205,7 @@ func (u *packetInfoUDPConn) ReadFromToUDPAddrPort(b []byte) (int, netip.AddrPort
 		// TODO(golang/go#82746): return n as is once the minimum Go version includes the fix.
 		return max(n, 0), netip.AddrPort{}, netip.AddrPort{}, 0, err
 	}
-	src = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
+	src = unmapAddrPort(src)
 	if dst, idx, ok := pktinfo.Parse(oob[:min(oobN, len(oob))]); ok {
 		return n, src, netip.AddrPortFrom(dst, u.port), idx, nil
 	}

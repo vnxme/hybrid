@@ -58,7 +58,16 @@ func addrKeyOf(a net.Addr) addrKey {
 	default:
 		return addrKey{str: a.String()}
 	}
-	return addrKey{ap: netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
+	return addrKey{ap: unmapAddrPort(ap)}
+}
+
+// unmapAddrPort returns ap with an IPv4-mapped IPv6 address unmapped, as packet info reports it, or ap as is
+// otherwise. An invalid ap stays invalid.
+func unmapAddrPort(ap netip.AddrPort) netip.AddrPort {
+	if ip := ap.Addr(); ip.Is4In6() {
+		return netip.AddrPortFrom(ip.Unmap(), ap.Port())
+	}
+	return ap
 }
 
 // valid reports whether the key holds an address.
