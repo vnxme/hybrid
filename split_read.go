@@ -225,11 +225,13 @@ func (s *splitter) deleteConnection(c *splitConn) {
 	s.closed.Lock()
 	if !isClosedChan(s.done) { // Checked under the lock, so that drainReads either gets c or sees it discarded
 		s.closed.conns = append(s.closed.conns, c)
-		s.closed.Unlock()
-		return
 	}
 	s.closed.Unlock()
-	s.discard(c) // With no read loop to delete the flow anymore, only drop and count the packets left
+
+	// Drop and count the packets left at once, rather than only once the read loop deletes the flow, which it
+	// does after reading the next packet, so that a quiet socket holds none of them. The read loop discards c
+	// again then, for any packet queued meanwhile.
+	s.discard(c)
 }
 
 // drainReads closes the split connections left in the accept queue, which Accept no longer returns, and drops

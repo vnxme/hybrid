@@ -170,9 +170,10 @@ func testSplitConnCloseDrops(t *testing.T) {
 	t.Run("Closed", func(t *testing.T) {
 		client, ln := splitTrunk(t, nil)
 		conn := queue(t, client, ln)
-		_ = conn.Close()
-		writeFrom(t, client, b, "b2") // The read loop deletes closed connections after reading
-		waitSplitStats(t, ln, SplitStats{ConnClosed: 3})
+		_ = conn.Close() // Drops the packets at once, though the read loop deletes the flow only after reading
+		if got, want := ln.Stats(), (SplitStats{ConnClosed: 3}); got != want {
+			t.Errorf("Stats() = %+v, want %+v", got, want)
+		}
 	})
 
 	t.Run("Expired", func(t *testing.T) {
@@ -185,8 +186,8 @@ func testSplitConnCloseDrops(t *testing.T) {
 				t.Fatalf("connection open long after the idle timeout, want closed")
 			}
 		}
-		writeFrom(t, client, b, "b2")
-		waitSplitStats(t, ln, SplitStats{ConnClosed: 4}) // b1 too, as the connection of b has expired as well
+		// With no packet read after, b1 too, as the connection of b expires as well
+		waitSplitStats(t, ln, SplitStats{ConnClosed: 4})
 	})
 
 	t.Run("ClosedBeforeStop", func(t *testing.T) {
