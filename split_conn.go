@@ -148,11 +148,20 @@ func (s *splitter) newConnection(p *splitPacketInfo) *splitConn {
 
 // Close closes the connection and ends its flow, so that the next packet of the flow starts a new one.
 func (sc *splitConn) Close() error {
-	if !sc.closeLocal() {
+	if !sc.closeReleasing() {
 		return sc.opError("close", sc.LocalAddr(), sc.remoteAddr, errSplitClosed)
 	}
 	sc.splitter.deleteConnection(sc)
 	return nil
+}
+
+// closeReleasing closes the connection as closeLocal does, once any release in progress is done, so that either
+// the release or the closing fails, and a flow expiring while it's being released has all its packets queued
+// handed over first.
+func (sc *splitConn) closeReleasing() bool {
+	sc.releaseMu.Lock()
+	defer sc.releaseMu.Unlock()
+	return sc.closeLocal()
 }
 
 // LocalIfIdx returns the index of the interface the latest packet of the flow came through, used for replies.
@@ -267,7 +276,7 @@ func (sc *splitConn) ended() bool {
 // expire ends the flow of a connection that has been idle: it closes the connection, unless it's been
 // closed already, and reports the flow for deletion, even if it's been released.
 func (sc *splitConn) expire() {
-	sc.closeLocal()
+	sc.closeReleasing()
 	sc.splitter.deleteConnection(sc)
 }
 

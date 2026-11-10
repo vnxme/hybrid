@@ -173,6 +173,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitReadCopiesAddrsName, testSplitReadCopiesAddrs)
 	t.Run(testSplitReadDropsName, testSplitReadDrops)
 	t.Run(testSplitReleaseName, testSplitRelease)
+	t.Run(testSplitReleaseRaceName, testSplitReleaseRace)
 	t.Run(testSplitReleaseWithoutFallbackName, testSplitReleaseWithoutFallback)
 	t.Run(testSplitSharedReloadName, testSplitSharedReload)
 	t.Run(testSplitShortBufferName, testSplitShortBuffer)
@@ -1190,6 +1191,7 @@ const (
 	testSplitReadCopiesAddrsName           = "ReadCopiesAddrs"
 	testSplitReadDropsName                 = "ReadDrops"
 	testSplitReleaseName                   = "Release"
+	testSplitReleaseRaceName               = "ReleaseRace"
 	testSplitReleaseWithoutFallbackName    = "ReleaseWithoutFallback"
 	testSplitSharedReloadName              = "SharedReload"
 	testSplitShortBufferName               = "ShortBuffer"

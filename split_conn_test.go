@@ -71,6 +71,47 @@ func testSplitRelease(t *testing.T) {
 	waitSplitStats(t, ln, SplitStats{})
 }
 
+// testSplitReleaseRace ensures releasing a split connection and closing it at once let only one of them succeed,
+// and that a flow expiring while it's being released waits for the release, which hands its packets over first.
+func testSplitReleaseRace(t *testing.T) {
+	t.Run("Close", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
+		for i := range 200 {
+			writeFrom(t, client, &net.UDPAddr{IP: net.IPv4(192, 0, 2, byte(i)), Port: 1}, "x")
+			conn := acceptSplitConn(t, ln)
+			start, errs := make(chan struct{}), make(chan error, 2)
+			go func() { <-start; errs <- conn.Release() }()
+			go func() { <-start; errs <- conn.Close() }()
+			close(start)
+			if err1, err2 := <-errs, <-errs; (err1 == nil) == (err2 == nil) {
+				t.Fatalf("Release() and Close() at once = %v and %v, want one of them nil", err1, err2)
+			}
+		}
+	})
+
+	t.Run("Expired", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true, IdleTimeout: -1})
+		writeFrom(t, client, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, "x")
+		conn := acceptSplitConn(t, ln).(*splitConn)
+		conn.releaseMu.Lock() // As a release in progress does
+		expired := make(chan struct{})
+		go func() { conn.expire(); close(expired) }()
+		time.Sleep(10 * time.Millisecond)
+		if isClosedSplitConn(conn) {
+			t.Errorf("the connection is closed by expiring while being released, want open until released")
+		}
+		conn.releaseMu.Unlock()
+		select {
+		case <-expired:
+		case <-time.After(time.Second):
+			t.Fatal("expire() hasn't returned once released")
+		}
+		if !isClosedSplitConn(conn) {
+			t.Errorf("the connection of an expired flow is open, want closed")
+		}
+	})
+}
+
 // testSplitReleaseWithoutFallback ensures releasing a split connection without a fallback connection drops
 // and counts the packets given and those of its flow, without starting a new flow.
 func testSplitReleaseWithoutFallback(t *testing.T) {
