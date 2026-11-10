@@ -394,6 +394,30 @@ func testSplitIdleTimeout(t *testing.T) {
 			t.Errorf("the connection of a flow is closed without an idle timeout, want open")
 		}
 	})
+
+	// A sweep expiring a flow once the splitter has stopped discards its connection, which must not wait for
+	// the sweep itself, or stopping would wait for the sweeper forever. With no idle timeout, there is no sweeper,
+	// so the sweep is run by hand, and every flow is idle for long enough.
+	t.Run("SweptAfterStop", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: -1})
+		writeFrom(t, client, a, "a1")
+		conn := acceptSplitConn(t, ln)
+		_ = ln.Close()
+
+		swept := make(chan struct{})
+		go func() {
+			ln.(*splitter).sweep(1, nil)
+			close(swept)
+		}()
+		select {
+		case <-swept:
+		case <-time.After(time.Second):
+			t.Fatal("sweep() hasn't returned")
+		}
+		if !isClosedSplitConn(conn) {
+			t.Errorf("the connection of a swept flow is open, want closed")
+		}
+	})
 }
 
 // negativeReads is a FromToPacketConn whose failed reads report a negative count, as Linux does

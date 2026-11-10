@@ -306,6 +306,7 @@ func (s *splitter) sweepLoop() {
 	start := time.Now() // The clock is zero until the first tick, as is the last packet time of a new flow
 	ticker := time.NewTicker(max(s.cfg.idleTimeout/4, time.Millisecond))
 	defer ticker.Stop()
+	var expired []*splitConn // Reused across ticks
 	for {
 		select {
 		case <-s.done:
@@ -313,15 +314,27 @@ func (s *splitter) sweepLoop() {
 		case now := <-ticker.C:
 			clock := int64(now.Sub(start)) // Monotonic, unlike the wall clock
 			s.clock.Store(clock)
-
-			s.swept.Lock()
-			for c := range s.swept.m {
-				if clock-c.touched.Load() >= int64(s.cfg.idleTimeout) {
-					delete(s.swept.m, c)
-					c.expire()
-				}
-			}
-			s.swept.Unlock()
+			expired = s.sweep(clock, expired)
 		}
 	}
+}
+
+// sweep ends the flows idle for the idle timeout at the given clock, and returns expired emptied, for reuse.
+// The connections are expired once swept is unlocked, as expiring one after the splitter stops discards it,
+// which locks swept too.
+func (s *splitter) sweep(clock int64, expired []*splitConn) []*splitConn {
+	s.swept.Lock()
+	for c := range s.swept.m {
+		if clock-c.touched.Load() >= int64(s.cfg.idleTimeout) {
+			delete(s.swept.m, c)
+			expired = append(expired, c)
+		}
+	}
+	s.swept.Unlock()
+
+	for _, c := range expired {
+		c.expire()
+	}
+	clear(expired) // Holds no connection back from collection
+	return expired[:0]
 }
