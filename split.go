@@ -125,7 +125,8 @@ type SplitConfig struct {
 
 	// IdleTimeout is how long a flow may go without a packet read or written before it ends,
 	// [DefaultSplitIdleTimeout] by default: its split connection is closed, and its next packet starts
-	// a new flow. A negative timeout keeps every flow until its split connection is closed, and a released
+	// a new flow. A flow ends between one and one and a quarter timeouts after its last packet, as it's checked
+	// every eighth of the timeout. A negative timeout keeps every flow until its split connection is closed, and a released
 	// flow as long as the splitter is open. As the next packet of an expired released flow goes to Accept
 	// again, the timeout should be no shorter than that of the application serving the fallback connection.
 	IdleTimeout time.Duration

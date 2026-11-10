@@ -261,7 +261,7 @@ the `RemoteAddr` of a split connection is `127.0.0.1:1234` rather than `[::ffff:
 
 Split connections and the fallback connection have read and write deadlines of their own, like any `net.Conn`
 or `net.PacketConn`. Each flow has an idle timeout, which every packet read or written refreshes; a periodic
-sweeper ends idle flows within one and a quarter idle timeouts of their last packet. Only the read loop sets the
+sweeper ends idle flows between one and one and a quarter idle timeouts after their last packet. Only the read loop sets the
 read deadline of the underlying connection, and only the write loop sets its write deadline. `Split` clears the
 write deadline the connection may have, but leaves its read deadline.
 

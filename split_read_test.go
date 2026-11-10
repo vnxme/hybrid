@@ -318,7 +318,7 @@ func isClosedSplitConn(c SplitConn) bool { return c.SetDeadline(time.Time{}) != 
 // keepFlow starts a flow with start, which returns its connection and a function that keeps the flow active,
 // calls this function every quarter of idle for three idle timeouts, and returns the connection, or fails if it
 // has been closed. The flow may still expire if the goroutines of the test and of the splitter stall, e.g. on
-// a busy machine, as the splitter's clock ticks every quarter of idle too, so keepFlow starts the flow anew,
+// a busy machine, as the splitter's clock is coarse too, so keepFlow starts the flow anew,
 // up to 3 times, if it has expired after a call came over half a period late. A flow that never stays active
 // fails every time, whatever the stalls.
 func keepFlow(t *testing.T, idle time.Duration, start func() (SplitConn, func())) SplitConn {
@@ -430,6 +430,34 @@ func testSplitIdleTimeout(t *testing.T) {
 		}
 	})
 
+	// The clock a packet reads lags behind by up to a sweep period, so a flow is idle for the timeout only once
+	// the clock is a period past it. The splitter has no loops, so that the test drives the clock by hand.
+	t.Run("Bounds", func(t *testing.T) {
+		s := &splitter{cfg: (&SplitConfig{IdleTimeout: 8 * time.Second}).resolve(), done: make(chan struct{})}
+		s.swept.m = make(map[*splitConn]struct{})
+		period := s.sweepPeriod()
+		if period != time.Second {
+			t.Fatalf("sweepPeriod() = %v, want %v", period, time.Second)
+		}
+		c := s.newConnection(&splitPacketInfo{key: flowKey{src: addrKey{ap: netip.MustParseAddrPort("192.0.2.1:1")}}})
+		touched := 3 * period // The clock when the last packet came, up to a period before
+		c.touched.Store(int64(touched))
+		s.swept.m[c] = struct{}{}
+		for _, test := range []struct {
+			clock   time.Duration
+			expired bool
+		}{
+			{touched + s.cfg.idleTimeout, false},              // Maybe idle for 7s only
+			{touched + s.cfg.idleTimeout + period - 1, false}, // Maybe idle for just under 8s
+			{touched + s.cfg.idleTimeout + period, true},      // Idle for 8s at least, and 10s at most
+		} {
+			s.sweep(int64(test.clock), nil)
+			if got := isClosedChan(c.localDone); got != test.expired {
+				t.Errorf("expired at clock %v = %t, want %t", test.clock, got, test.expired)
+			}
+		}
+	})
+
 	// A sweep expiring a flow once the splitter has stopped discards its connection, which must not wait for
 	// the sweep itself, or stopping would wait for the sweeper forever. With no idle timeout, there is no sweeper,
 	// so the sweep is run by hand, and every flow is idle for long enough.
@@ -441,7 +469,7 @@ func testSplitIdleTimeout(t *testing.T) {
 
 		swept := make(chan struct{})
 		go func() {
-			ln.(*splitter).sweep(1, nil)
+			ln.(*splitter).sweep(int64(time.Hour), nil)
 			close(swept)
 		}()
 		select {

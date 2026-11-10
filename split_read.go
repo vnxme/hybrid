@@ -299,12 +299,13 @@ func (s *splitter) discard(c *splitConn) {
 }
 
 // sweepLoop keeps the clock of the splitter, and ends the flows idle for the idle timeout, checking them every
-// quarter of it, so that a flow ends within one and a quarter idle timeouts of its last packet.
+// sweep period, an eighth of the timeout, so that a flow ends between one and one and a quarter idle timeouts
+// after its last packet.
 func (s *splitter) sweepLoop() {
 	defer s.wg.Done()
 
 	start := time.Now() // The clock is zero until the first tick, as is the last packet time of a new flow
-	ticker := time.NewTicker(max(s.cfg.idleTimeout/4, time.Millisecond))
+	ticker := time.NewTicker(s.sweepPeriod())
 	defer ticker.Stop()
 	var expired []*splitConn // Reused across ticks
 	for {
@@ -319,13 +320,19 @@ func (s *splitter) sweepLoop() {
 	}
 }
 
+// sweepPeriod returns how often the sweeper ticks, i.e. how coarse the clock of the splitter is.
+func (s *splitter) sweepPeriod() time.Duration { return max(s.cfg.idleTimeout/8, time.Millisecond) }
+
 // sweep ends the flows idle for the idle timeout at the given clock, and returns expired emptied, for reuse.
-// The connections are expired once swept is unlocked, as expiring one after the splitter stops discards it,
-// which locks swept too.
+// The clock read by a packet lags behind it by up to a sweep period, so a flow is idle for the timeout only once
+// the clock is a period past it: then a flow expires at least one timeout and at most one timeout and two periods
+// after its last packet. The connections are expired once swept is unlocked, as expiring one after the splitter
+// stops discards it, which locks swept too.
 func (s *splitter) sweep(clock int64, expired []*splitConn) []*splitConn {
+	idle := int64(s.cfg.idleTimeout + s.sweepPeriod())
 	s.swept.Lock()
 	for c := range s.swept.m {
-		if clock-c.touched.Load() >= int64(s.cfg.idleTimeout) {
+		if clock-c.touched.Load() >= idle {
 			delete(s.swept.m, c)
 			expired = append(expired, c)
 		}
