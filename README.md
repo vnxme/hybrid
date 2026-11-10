@@ -321,6 +321,11 @@ Every drop is counted by its reason.
 | `PacketInfo`        | false   | Enables [packet info](#packet-info) on a `UDPConn`, so that flows are told apart by destination too         |
 | `ErrorFunc`         | nil     | Called with the error of `pc` that stops it, of each read it goes on after, and of each `WriteFailed` write |
 
+Each packet queued holds a buffer of its size, rounded up by at most a third, so the split connections may hold
+up to `MaxFlows` × `ReadQueueSize` packets at once, besides `FallbackQueueSize` and `WriteQueueSize` of them:
+with the defaults, about 400 MB of 1500-byte packets, or 16 GiB of the largest datagrams. Lower `MaxFlows` or
+`ReadQueueSize` where memory is scarce, e.g. to the number of clients expected and the burst a handler takes.
+
 As the next packet of an expired released flow goes to `Accept` again, `IdleTimeout` should be no shorter than
 that of the application serving the fallback connection. `PacketInfo` matters for a socket listening on
 an unspecified address: without it, replies may go from an address other than the one a client sent to.

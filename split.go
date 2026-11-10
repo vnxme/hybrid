@@ -117,6 +117,9 @@ type SplitConfig struct {
 
 	// ReadQueueSize is the maximum number of packets waiting to be read from each split connection,
 	// [DefaultSplitReadQueueSize] by default. A packet is dropped if the queue of its split connection is full.
+	// As each packet queued holds a buffer of its size, rounded up by at most a third, the split connections
+	// may hold up to MaxFlows times ReadQueueSize packets at once: with the defaults, about 400 MB of 1500-byte
+	// packets, or 16 GiB of the largest datagrams, so lower either of them where memory is scarce.
 	ReadQueueSize int
 
 	// FallbackQueueSize is the maximum number of packets waiting to be read from the fallback connection,
