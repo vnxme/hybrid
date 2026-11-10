@@ -259,8 +259,8 @@ func testSplitReadDrops(t *testing.T) {
 	})
 
 	t.Run("TableFullEnded", func(t *testing.T) {
-		// A flow released to a fallback connection closed since has ended, but nothing has reported it,
-		// so the full table is swept for ended flows before a new flow is dropped
+		// A flow released to a fallback connection closed since has ended, which closing the fallback connection
+		// reports, so that the flow frees its place in the full table
 		write, ln := setup(t, &SplitConfig{MaxFlows: 1, FallbackConn: true})
 		write(a, "a1")
 		releaseSplitConn(t, ln)
@@ -274,6 +274,25 @@ func testSplitReadDrops(t *testing.T) {
 			t.Errorf("RemoteAddr(), packets read = %s, %q, want %s, b1", conn.RemoteAddr(), got, b)
 		}
 		waitSplitStats(t, ln, SplitStats{})
+	})
+
+	t.Run("TableFullReleasedAfterFallbackClosed", func(t *testing.T) {
+		// A flow released once the fallback connection is closed ends at once, which Release reports
+		write, ln := setup(t, &SplitConfig{MaxFlows: 1, FallbackConn: true})
+		write(a, "a1")
+		conn := acceptSplitConn(t, ln)
+		if err := ln.Fallback().Close(); err != nil {
+			t.Fatalf("Close() = %v, want nil", err)
+		}
+		if err := conn.Release(); err != nil {
+			t.Fatalf("Release() = %v, want nil", err)
+		}
+		write(b, "b1")
+		conn = acceptSplitConn(t, ln)
+		if got := readSplitConn(t, conn); conn.RemoteAddr().String() != b.String() || strings.Join(got, " ") != "b1" {
+			t.Errorf("RemoteAddr(), packets read = %s, %q, want %s, b1", conn.RemoteAddr(), got, b)
+		}
+		waitSplitStats(t, ln, SplitStats{NoFallback: 1})
 	})
 }
 

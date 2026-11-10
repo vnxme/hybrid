@@ -113,12 +113,9 @@ func (s *splitter) route(data []byte, p *splitPacketInfo) {
 	c, ok := s.flows[p.key]
 	if !ok || c.ended() {
 		if !ok && len(s.flows) >= s.cfg.maxFlows {
-			// Delete the flows of closed connections whose closing hasn't been reported yet, then check again
-			for _, e := range s.flows {
-				if e.ended() {
-					s.deleteFlow(e)
-				}
-			}
+			// Delete the flows of the connections closed since the batch has been read, then check again. Every flow
+			// that ends is reported, so the table needn't be searched, which would cost each packet of a flood
+			s.deleteLoop()
 			if len(s.flows) >= s.cfg.maxFlows {
 				s.drops.tableFull.Add(1)
 				return

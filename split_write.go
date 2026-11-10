@@ -109,6 +109,21 @@ func (s *splitter) unindexRemote(c *splitConn) {
 	}
 }
 
+// endReleased reports every released flow for deletion, as the fallback connection has closed, so that their
+// next packets start new flows, and the flow table needn't be searched for them once it's full.
+func (s *splitter) endReleased() {
+	s.remotes.RLock()
+	var ended []*splitConn
+	for _, conns := range s.remotes.m {
+		ended = append(ended, conns...)
+	}
+	s.remotes.RUnlock()
+
+	for _, c := range ended { // Once remotes is unlocked, as discarding a connection locks it
+		s.deleteConnection(c)
+	}
+}
+
 // writeLoop writes the packets of the write queue to the underlying connection, until the splitter closes
 // or the underlying connection does.
 func (s *splitter) writeLoop() {

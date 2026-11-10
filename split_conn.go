@@ -218,6 +218,11 @@ func (sc *splitConn) Release(pkts ...[]byte) error {
 			sc.splitter.toFallback(pkt)
 		default:
 			sc.closeLocal()
+			// Released once the fallback connection is closed, the flow ends: report it, unless closing the fallback
+			// connection has, as it finds the flow indexed if it's closed after this check
+			if f := sc.splitter.fallback; f != nil && isClosedChan(f.localDone) {
+				sc.splitter.deleteConnection(sc)
+			}
 			return nil
 		}
 	}
@@ -283,12 +288,13 @@ func (s *splitter) newFallback() *splitFallback {
 // Close closes the fallback connection, so that the packets queued are dropped, and the flows released end:
 // the next packet starts a new flow, queued for Accept.
 func (sc *splitFallback) Close() error {
-	var err error
 	if !sc.closeLocal() {
-		err = sc.opError("close", sc.LocalAddr(), nil, errSplitClosed)
+		sc.discard()
+		return sc.opError("close", sc.LocalAddr(), nil, errSplitClosed)
 	}
 	sc.discard()
-	return err
+	sc.splitter.endReleased()
+	return nil
 }
 
 // ReadFrom reads a packet of a released flow, and returns a copy of the remote address of the flow,
