@@ -364,11 +364,16 @@ func (s *splitter) AcceptSplit() (SplitConn, error) {
 		return nil, s.err
 	}
 
-	select {
-	case conn := <-s.acceptQueue:
-		return conn, nil
-	case <-s.done:
-		return nil, s.err
+	for {
+		select {
+		case conn := <-s.acceptQueue:
+			if isClosedChan(conn.localDone) { // Expired while queued, so its flow has ended, and nothing serves it
+				continue
+			}
+			return conn, nil
+		case <-s.done:
+			return nil, s.err
+		}
 	}
 }
 

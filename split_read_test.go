@@ -367,6 +367,19 @@ func testSplitIdleTimeout(t *testing.T) {
 		}
 	})
 
+	t.Run("ExpiredUnaccepted", func(t *testing.T) {
+		// Accept skips the connection of a flow expired while queued, which nothing would serve
+		b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+		client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: idle})
+		writeFrom(t, client, a, "a1")
+		waitSplitStats(t, ln, SplitStats{ConnClosed: 1}) // a1, dropped as the flow of a expires
+		writeFrom(t, client, b, "b1")
+		if conn := acceptSplitConn(t, ln); conn.RemoteAddr().String() != b.String() || isClosedSplitConn(conn) {
+			t.Errorf("AcceptSplit() = the connection of %s, closed: %t, want that of %s, open",
+				conn.RemoteAddr(), isClosedSplitConn(conn), b)
+		}
+	})
+
 	t.Run("KeptByReads", func(t *testing.T) {
 		conn := keepFlow(t, idle, func() (SplitConn, func()) {
 			client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: idle})
