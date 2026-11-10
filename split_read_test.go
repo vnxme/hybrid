@@ -244,6 +244,22 @@ func testSplitReadDrops(t *testing.T) {
 		}
 	})
 
+	t.Run("AcceptQueueFullAllocs", func(t *testing.T) {
+		// Routing the packets of new flows while the accept queue is full allocates nothing, so a flood costs
+		// no garbage. The splitter has no loops, so that the test routes packets as the read loop does.
+		s := &splitter{cfg: (&SplitConfig{AcceptQueueSize: 1}).resolve(), flows: make(map[flowKey]*splitConn)}
+		s.acceptQueue = make(chan *splitConn, 1)
+		s.acceptQueue <- nil
+		p := splitPacketInfo{key: flowKey{src: addrKey{ap: netip.MustParseAddrPort("192.0.2.1:1")}}}
+		data := []byte("a1")
+		if allocs := testing.AllocsPerRun(100, func() { s.route(data, &p) }); allocs != 0 {
+			t.Errorf("route() allocates %v times, want 0", allocs)
+		}
+		if got := s.drops.acceptQueueFull.Load(); got != 101 { // AllocsPerRun runs once more to warm up
+			t.Errorf("AcceptQueueFull = %d, want 101", got)
+		}
+	})
+
 	t.Run("TableFull", func(t *testing.T) {
 		write, ln := setup(t, &SplitConfig{MaxFlows: 1})
 		write(a, "a1")

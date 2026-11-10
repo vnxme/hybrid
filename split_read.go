@@ -125,13 +125,14 @@ func (s *splitter) route(data []byte, p *splitPacketInfo) {
 		if ok { // An ended flow whose closing hasn't been reported yet
 			s.discard(c)
 		}
-		c = s.newConnection(p)
-		select {
-		case s.acceptQueue <- c:
-		default: // Don't create a flow, so that a retry of the packet is a new flow
+		// Don't create a flow if the accept queue is full, so that a retry of the packet is a new flow. Checked
+		// before creating the connection, so that a flood allocates nothing, as only the read loop queues them
+		if len(s.acceptQueue) == cap(s.acceptQueue) {
 			s.drops.acceptQueueFull.Add(1)
 			return
 		}
+		c = s.newConnection(p)
+		s.acceptQueue <- c
 
 		s.flows[p.key] = c
 		s.swept.Lock()
