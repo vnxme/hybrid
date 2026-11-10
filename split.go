@@ -104,7 +104,9 @@ type SplitConfig struct {
 	// ErrorFunc, if set, is called with each error of the underlying PacketConn that the splitter can't return
 	// otherwise: the one that stops the splitter, e.g. as the PacketConn fails, or is closed other than by Close,
 	// which matches net.ErrClosed, as Accept returns it then, and that of each write counted as WriteFailed.
-	// It's called on the goroutines of the splitter, so it shouldn't block.
+	// It's called on the goroutines of the splitter, so it shouldn't block. It may call Close or Stop once given
+	// the error that stops the splitter, but given that of a write, only on another goroutine, as it's called
+	// on the write loop then, which stopping waits for.
 	ErrorFunc func(error)
 
 	// AcceptQueueSize is the maximum number of split connections waiting for Accept,
@@ -451,7 +453,9 @@ func (s *splitter) reportError(err error) {
 // It returns the error of interrupt, or net.ErrClosed if the splitter has been stopped already.
 func (s *splitter) stop(interrupt func() error, cause error) error {
 	err := errSplitClosed
+	var stopped bool
 	s.once.Do(func() {
+		stopped = true
 		s.err = errSplitClosed
 		if cause != nil {
 			s.err = splitStoppedError{cause}
@@ -479,11 +483,12 @@ func (s *splitter) stop(interrupt func() error, cause error) error {
 		// and those of the split connections left to the read loop, which won't serve them anymore.
 		s.drainWrites()
 		s.drainReads()
-
-		if cause != nil {
-			s.reportError(s.err)
-		}
 	})
+
+	// Report the cause once stopping is done, so that ErrorFunc may call Close or Stop, which would wait for it
+	if stopped && cause != nil {
+		s.reportError(s.err)
+	}
 	return err
 }
 

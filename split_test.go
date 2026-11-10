@@ -734,7 +734,11 @@ func testSplitStoppedError(t *testing.T) {
 				t.Errorf("Accept() = %v, want net.ErrClosed wrapping %v", err, test.cause)
 			}
 
-			_ = ln.Close() // Returns once the splitter has stopped, and ErrorFunc has returned, if called
+			_ = ln.Close() // Returns once the splitter has stopped, maybe before ErrorFunc is called, as it's then
+			wait := time.After(time.Second)
+			if test.cause == nil {
+				wait = time.After(10 * time.Millisecond) // For a call that shouldn't come
+			}
 			select {
 			case got := <-reported:
 				if test.cause == nil {
@@ -742,13 +746,35 @@ func testSplitStoppedError(t *testing.T) {
 				} else if got != err { //nolint:errorlint // The same error
 					t.Errorf("ErrorFunc() got %v, want %v", got, err)
 				}
-			default:
+			case <-wait:
 				if test.cause != nil {
 					t.Errorf("ErrorFunc() hasn't been called, want %v", err)
 				}
 			}
 		})
 	}
+
+	// ErrorFunc may stop the splitter given the error that has stopped it, which would wait for itself otherwise
+	t.Run("ClosedByErrorFunc", func(t *testing.T) {
+		client, server := BufferedTrunk(16, nil, nil)
+		defer func() { _ = client.Close() }()
+		closed := make(chan error, 1)
+		var ln SplitListener
+		ready := make(chan struct{})
+		ln = Split(failingReads{server, errRead}, &SplitConfig{ErrorFunc: func(error) {
+			<-ready
+			closed <- ln.Close()
+		}})
+		close(ready)
+		select {
+		case err := <-closed:
+			if !errors.Is(err, net.ErrClosed) {
+				t.Errorf("Close() from ErrorFunc = %v, want net.ErrClosed", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Close() from ErrorFunc hasn't returned")
+		}
+	})
 }
 
 // testSplitUnderlyingDeadline ensures a deadline passed of the connection a splitter takes over neither keeps

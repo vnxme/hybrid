@@ -325,6 +325,8 @@ As the next packet of an expired released flow goes to `Accept` again, `IdleTime
 that of the application serving the fallback connection. `PacketInfo` matters for a socket listening on
 an unspecified address: without it, replies may go from an address other than the one a client sent to.
 `ErrorFunc` is called on the goroutines of the splitter, so it shouldn't block, e.g. it may log the error.
+It may call `Close` or `Stop` given the error that stops the splitter, but given that of a write only on another
+goroutine, as it's called on the write loop then, which stopping waits for.
 
 ### Statistics
 
