@@ -15,6 +15,8 @@
 package hybrid
 
 import (
+	"errors"
+	"io"
 	"net"
 	"time"
 )
@@ -43,6 +45,7 @@ func (s *splitter) readLoop() {
 	// Linux only flags it, Windows and trunks report errors, and a net.PacketConn reports nothing at all.
 	buf := make([]byte, s.cfg.readBufferSize+1)
 	var timeouts int // Read timeouts in a row the splitter hasn't caused
+	var errs int     // Other read errors in a row, but for closing
 	for !isClosedChan(s.done) {
 		// Read from the underlying PacketConn and check for errors. Note: any error is ignored if at least
 		// one byte has been read, e.g. of a truncated packet, while a negative count, e.g. of a socket closed
@@ -58,14 +61,18 @@ func (s *splitter) readLoop() {
 				continue
 			}
 
-			// The underlying PacketConn has failed, or has been closed other than by the splitter, unless
-			// the splitter is stopping
-			if !isClosedChan(s.done) {
-				s.fail(err)
+			if isClosedChan(s.done) { // The splitter is stopping
+				return
 			}
+			if errs = s.readError(errs, err); errs > 0 {
+				continue
+			}
+
+			// The underlying PacketConn has been closed other than by the splitter, or has failed for good
+			s.fail(err)
 			return
 		}
-		timeouts = 0
+		timeouts, errs = 0, 0
 
 		// Drain the read channels of the connections closed so far, e.g. while reading,
 		// and delete them from the flow table, so that their flows end before routing.
@@ -104,6 +111,23 @@ func (s *splitter) foreignTimeout(timeouts int) int {
 		_ = s.orig.SetReadDeadline(time.Time{})
 	}
 	return 0
+}
+
+// readError handles a read error other than a timeout, given the number of such errors in a row before it, and
+// returns the number after it, or zero if the underlying PacketConn has failed for good, so that the splitter
+// stops. Closing the PacketConn fails it for good, as does an error coming too many times in a row, while any
+// other error may be transient, e.g. of a packet the PacketConn fails to read, so the read loop reports it,
+// backs off rather than spin, and reads on.
+func (s *splitter) readError(errs int, err error) int {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return 0
+	}
+	if errs++; errs >= splitReadErrors {
+		return 0
+	}
+	s.reportError(err)
+	time.Sleep(splitReadErrorBackoff)
+	return errs
 }
 
 // route passes a packet to the split connection of its flow, or to the fallback connection if the flow

@@ -319,14 +319,16 @@ Every drop is counted by its reason.
 | `WriteTimeout`      | 500ms   | How long the write loop waits for one packet to be written; negative waits as long as it takes              |
 | `FallbackConn`      | false   | Gives the splitter a fallback connection; without one, packets of released flows are dropped                |
 | `PacketInfo`        | false   | Enables [packet info](#packet-info) on a `UDPConn`, so that flows are told apart by destination too         |
-| `ErrorFunc`         | nil     | Called with the error of `pc` that stops the splitter, and with that of each write counted as `WriteFailed` |
+| `ErrorFunc`         | nil     | Called with the error of `pc` that stops it, of each read it goes on after, and of each `WriteFailed` write |
 
 As the next packet of an expired released flow goes to `Accept` again, `IdleTimeout` should be no shorter than
 that of the application serving the fallback connection. `PacketInfo` matters for a socket listening on
 an unspecified address: without it, replies may go from an address other than the one a client sent to.
 `ErrorFunc` is called on the goroutines of the splitter, so it shouldn't block, e.g. it may log the error.
-It may call `Close` or `Stop` given the error that stops the splitter, but given that of a write only on another
-goroutine, as it's called on the write loop then, which stopping waits for.
+It may call `Close` or `Stop` given the error that stops the splitter, but given that of a read or a write only
+on another goroutine, as it's called on the read loop or the write loop then, which stopping waits for. A read
+error other than closing `pc` may be transient, so the splitter reads on after it, backing off for a millisecond,
+and stops only after 20 of them in a row.
 
 ### Statistics
 

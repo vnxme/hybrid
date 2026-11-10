@@ -25,6 +25,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -715,6 +716,22 @@ func (c failingReads) ReadFromTo([]byte) (int, net.Addr, net.Addr, int, error) {
 	return 0, nil, nil, 0, c.err
 }
 
+// transientReads is a FromToPacketConn whose reads fail with the given error as many times as left,
+// then read as the connection embedded does.
+type transientReads struct {
+	FromToPacketConn
+	err  error
+	left atomic.Int32
+}
+
+// ReadFromTo fails with the error while any failure is left, or reads as the connection embedded does.
+func (c *transientReads) ReadFromTo(b []byte) (int, net.Addr, net.Addr, int, error) {
+	if c.left.Add(-1) >= 0 {
+		return 0, nil, nil, 0, c.err
+	}
+	return c.FromToPacketConn.ReadFromTo(b)
+}
+
 // testSplitStoppedError ensures Accept fails with net.ErrClosed alone once Close has stopped the splitter, and
 // wrapping the error of the underlying connection once that has stopped it, which ErrorFunc gets as well.
 func testSplitStoppedError(t *testing.T) {
@@ -723,25 +740,26 @@ func testSplitStoppedError(t *testing.T) {
 		name  string
 		split func(FromToPacketConn, *SplitConfig) SplitListener
 		cause error // Nil if Close stops the splitter
+		reads int   // Errors of the reads the splitter reads on after, before it stops
 	}{
 		{"Close", func(pc FromToPacketConn, config *SplitConfig) SplitListener {
 			ln := Split(pc, config)
 			_ = ln.Close()
 			return ln
-		}, nil},
+		}, nil, 0},
 		{"ReadFailed", func(pc FromToPacketConn, config *SplitConfig) SplitListener {
 			return Split(failingReads{pc, errRead}, config)
-		}, errRead},
+		}, errRead, splitReadErrors - 1},
 		{"UnderlyingClosed", func(pc FromToPacketConn, config *SplitConfig) SplitListener {
 			ln := Split(pc, config)
 			_ = pc.Close()
 			return ln
-		}, net.ErrClosed},
+		}, net.ErrClosed, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client, server := BufferedTrunk(16, nil, nil)
 			defer func() { _ = client.Close() }()
-			reported := make(chan error, 2)
+			reported := make(chan error, splitReadErrors)
 			ln := test.split(server, &SplitConfig{ErrorFunc: func(err error) { reported <- err }})
 			defer func() { _ = ln.Close() }()
 
@@ -766,24 +784,53 @@ func testSplitStoppedError(t *testing.T) {
 			}
 
 			_ = ln.Close() // Returns once the splitter has stopped, maybe before ErrorFunc is called, as it's then
-			wait := time.After(time.Second)
 			if test.cause == nil {
-				wait = time.After(10 * time.Millisecond) // For a call that shouldn't come
-			}
-			select {
-			case got := <-reported:
-				if test.cause == nil {
+				select {
+				case got := <-reported:
 					t.Errorf("ErrorFunc() got %v, want no call", got)
-				} else if got != err { //nolint:errorlint // The same error
-					t.Errorf("ErrorFunc() got %v, want %v", got, err)
+				case <-time.After(10 * time.Millisecond): // For a call that shouldn't come
 				}
-			case <-wait:
-				if test.cause != nil {
-					t.Errorf("ErrorFunc() hasn't been called, want %v", err)
+				return
+			}
+			// Count the errors of the reads the splitter has read on after, reported before the one stopping it
+			var reads int
+			for got := error(nil); got != err; { //nolint:errorlint // The same error
+				select {
+				case got = <-reported:
+					switch got { //nolint:errorlint // The same errors
+					case err:
+					case test.cause:
+						reads++
+					default:
+						t.Fatalf("ErrorFunc() got %v, want %v or %v", got, test.cause, err)
+					}
+				case <-time.After(time.Second):
+					t.Fatalf("ErrorFunc() hasn't been called with %v", err)
 				}
+			}
+			if reads != test.reads {
+				t.Errorf("ErrorFunc() got %d errors of reads before stopping, want %d", reads, test.reads)
 			}
 		})
 	}
+
+	// A read error other than closing may be transient, so the splitter reads on after a few of them in a row
+	t.Run("ReadFailedTransiently", func(t *testing.T) {
+		a := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}
+		client, server := BufferedTrunk(16, nil, nil)
+		defer func() { _ = client.Close() }()
+		reported := make(chan error, splitReadErrors)
+		pc := &transientReads{FromToPacketConn: server, err: errRead}
+		pc.left.Store(splitReadErrors - 1)
+		ln := Split(pc, &SplitConfig{ErrorFunc: func(err error) { reported <- err }})
+		defer func() { _ = ln.Close() }()
+
+		writeFrom(t, client, a, "a1")
+		checkSplitPacket(t, acceptSplitConn(t, ln), "a1")
+		if got := len(reported); got != splitReadErrors-1 {
+			t.Errorf("ErrorFunc() got %d errors, want %d", got, splitReadErrors-1)
+		}
+	})
 
 	// ErrorFunc may stop the splitter given the error that has stopped it, which would wait for itself otherwise
 	t.Run("ClosedByErrorFunc", func(t *testing.T) {
@@ -792,9 +839,11 @@ func testSplitStoppedError(t *testing.T) {
 		closed := make(chan error, 1)
 		var ln SplitListener
 		ready := make(chan struct{})
-		ln = Split(failingReads{server, errRead}, &SplitConfig{ErrorFunc: func(error) {
-			<-ready
-			closed <- ln.Close()
+		ln = Split(failingReads{server, errRead}, &SplitConfig{ErrorFunc: func(err error) {
+			if stopped := (splitStoppedError{}); errors.As(err, &stopped) { // Not that of a read, on the read loop
+				<-ready
+				closed <- ln.Close()
+			}
 		}})
 		close(ready)
 		select {

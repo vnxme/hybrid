@@ -103,10 +103,11 @@ import (
 type SplitConfig struct {
 	// ErrorFunc, if set, is called with each error of the underlying PacketConn that the splitter can't return
 	// otherwise: the one that stops the splitter, e.g. as the PacketConn fails, or is closed other than by Close,
-	// which matches net.ErrClosed, as Accept returns it then, and that of each write counted as WriteFailed.
-	// It's called on the goroutines of the splitter, so it shouldn't block. It may call Close or Stop once given
-	// the error that stops the splitter, but given that of a write, only on another goroutine, as it's called
-	// on the write loop then, which stopping waits for.
+	// which matches net.ErrClosed, as Accept returns it then, that of each failed read the splitter reads on after,
+	// as the error may be transient, until 20 of them in a row stop it, and that of each write counted
+	// as WriteFailed. It's called on the goroutines of the splitter, so it shouldn't block. It may call Close or Stop
+	// once given the error that stops the splitter, but given that of a read or a write, only on another goroutine,
+	// as it's called on the read loop or the write loop then, which stopping waits for.
 	ErrorFunc func(error)
 
 	// AcceptQueueSize is the maximum number of split connections waiting for Accept,
@@ -584,6 +585,11 @@ const (
 	// to take its own, and clears the read deadline after that many of them in a row
 	splitForeignTimeoutBackoff = time.Millisecond
 	splitForeignTimeouts       = 20
+
+	// The read loop backs off from a read error other than a timeout or closing, which may be transient, and stops
+	// the splitter after that many of them in a row
+	splitReadErrorBackoff = time.Millisecond
+	splitReadErrors       = 20
 )
 
 // Shared variables
