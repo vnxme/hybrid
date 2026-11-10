@@ -302,6 +302,11 @@ func (p *pipe) write(b []byte) (n int, err error) {
 		src := b
 		b, ref = getBuf(len(src))
 		copy(b, src)
+		defer func() {
+			if err != nil { // Never queued, as an async pipe sends a write at once, so nothing else refers to it
+				putBuf(ref)
+			}
+		}()
 	}
 	for len(b) > 0 {
 		// Check again before every send, as the pipe may have been closed or the deadline exceeded

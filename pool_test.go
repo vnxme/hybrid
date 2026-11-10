@@ -14,7 +14,11 @@
 
 package hybrid
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+	"time"
+)
 
 // poisonBufs makes putBuf clear buffers until the test ends, so that any use of a buffer
 // after its return is detected, whichever goroutine gets the buffer next, if any.
@@ -50,6 +54,58 @@ func TestBufClass(t *testing.T) {
 			t.Fatalf("bufClass(%d) = %d, %d, want the class following %d, %d once %d is exceeded", n, idx, size, prevIdx, prevSize, prevSize)
 		}
 		prevIdx, prevSize = idx, size
+	}
+}
+
+// TestFailedWriteBuf ensures a buffered pipe or trunk returns the pooled copy of a write that fails while waiting
+// for room, so that the next write reuses it. A write of a large packet fails at its deadline over and over,
+// so that the bytes allocated tell whether the copies have been reused, as sync.Pool gives no other sign.
+func TestFailedWriteBuf(t *testing.T) {
+	const size, writes = 1 << bufPoolMaxBits, 64
+	payload := make([]byte, size)
+	for _, test := range []struct {
+		name  string
+		write func() (write func() error, done func())
+	}{
+		{"Pipe", func() (func() error, func()) {
+			p1, p2 := BufferedPipe(1)
+			_, _ = p1.Write([]byte("x")) // Fills the queue, which p2 never reads
+			return func() error {
+				_ = p1.SetWriteDeadline(time.Now().Add(time.Millisecond))
+				_, err := p1.Write(payload)
+				return err
+			}, func() { _ = p1.Close(); _ = p2.Close() }
+		}},
+		{"Trunk", func() (func() error, func()) {
+			t1, t2 := BufferedTrunk(1, nil, nil)
+			_, _ = t1.WriteTo([]byte("x"), nil) // Fills the queue, which t2 never reads
+			return func() error {
+				_ = t1.SetWriteDeadline(time.Now().Add(time.Millisecond))
+				_, err := t1.WriteTo(payload, nil)
+				return err
+			}, func() { _ = t1.Close(); _ = t2.Close() }
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			write, done := test.write()
+			defer done()
+			if err := write(); err == nil { // Warms the pool up
+				t.Fatal("write() = nil, want a timeout")
+			}
+
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			for range writes {
+				if err := write(); err == nil {
+					t.Fatal("write() = nil, want a timeout")
+				}
+			}
+			runtime.ReadMemStats(&after)
+			// The race detector drops a quarter of the buffers put back, so allow for half of the copies made
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated >= writes*size/2 {
+				t.Errorf("%d failed writes allocated %d bytes, want the copies reused", writes, allocated)
+			}
+		})
 	}
 }
 

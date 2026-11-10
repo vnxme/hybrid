@@ -303,14 +303,19 @@ func (tr *trunk) write(b []byte, dst, src net.Addr, idx int) (int, error) {
 	select { // Send without a blocking select if possible, which is much slower
 	case tr.wrTx <- pkt:
 	default:
+		var err error
 		select {
 		case tr.wrTx <- pkt:
 		case <-tr.localDone:
-			return 0, errTrunkClosed
+			err = errTrunkClosed
 		case <-tr.remoteDone:
-			return 0, errTrunkClosed
+			err = errTrunkClosed
 		case <-tr.wrDeadline.Wait():
-			return 0, errTrunkDeadlineExceeded
+			err = errTrunkDeadlineExceeded
+		}
+		if err != nil {
+			putBuf(pkt.ref) // Never queued, so nothing else refers to it
+			return 0, err
 		}
 	}
 
