@@ -140,6 +140,36 @@ func BenchmarkSplit(b *testing.B) {
 	}
 }
 
+// BenchmarkSplitShortFlows measures flows of a single packet each, e.g. of DNS queries: each operation is a write
+// to the splitter from a new source port, starting a flow, then its Accept, the read of the packet, and closing
+// the split connection, whose flow the read loop deletes on reading the packet of the next operation.
+func BenchmarkSplitShortFlows(b *testing.B) {
+	c, s := BufferedTrunk(16, nil, nil)
+	b.Cleanup(func() { _ = c.Close() })
+	ln := Split(s, &SplitConfig{FallbackConn: true}) // So that closing a flow tells whether it's indexed
+	b.Cleanup(func() { _ = ln.Close() })
+
+	src := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1).To4()}
+	p := make([]byte, 64)
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		src.Port = 1 + i%65535
+		if _, err := c.WriteToFrom(p, nil, src, 0); err != nil {
+			b.Fatal(err)
+		}
+		sc, err := ln.AcceptSplit()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := sc.Read(p); err != nil {
+			b.Fatal(err)
+		}
+		if err := sc.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestSplit runs the tests of splitters, of their split connections and of their fallback connections.
 func TestSplit(t *testing.T) {
 	t.Run(testSplitAcceptName, testSplitAccept)
