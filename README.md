@@ -332,8 +332,8 @@ an unspecified address: without it, replies may go from an address other than th
 `ErrorFunc` is called on the goroutines of the splitter, so it shouldn't block, e.g. it may log the error.
 It may call `Close` or `Stop` given the error that stops the splitter, but given that of a read or a write only
 on another goroutine, as it's called on the read loop or the write loop then, which stopping waits for. A read
-error other than closing `pc` may be transient, so the splitter reads on after it, backing off for a millisecond,
-and stops only after 20 of them in a row.
+error other than closing `pc` or reaching its end (`io.EOF`, e.g. of a stream adapted to packets) may be
+transient, so the splitter reads on after it, backing off for a millisecond, and stops only after 20 in a row.
 
 ### Statistics
 

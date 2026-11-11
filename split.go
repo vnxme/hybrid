@@ -102,12 +102,12 @@ import (
 // SplitConfig configures a splitter. The zero value of a field gives its default, as does a nil *SplitConfig.
 type SplitConfig struct {
 	// ErrorFunc, if set, is called with each error of the underlying PacketConn that the splitter can't return
-	// otherwise: the one that stops the splitter, e.g. as the PacketConn fails, or is closed other than by Close,
-	// which matches net.ErrClosed, as Accept returns it then, that of each failed read the splitter reads on after,
-	// as the error may be transient, until 20 of them in a row stop it, and that of each write counted
-	// as WriteFailed. It's called on the goroutines of the splitter, so it shouldn't block. It may call Close or Stop
-	// once given the error that stops the splitter, but given that of a read or a write, only on another goroutine,
-	// as it's called on the read loop or the write loop then, which stopping waits for.
+	// otherwise: the one that stops the splitter, e.g. as the PacketConn fails, reaches its end (io.EOF), or is
+	// closed other than by Close, which matches net.ErrClosed, as Accept returns it then, that of each failed read
+	// the splitter reads on after, as the error may be transient, until 20 of them in a row stop it, and that of
+	// each write counted as WriteFailed. It's called on the goroutines of the splitter, so it shouldn't block.
+	// It may call Close or Stop once given the error that stops the splitter, but given that of a read or a write,
+	// only on another goroutine, as it's called on the read loop or the write loop then, which stopping waits for.
 	ErrorFunc func(error)
 
 	// AcceptQueueSize is the maximum number of split connections waiting for Accept,

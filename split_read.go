@@ -115,11 +115,12 @@ func (s *splitter) foreignTimeout(timeouts int) int {
 
 // readError handles a read error other than a timeout, given the number of such errors in a row before it, and
 // returns the number after it, or zero if the underlying PacketConn has failed for good, so that the splitter
-// stops. Closing the PacketConn fails it for good, as does an error coming too many times in a row, while any
-// other error may be transient, e.g. of a packet the PacketConn fails to read, so the read loop reports it,
-// backs off rather than spin, and reads on.
+// stops. Closing the PacketConn fails it for good, as does reaching its end, e.g. of a stream adapted to packets
+// once its remote end is closed, or an error coming too many times in a row, while any other error may be
+// transient, e.g. of a packet the PacketConn fails to read, so the read loop reports it, backs off rather than
+// spin, and reads on.
 func (s *splitter) readError(errs int, err error) int {
-	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) {
 		return 0
 	}
 	if errs++; errs >= splitReadErrors {

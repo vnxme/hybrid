@@ -751,6 +751,11 @@ func testSplitStoppedError(t *testing.T) {
 		{"ReadFailed", func(pc FromToPacketConn, config *SplitConfig) SplitListener {
 			return Split(failingReads{pc, errRead}, config)
 		}, errRead, splitReadErrors - 1},
+		{"StreamEnded", func(_ FromToPacketConn, config *SplitConfig) SplitListener {
+			c1, c2 := BufferedPipe(16) // A stream adapted to packets ends once its remote end is closed
+			_ = c1.Close()
+			return Split(StreamToPacketConn(c2), config)
+		}, io.EOF, 0},
 		{"UnderlyingClosed", func(pc FromToPacketConn, config *SplitConfig) SplitListener {
 			ln := Split(pc, config)
 			_ = pc.Close()
