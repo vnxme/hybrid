@@ -517,7 +517,7 @@ func testSplitWriteUnsent(t *testing.T) {
 	if err := ln.Close(); err != nil {
 		t.Fatalf("Close() = %v, want nil", err)
 	}
-	if got, want := ln.Stats(), (SplitStats{WriteUnsent: 2}); got != want {
+	if got, want := splitDrops(ln), (SplitStats{WriteUnsent: 2}); got != want {
 		t.Errorf("Stats() = %+v, want %+v", got, want)
 	}
 }

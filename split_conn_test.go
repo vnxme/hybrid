@@ -212,7 +212,7 @@ func testSplitConnCloseDrops(t *testing.T) {
 		client, ln := splitTrunk(t, nil)
 		conn := queue(t, client, ln)
 		_ = conn.Close() // Drops the packets at once, though the read loop deletes the flow only after reading
-		if got, want := ln.Stats(), (SplitStats{ConnClosed: 3}); got != want {
+		if got, want := splitDrops(ln), (SplitStats{ConnClosed: 3}); got != want {
 			t.Errorf("Stats() = %+v, want %+v", got, want)
 		}
 	})
@@ -236,7 +236,7 @@ func testSplitConnCloseDrops(t *testing.T) {
 		conn := queue(t, client, ln)
 		_ = conn.Close() // Left to the read loop, which reads no packet to delete it after
 		_ = ln.Close()
-		if got, want := ln.Stats(), (SplitStats{ConnClosed: 3}); got != want {
+		if got, want := splitDrops(ln), (SplitStats{ConnClosed: 3}); got != want {
 			t.Errorf("Stats() = %+v, want %+v", got, want)
 		}
 	})
@@ -251,7 +251,7 @@ func testSplitConnCloseDrops(t *testing.T) {
 		checkSplitPacket(t, conn, "a1")
 		checkSplitPacket(t, conn, "a2")
 		_ = ln.Close() // Closes the connection of b, which Accept no longer returns
-		if got, want := ln.Stats(), (SplitStats{ConnClosed: 2}); got != want {
+		if got, want := splitDrops(ln), (SplitStats{ConnClosed: 2}); got != want {
 			t.Errorf("Stats() = %+v, want %+v", got, want)
 		}
 	})
@@ -566,7 +566,7 @@ func testSplitConnCloseAfterStop(t *testing.T) {
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close() of the connection = %v, want nil", err)
 	}
-	if got, want := ln.Stats(), (SplitStats{ConnClosed: 2}); got != want {
+	if got, want := splitDrops(ln), (SplitStats{ConnClosed: 2}); got != want {
 		t.Errorf("Stats() = %+v, want %+v", got, want)
 	}
 }

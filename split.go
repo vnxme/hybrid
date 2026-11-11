@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 // Splitter design.
@@ -97,9 +98,12 @@ import (
 //
 // Dropping. Like a UDP socket whose buffer is full, the splitter never blocks its read loop on a slow reader:
 // it drops a packet if the queue of its connection is full, if the accept queue is full (without creating
-// a flow, so that a retry by the client is a new flow), if the flow table is full, or if the packet has no
-// destination address while the splitter uses destination addresses. The write loop drops a packet whose write
-// times out or fails. Every drop is counted by its reason, and the counters can be read with Stats.
+// a flow, so that a retry by the client is a new flow), if the flow table is full, if the packets queued hold
+// as many bytes as they may already, or if the packet has no destination address while the splitter uses
+// destination addresses. The write loop drops a packet whose write times out or fails. Every drop is counted
+// by its reason, and the counters can be read with Stats. A single counter of the bytes the packets queued for
+// reading hold, which the read loop adds to and every read takes from, bounds the memory of all the queues
+// at once, as their sizes multiplied by the number of flows wouldn't.
 
 // SplitConfig configures a splitter. The zero value of a field gives its default, as does a nil *SplitConfig.
 type SplitConfig struct {
@@ -119,15 +123,20 @@ type SplitConfig struct {
 
 	// ReadQueueSize is the maximum number of packets waiting to be read from each split connection,
 	// [DefaultSplitReadQueueSize] by default. A packet is dropped if the queue of its split connection is full.
-	// As each packet queued holds a buffer of its size, rounded up by at most a third, the split connections
-	// may hold up to MaxFlows times ReadQueueSize packets at once: with the defaults, about 400 MB of 1500-byte
-	// packets, or 16 GiB of the largest datagrams, so lower either of them where memory is scarce.
 	ReadQueueSize int
 
 	// FallbackQueueSize is the maximum number of packets waiting to be read from the fallback connection,
 	// [DefaultSplitFallbackQueueSize] by default. A packet is dropped if the queue of the fallback connection
 	// is full.
 	FallbackQueueSize int
+
+	// MaxQueuedBytes is the maximum number of bytes the packets waiting to be read from the split connections
+	// and from the fallback connection may hold at once, [DefaultSplitMaxQueuedBytes] by default. A packet is
+	// dropped if it doesn't fit, before it starts a new flow. Each packet holds a buffer of its size, rounded
+	// up by at most a third, and a few dozen bytes more, so the queues alone would let MaxFlows times
+	// ReadQueueSize packets take up to 16 GiB of the largest datagrams with the defaults. A negative maximum
+	// sets none, leaving the queues alone to limit the packets.
+	MaxQueuedBytes int
 
 	// IdleTimeout is how long a flow may go without a packet read or written before it ends,
 	// [DefaultSplitIdleTimeout] by default: its split connection is closed, and its next packet starts
@@ -200,6 +209,9 @@ func (c *SplitConfig) resolve() splitConfig {
 		packetInfo:        c.PacketInfo,
 	}
 	cfg.readBufferSize = max(cfg.readBufferSize, minSplitReadBufferSize)
+	if c.MaxQueuedBytes >= 0 { // Or no maximum
+		cfg.maxQueuedBytes = int64(orDefault(c.MaxQueuedBytes, DefaultSplitMaxQueuedBytes))
+	}
 	return cfg
 }
 
@@ -238,16 +250,17 @@ type SplitListener interface {
 	// it reads a packet longer than the buffer in part, with io.ErrShortBuffer as a temporary net.Error.
 	Fallback() FromToPacketConn
 
-	// Stats returns the numbers of packets dropped so far, by reason.
+	// Stats returns the numbers of packets dropped so far, by reason, and the bytes the packets queued hold now.
 	Stats() SplitStats
 }
 
-// SplitStats counts the packets a splitter has dropped, by reason.
+// SplitStats counts the packets a splitter has dropped, by reason, and the bytes the packets queued hold now.
 type SplitStats struct {
 	// Reading, in the order a packet meets the checks
 	Truncated       uint64 // The packet was larger than ReadBufferSize
 	NoSource        uint64 // The packet had no source address
 	NoDestination   uint64 // The packet had no destination address, while the splitter uses them
+	MemoryFull      uint64 // The packet didn't fit in MaxQueuedBytes, or one given to Release didn't
 	TableFull       uint64 // The flow table was full when the packet started a new flow
 	AcceptQueueFull uint64 // The accept queue was full when the packet started a new flow
 	ConnQueueFull   uint64 // The queue of the split connection of the packet was full
@@ -262,6 +275,9 @@ type SplitStats struct {
 	WriteTimedOut uint64 // The write loop timed out writing the packet
 	WriteFailed   uint64 // The write loop failed to write the packet, e.g. to an unreachable address
 	WriteUnsent   uint64 // The splitter closed, or its underlying connection did, before writing the packet
+
+	// Holding, rather than counting drops
+	QueuedBytes uint64 // The bytes the packets waiting to be read hold now, counted against MaxQueuedBytes
 }
 
 // splitter implements SplitListener for any underlying PacketConn.
@@ -296,12 +312,13 @@ type splitter struct {
 	}
 
 	// Free of pointers, so placed after the fields holding them, for the garbage collector to scan less
-	cfg   splitConfig
-	clock atomic.Int64 // Time since the sweeper started, kept by it, coarse but cheap to read
-	drops struct {
-		truncated, noSource, noDestination, tableFull, acceptQueueFull, connQueueFull, connClosed atomic.Uint64 // Reading
-		noFallback, fallbackQueueFull, fallbackClosed                                             atomic.Uint64 // Releasing
-		writeTimedOut, writeFailed, writeUnsent                                                   atomic.Uint64 // Writing
+	cfg    splitConfig
+	clock  atomic.Int64 // Time since the sweeper started, kept by it, coarse but cheap to read
+	queued atomic.Int64 // Bytes the packets waiting to be read hold, see queuedSize
+	drops  struct {
+		truncated, noSource, noDestination, memoryFull, tableFull, acceptQueueFull, connQueueFull, connClosed atomic.Uint64 // Reading
+		noFallback, fallbackQueueFull, fallbackClosed                                                         atomic.Uint64 // Releasing
+		writeTimedOut, writeFailed, writeUnsent                                                               atomic.Uint64 // Writing
 	}
 
 	// Stopping
@@ -422,12 +439,13 @@ func (s *splitter) Fallback() FromToPacketConn {
 	return s.fallback
 }
 
-// Stats returns the numbers of packets dropped so far, by reason.
+// Stats returns the numbers of packets dropped so far, by reason, and the bytes the packets queued hold now.
 func (s *splitter) Stats() SplitStats {
 	return SplitStats{
 		Truncated:         s.drops.truncated.Load(),
 		NoSource:          s.drops.noSource.Load(),
 		NoDestination:     s.drops.noDestination.Load(),
+		MemoryFull:        s.drops.memoryFull.Load(),
 		TableFull:         s.drops.tableFull.Load(),
 		AcceptQueueFull:   s.drops.acceptQueueFull.Load(),
 		ConnQueueFull:     s.drops.connQueueFull.Load(),
@@ -438,6 +456,7 @@ func (s *splitter) Stats() SplitStats {
 		WriteTimedOut:     s.drops.writeTimedOut.Load(),
 		WriteFailed:       s.drops.writeFailed.Load(),
 		WriteUnsent:       s.drops.writeUnsent.Load(),
+		QueuedBytes:       uint64(max(0, s.queued.Load())),
 	}
 }
 
@@ -532,6 +551,7 @@ type splitConfig struct {
 	acceptQueueSize   int
 	fallbackQueueSize int
 	maxFlows          int
+	maxQueuedBytes    int64 // Zero for no maximum
 	readBufferSize    int
 	readQueueSize     int
 	writeQueueSize    int
@@ -548,7 +568,8 @@ type splitPacket struct {
 	src  net.Addr   // The local address to write a packet from, if any
 	ref  *[]byte    // Reference to the pooled buffer of buf, if any
 	buf  []byte
-	idx  int // The interface index to write a packet through, if any
+	idx  int   // The interface index to write a packet through, if any
+	size int64 // The bytes a packet read holds, charged to the queued bytes of the splitter of conn until freed
 }
 
 // splitPackets holds reusable packets, so that queuing a packet allocates nothing.
@@ -567,8 +588,33 @@ func newSplitPacket(b []byte) *splitPacket {
 	return pkt
 }
 
-// free makes a packet and its buffer reusable. Neither must be used afterwards.
+// queuedPacket returns a packet with a copy of b, read for the connection c, with size charged to the queued
+// bytes of the splitter, as returned by fits.
+func (s *splitter) queuedPacket(b []byte, c *splitConn, size int64) *splitPacket {
+	pkt := newSplitPacket(b)
+	pkt.conn, pkt.size = c, size
+	s.queued.Add(size)
+	return pkt
+}
+
+// fits returns the bytes a packet of n bytes holds while queued, i.e. its buffer and itself, and reports whether
+// they fit in the maximum of queued bytes. Only the read loop and Release add to the queued bytes, after checking,
+// so they may exceed the maximum by a packet or so while both do.
+func (s *splitter) fits(n int) (int64, bool) {
+	size := n
+	if n > 0 && n <= 1<<bufPoolMaxBits {
+		_, size = bufClass(n)
+	}
+	size64 := int64(size) + int64(unsafe.Sizeof(splitPacket{}))
+	return size64, s.cfg.maxQueuedBytes == 0 || s.queued.Load()+size64 <= s.cfg.maxQueuedBytes
+}
+
+// free makes a packet and its buffer reusable, and gives the bytes it holds back if it's been queued for reading.
+// Neither must be used afterwards.
 func (pkt *splitPacket) free() {
+	if pkt.size != 0 {
+		pkt.conn.splitter.queued.Add(-pkt.size)
+	}
 	putBuf(pkt.ref)
 	*pkt = splitPacket{} // Holds no connection or address back from collection
 	splitPackets.Put(pkt)
@@ -580,6 +626,7 @@ const (
 	DefaultSplitFallbackQueueSize = 1024 // As the fallback connection may serve many flows
 	DefaultSplitIdleTimeout       = 30 * time.Second
 	DefaultSplitMaxFlows          = 8192
+	DefaultSplitMaxQueuedBytes    = 64 << 20           // 64 MiB, i.e. about 1000 of the largest datagrams, or 40000 of 1500 bytes
 	DefaultSplitReadBufferSize    = math.MaxUint16 - 8 // The largest UDP payload, over IPv6, as it is 20 bytes less over IPv4
 	DefaultSplitReadQueueSize     = 32
 	DefaultSplitWriteQueueSize    = 64

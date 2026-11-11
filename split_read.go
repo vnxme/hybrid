@@ -133,8 +133,14 @@ func (s *splitter) readError(errs int, err error) int {
 
 // route passes a packet to the split connection of its flow, or to the fallback connection if the flow
 // has been released. The first packet of a flow creates its split connection, and queues it for Accept.
-// It drops the packet rather than wait if a queue is full or the table is.
+// It drops the packet rather than wait if a queue is full, the table is, or the packets queued hold too many bytes.
 func (s *splitter) route(data []byte, p *splitPacketInfo) {
+	size, ok := s.fits(len(data)) // Checked first, so that a packet that doesn't fit starts no flow
+	if !ok {
+		s.drops.memoryFull.Add(1)
+		return
+	}
+
 	c, ok := s.flows[p.key]
 	if !ok || c.ended() {
 		if !ok && len(s.flows) >= s.cfg.maxFlows {
@@ -167,8 +173,7 @@ func (s *splitter) route(data []byte, p *splitPacketInfo) {
 	c.touch()
 	c.localIfIdx.Store(int64(p.idx)) // The latest one is used for replies
 
-	pkt := newSplitPacket(data)
-	pkt.conn = c
+	pkt := s.queuedPacket(data, c, size)
 
 	c.releaseMu.Lock() // Keeps the packets of a flow in order while it's being released
 	if c.released.Load() {

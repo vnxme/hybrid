@@ -215,9 +215,12 @@ func (sc *splitConn) Release(pkts ...[]byte) error {
 	sc.released.Store(true)
 	sc.splitter.indexRemote(sc)
 	for _, b := range pkts {
-		pkt := newSplitPacket(b)
-		pkt.conn = sc
-		sc.splitter.toFallback(pkt)
+		size, ok := sc.splitter.fits(len(b))
+		if !ok {
+			sc.splitter.drops.memoryFull.Add(1)
+			continue
+		}
+		sc.splitter.toFallback(sc.splitter.queuedPacket(b, sc, size))
 	}
 	for {
 		select {

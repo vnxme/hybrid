@@ -200,6 +200,7 @@ func TestSplit(t *testing.T) {
 	t.Run(testSplitNoSourceName, testSplitNoSource)
 	t.Run(testSplitPacketInfoFlowsName, testSplitPacketInfoFlows)
 	t.Run(testSplitPayloadSizesName, testSplitPayloadSizes)
+	t.Run(testSplitQueuedBytesName, testSplitQueuedBytes)
 	t.Run(testSplitReadCopiesAddrsName, testSplitReadCopiesAddrs)
 	t.Run(testSplitReadDropsName, testSplitReadDrops)
 	t.Run(testSplitReleaseName, testSplitRelease)
@@ -480,17 +481,43 @@ func (a testAddr) Network() string { return "test" }
 // String returns the address itself.
 func (a testAddr) String() string { return string(a) }
 
+// splitDrops returns the stats of a splitter but for the bytes the packets queued hold, which come and go,
+// i.e. its drops alone.
+func splitDrops(ln SplitListener) SplitStats {
+	s := ln.Stats()
+	s.QueuedBytes = 0
+	return s
+}
+
 // waitSplitStats waits until the splitter has dropped the given numbers of packets, or fails.
+// The bytes the packets queued hold are ignored, see waitQueuedBytes.
 func waitSplitStats(t *testing.T, ln SplitListener, want SplitStats) {
 	t.Helper()
-	s := ln
 	deadline := time.Now().Add(time.Second)
-	for got := s.Stats(); got != want; got = s.Stats() {
+	for got := splitDrops(ln); got != want; got = splitDrops(ln) {
 		if time.Now().After(deadline) {
 			t.Fatalf("Stats() = %+v, want %+v", got, want)
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// waitQueuedBytes waits until the packets queued in the splitter hold the given number of bytes, or fails.
+func waitQueuedBytes(t *testing.T, ln SplitListener, want uint64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for got := ln.Stats().QueuedBytes; got != want; got = ln.Stats().QueuedBytes {
+		if time.Now().After(deadline) {
+			t.Fatalf("Stats().QueuedBytes = %d, want %d", got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// queuedSize returns the bytes a packet of n bytes holds while queued in a splitter.
+func queuedSize(n int) uint64 {
+	size, _ := (&splitter{}).fits(n) // With no maximum
+	return uint64(size)              //nolint:gosec // G115: positive
 }
 
 // acceptSplitConn accepts a split connection, or fails if there is none within a second.
@@ -583,6 +610,7 @@ func testSplitConfig(t *testing.T) {
 		acceptQueueSize:   DefaultSplitAcceptQueueSize,
 		fallbackQueueSize: DefaultSplitFallbackQueueSize,
 		maxFlows:          DefaultSplitMaxFlows,
+		maxQueuedBytes:    DefaultSplitMaxQueuedBytes,
 		readBufferSize:    DefaultSplitReadBufferSize,
 		readQueueSize:     DefaultSplitReadQueueSize,
 		writeQueueSize:    DefaultSplitWriteQueueSize,
@@ -602,6 +630,7 @@ func testSplitConfig(t *testing.T) {
 		{"Zero", &SplitConfig{}, def},
 		{"Negative", &SplitConfig{AcceptQueueSize: -1, FallbackQueueSize: -1, MaxFlows: -1, ReadBufferSize: -1, ReadQueueSize: -1, WriteQueueSize: -1}, def},
 		{"NoTimeouts", &SplitConfig{IdleTimeout: -1, WriteTimeout: -1}, with(func(cfg *splitConfig) { cfg.idleTimeout, cfg.writeTimeout = 0, 0 })},
+		{"NoMaxQueuedBytes", &SplitConfig{MaxQueuedBytes: -1}, with(func(cfg *splitConfig) { cfg.maxQueuedBytes = 0 })},
 		{"ReadBufferSizeMin", &SplitConfig{ReadBufferSize: minSplitReadBufferSize - 1}, with(func(cfg *splitConfig) { cfg.readBufferSize = minSplitReadBufferSize })},
 		{"FallbackConn", &SplitConfig{FallbackConn: true}, with(func(cfg *splitConfig) { cfg.fallbackConn = true })},
 		{"Set", &SplitConfig{
@@ -613,6 +642,7 @@ func testSplitConfig(t *testing.T) {
 			ReadBufferSize:    minSplitReadBufferSize + 6,
 			WriteQueueSize:    7,
 			WriteTimeout:      8,
+			MaxQueuedBytes:    9,
 			PacketInfo:        true,
 		}, splitConfig{
 			idleTimeout:       4,
@@ -620,6 +650,7 @@ func testSplitConfig(t *testing.T) {
 			acceptQueueSize:   1,
 			fallbackQueueSize: 3,
 			maxFlows:          5,
+			maxQueuedBytes:    9,
 			readBufferSize:    minSplitReadBufferSize + 6,
 			readQueueSize:     2,
 			writeQueueSize:    7,
@@ -1223,6 +1254,7 @@ const (
 	testSplitNoSourceName                  = "NoSource"
 	testSplitPacketInfoFlowsName           = "PacketInfoFlows"
 	testSplitPayloadSizesName              = "PayloadSizes"
+	testSplitQueuedBytesName               = "QueuedBytes"
 	testSplitReadCopiesAddrsName           = "ReadCopiesAddrs"
 	testSplitReadDropsName                 = "ReadDrops"
 	testSplitReleaseName                   = "Release"

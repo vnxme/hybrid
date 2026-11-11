@@ -303,9 +303,9 @@ can't tell them apart. It deliberately gives no access to the socket, e.g. no
 
 Like a UDP socket whose buffer is full, the splitter never blocks its read loop on a slow reader. It drops
 a packet if the queue of its connection is full, if the accept queue is full (without creating a flow, so that
-a retry by the client is a new flow), if the flow table is full, or if the packet has no destination address
-while the splitter uses destination addresses. The write loop drops a packet whose write times out or fails.
-Every drop is counted by its reason.
+a retry by the client is a new flow), if the flow table is full, if the packets queued hold `MaxQueuedBytes`
+already, or if the packet has no destination address while the splitter uses destination addresses. The write loop
+drops a packet whose write times out or fails. Every drop is counted by its reason.
 
 ### Configuration
 
@@ -316,6 +316,7 @@ Every drop is counted by its reason.
 | `AcceptQueueSize`   | 8       | Split connections waiting for `Accept`; the first packet of a new flow is dropped beyond it                 |
 | `ReadQueueSize`     | 32      | Packets waiting to be read from each split connection                                                       |
 | `FallbackQueueSize` | 1024    | Packets waiting to be read from the fallback connection, which may serve many flows                         |
+| `MaxQueuedBytes`    | 64 MiB  | The bytes all the packets waiting to be read may hold; negative for no maximum                              |
 | `IdleTimeout`       | 30s     | How long a flow may go without a packet; negative keeps flows until closed                                  |
 | `MaxFlows`          | 8192    | The maximum number of flows; the first packet of a new flow is dropped beyond it                            |
 | `ReadBufferSize`    | 65527   | The maximum size of a packet read, at least 512; a larger packet is dropped                                 |
@@ -325,10 +326,13 @@ Every drop is counted by its reason.
 | `PacketInfo`        | false   | Enables [packet info](#packet-info) on a `UDPConn`, so that flows are told apart by destination too         |
 | `ErrorFunc`         | nil     | Called with the error of `pc` that stops it, of each read it goes on after, and of each `WriteFailed` write |
 
-Each packet queued holds a buffer of its size, rounded up by at most a third, so the split connections may hold
-up to `MaxFlows` × `ReadQueueSize` packets at once, besides `FallbackQueueSize` and `WriteQueueSize` of them:
-with the defaults, about 400 MB of 1500-byte packets, or 16 GiB of the largest datagrams. Lower `MaxFlows` or
-`ReadQueueSize` where memory is scarce, e.g. to the number of clients expected and the burst a handler takes.
+Each packet queued holds a buffer of its size, rounded up by at most a third, and a few dozen bytes more.
+The queues alone would let the split connections hold up to `MaxFlows` × `ReadQueueSize` packets at once, i.e.
+16 GiB of the largest datagrams with the defaults, so `MaxQueuedBytes` bounds the packets waiting to be read from
+the split connections and from the fallback connection together: a packet that doesn't fit is dropped, before it
+starts a flow, like one that doesn't fit in the buffer of a socket. The default of 64 MiB holds about 1000 of the
+largest datagrams, or 40000 of 1500 bytes. The packets waiting to be written are bounded by `WriteQueueSize`
+alone, as a write waits for room rather than being dropped.
 
 As the next packet of an expired released flow goes to `Accept` again, `IdleTimeout` should be no shorter than
 that of the application serving the fallback connection. `PacketInfo` matters for a socket listening on
@@ -348,6 +352,7 @@ transient, so the splitter reads on after it, backing off for a millisecond, and
 | Reading   | `Truncated`         | it was larger than `ReadBufferSize`                                  |
 |           | `NoSource`          | it had no source address                                             |
 |           | `NoDestination`     | it had no destination address, while the splitter uses them          |
+|           | `MemoryFull`        | it didn't fit in `MaxQueuedBytes`, or one given to `Release` didn't  |
 |           | `TableFull`         | the flow table was full when it started a new flow                   |
 |           | `AcceptQueueFull`   | the accept queue was full when it started a new flow                 |
 |           | `ConnQueueFull`     | the queue of its split connection was full                           |
@@ -358,6 +363,8 @@ transient, so the splitter reads on after it, backing off for a millisecond, and
 | Writing   | `WriteTimedOut`     | the write loop timed out writing it                                  |
 |           | `WriteFailed`       | the write loop failed to write it, e.g. to an unreachable address    |
 |           | `WriteUnsent`       | the splitter, or its underlying connection, closed before writing it |
+
+It also tells `QueuedBytes`, the bytes the packets waiting to be read hold now, counted against `MaxQueuedBytes`.
 
 ## Packet info
 

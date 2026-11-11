@@ -240,6 +240,31 @@ func testSplitReadDrops(t *testing.T) {
 		}
 	})
 
+	// A packet that doesn't fit in the bytes the packets queued may hold is dropped, before it starts a flow
+	t.Run("MemoryFull", func(t *testing.T) {
+		const size = 1000
+		write, ln := setup(t, &SplitConfig{MaxQueuedBytes: int(2 * queuedSize(size))}) //nolint:gosec // G115: small
+		packet := func(c byte) string { return strings.Repeat(string(c), size) }
+		write(a, packet('1'))
+		write(a, packet('2'))
+		write(a, packet('3')) // Doesn't fit
+		write(b, packet('1')) // Doesn't fit, so starts no flow
+		waitSplitStats(t, ln, SplitStats{MemoryFull: 2})
+		waitQueuedBytes(t, ln, 2*queuedSize(size))
+
+		conn := acceptSplitConn(t, ln)
+		if conn.RemoteAddr().String() != a.String() {
+			t.Fatalf("RemoteAddr() = %s, want %s", conn.RemoteAddr(), a)
+		}
+		checkSplitPacket(t, conn, packet('1')) // Makes room for one
+		write(b, packet('4'))
+		if conn := acceptSplitConn(t, ln); conn.RemoteAddr().String() != b.String() {
+			t.Fatalf("RemoteAddr() = %s, want %s, as the first packet of b has made no flow", conn.RemoteAddr(), b)
+		}
+		waitSplitStats(t, ln, SplitStats{MemoryFull: 2})
+		waitQueuedBytes(t, ln, 2*queuedSize(size))
+	})
+
 	t.Run("AcceptQueueFull", func(t *testing.T) {
 		write, ln := setup(t, &SplitConfig{AcceptQueueSize: 1})
 		write(a, "a1")
@@ -600,6 +625,90 @@ func testSplitNoSource(t *testing.T) {
 			waitSplitStats(t, ln, SplitStats{NoSource: 1})
 		})
 	}
+}
+
+// testSplitQueuedBytes ensures the bytes the packets queued hold are counted as they are queued, and given back
+// as they are read or dropped, whichever way: by closing, by expiring, by being released, or by stopping.
+func testSplitQueuedBytes(t *testing.T) {
+	a, b := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1}, &net.UDPAddr{IP: net.IPv4(192, 0, 2, 2), Port: 2}
+
+	t.Run("Read", func(t *testing.T) {
+		client, ln := splitTrunk(t, nil)
+		writeFrom(t, client, a, "a1")
+		writeFrom(t, client, a, "a22")
+		waitQueuedBytes(t, ln, queuedSize(2)+queuedSize(3))
+		conn := acceptSplitConn(t, ln)
+		checkSplitPacket(t, conn, "a1")
+		waitQueuedBytes(t, ln, queuedSize(3))
+		checkSplitPacket(t, conn, "a22")
+		waitQueuedBytes(t, ln, 0)
+	})
+
+	for _, test := range []struct {
+		name string
+		end  func(*splitConn)
+	}{
+		{"Closed", func(c *splitConn) { _ = c.Close() }},
+		{"Expired", func(c *splitConn) { c.expire() }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, ln := splitTrunk(t, &SplitConfig{IdleTimeout: -1})
+			writeFrom(t, client, a, "a1")
+			writeFrom(t, client, a, "a2")
+			conn := acceptSplitConn(t, ln).(*splitConn)
+			waitQueuedBytes(t, ln, 2*queuedSize(2))
+			test.end(conn)
+			waitQueuedBytes(t, ln, 0)
+		})
+	}
+
+	// The packets of a released flow move to the fallback connection with their bytes, as do those given
+	t.Run("Released", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
+		writeFrom(t, client, a, "a1")
+		writeFrom(t, client, a, "a2")
+		waitQueuedBytes(t, ln, 2*queuedSize(2))
+		if err := acceptSplitConn(t, ln).Release([]byte("a0")); err != nil {
+			t.Fatal(err)
+		}
+		waitQueuedBytes(t, ln, 3*queuedSize(2))
+		if got := readFallback(t, ln.Fallback()); len(got) != 3 {
+			t.Fatalf("packets of the fallback connection = %q, want 3", got)
+		}
+		waitQueuedBytes(t, ln, 0)
+
+		writeFrom(t, client, a, "a3")
+		waitQueuedBytes(t, ln, queuedSize(2))
+		_ = ln.Fallback().Close()
+		waitQueuedBytes(t, ln, 0)
+	})
+
+	// A packet given to Release that doesn't fit is dropped, while the others go on
+	t.Run("ReleasedMemoryFull", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true, MaxQueuedBytes: int(2 * queuedSize(2))}) //nolint:gosec // G115: small
+		writeFrom(t, client, a, "a1")
+		if err := acceptSplitConn(t, ln).Release([]byte("a0"), []byte("ax")); err != nil {
+			t.Fatal(err)
+		}
+		waitSplitStats(t, ln, SplitStats{MemoryFull: 1})
+		if got := strings.Join(readFallback(t, ln.Fallback()), " "); got != a.String()+":a0 "+a.String()+":a1" {
+			t.Errorf("packets of the fallback connection = %q, want a0 then a1", got)
+		}
+		waitQueuedBytes(t, ln, 0)
+	})
+
+	// Stopping gives back the bytes of the connections waiting for Accept, and of those closed meanwhile
+	t.Run("Stopped", func(t *testing.T) {
+		client, ln := splitTrunk(t, nil)
+		writeFrom(t, client, a, "a1")
+		writeFrom(t, client, b, "b1")
+		conn := acceptSplitConn(t, ln)
+		waitQueuedBytes(t, ln, 2*queuedSize(2))
+		_ = ln.Close()
+		waitQueuedBytes(t, ln, queuedSize(2)) // That of the connection accepted, which can still read it
+		checkSplitPacket(t, conn, "a1")
+		waitQueuedBytes(t, ln, 0)
+	})
 }
 
 // checkSplitPacket reads a packet from a split connection, and fails unless it's the one wanted.
