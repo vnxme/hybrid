@@ -324,8 +324,8 @@ func (s *splitter) discard(c *splitConn) {
 }
 
 // sweepLoop keeps the clock of the splitter, and ends the flows idle for the idle timeout, checking them every
-// sweep period, an eighth of the timeout, so that a flow ends between one and one and a quarter idle timeouts
-// after its last packet.
+// sweep period, an eighth of the timeout but at least a millisecond, so that a flow ends between one and one and
+// a quarter idle timeouts after its last packet, or up to 2ms later for a timeout under 8ms.
 func (s *splitter) sweepLoop() {
 	defer s.wg.Done()
 

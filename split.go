@@ -75,9 +75,11 @@ import (
 // a reload, may set its read deadline too: the read loop backs off from a timeout it hasn't caused, for them
 // to take their own, and clears the read deadline itself only after a few such timeouts in a row.
 //
-// Reading. Only the read loop changes the flow table, so it takes no lock on the way of a packet:
-// closed and expired flows reach it over a channel. It reads into a buffer as large as the largest
-// datagram, and copies each packet into a pooled buffer of its size before queueing it.
+// Reading. Only the read loop changes the flow table, so it looks flows up without a lock: the connections
+// closed by their handlers or expired by the sweeper are listed for it under a mutex, and it deletes their
+// flows before routing each packet. A packet takes only the lock of its flow, to be queued in order while
+// the flow is being released. The read loop reads into a buffer as large as the largest datagram, and copies
+// each packet into a pooled buffer of its size before queueing it.
 //
 // Writing. Split connections and the fallback connection hand their packets to the write loop, which
 // writes them to the underlying connection one by one, with the addresses of their flows. A write copies
@@ -130,9 +132,10 @@ type SplitConfig struct {
 	// IdleTimeout is how long a flow may go without a packet read or written before it ends,
 	// [DefaultSplitIdleTimeout] by default: its split connection is closed, and its next packet starts
 	// a new flow. A flow ends between one and one and a quarter timeouts after its last packet, as it's checked
-	// every eighth of the timeout. A negative timeout keeps every flow until its split connection is closed, and a released
-	// flow as long as the splitter is open. As the next packet of an expired released flow goes to Accept
-	// again, the timeout should be no shorter than that of the application serving the fallback connection.
+	// every eighth of the timeout, but no more often than every millisecond, so up to 2ms later for a timeout
+	// under 8ms. A negative timeout keeps every flow until its split connection is closed, and a released flow
+	// as long as the splitter is open. As the next packet of an expired released flow goes to Accept again,
+	// the timeout should be no shorter than that of the application serving the fallback connection.
 	IdleTimeout time.Duration
 
 	// MaxFlows is the maximum number of flows, [DefaultSplitMaxFlows] by default.

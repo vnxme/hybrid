@@ -261,9 +261,10 @@ the `RemoteAddr` of a split connection is `127.0.0.1:1234` rather than `[::ffff:
 
 Split connections and the fallback connection have read and write deadlines of their own, like any `net.Conn`
 or `net.PacketConn`. Each flow has an idle timeout, which every packet read or written refreshes; a periodic
-sweeper ends idle flows between one and one and a quarter idle timeouts after their last packet. Only the read loop sets the
-read deadline of the underlying connection, and only the write loop sets its write deadline. `Split` clears the
-write deadline the connection may have, but leaves its read deadline.
+sweeper ends idle flows between one and one and a quarter idle timeouts after their last packet, or up to 2 ms
+later for a timeout under 8 ms, as it checks them every eighth of the timeout, but at most every millisecond.
+Only the read loop sets the read deadline of the underlying connection, and only the write loop sets its write
+deadline. `Split` clears the write deadline the connection may have, but leaves its read deadline.
 
 As the deadlines of a socket are shared by everything using it, a splitter may share a socket with other readers,
 e.g. with another splitter during a reload, which interrupts its read with a read deadline passed. The read loop
@@ -274,8 +275,11 @@ interrupt that of another reader as well.
 
 ### Reading and writing
 
-The read loop changes the flow table alone, so a packet takes no lock on its way. It reads into a buffer as
-large as the largest datagram, and copies each packet into a pooled buffer of its size before queueing it.
+The read loop changes the flow table alone, so it looks flows up without a lock: the connections closed by their
+handlers or expired by the sweeper are listed for it under a mutex, and it deletes their flows before routing each
+packet. A packet takes only the lock of its flow, to be queued in order while the flow is being released. The read
+loop reads into a buffer as large as the largest datagram, and copies each packet into a pooled buffer of its size
+before queueing it.
 
 A write copies its packet into a pooled buffer and returns once the packet is queued for the write loop, the way
 a UDP write returns once the system has copied it: if the write queue is full, it waits for room until the write
