@@ -678,6 +678,10 @@ func TestPacketInfoUDPConnInterfaces(t *testing.T) {
 							if from.Is4() != to.Is4() || from.IsLinkLocalUnicast() != to.IsLinkLocalUnicast() {
 								continue
 							}
+							if !sendsFrom(from, src.Addr()) {
+								t.Logf("replies from %s skipped, as the system sends nothing from it to %s", from, src.Addr())
+								continue
+							}
 							reply(from, idx, from)
 							reply(from, 0, from)
 						}
@@ -686,6 +690,20 @@ func TestPacketInfoUDPConnInterfaces(t *testing.T) {
 			}
 		})
 	}
+}
+
+// sendsFrom reports whether a plain UDP socket bound to from can send to the address to, so that a packet info
+// reply from it can be expected. E.g. Windows fails with WSAEINVAL to send from an address of a unique local
+// prefix to an address of another one on the same interface. The probe goes to the port of the socket at to,
+// where nothing is expected to listen.
+func sendsFrom(from, to netip.Addr) bool {
+	c, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(from, 0)))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = c.Close() }()
+	_, err = c.WriteToUDPAddrPort([]byte{0}, netip.AddrPortFrom(to, c.LocalAddr().(*net.UDPAddr).AddrPort().Port()))
+	return err == nil
 }
 
 // negativeReadUDPConn is a UDPConn whose reads fail with a negative count, as Linux reports them for
