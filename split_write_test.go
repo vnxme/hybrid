@@ -160,20 +160,47 @@ func testSplitFallbackWriteFlows(t *testing.T) {
 		}
 	})
 
-	t.Run("ReleasedAfterDiscard", func(t *testing.T) {
+	// Expiring while being released, a flow is left indexed by neither, whichever comes first
+	t.Run("ReleaseRacingExpiry", func(t *testing.T) {
+		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true, IdleTimeout: -1})
+		s := ln.(*splitter)
+		for i := range 200 {
+			if _, err := client.WriteToFrom([]byte("p"), local1, &net.UDPAddr{IP: net.IPv4(192, 0, 2, byte(i)), Port: 1}, 1); err != nil {
+				t.Fatal(err)
+			}
+			c := acceptSplitConn(t, ln).(*splitConn)
+			start, done := make(chan struct{}), make(chan struct{}, 2)
+			go func() { <-start; _ = c.Release(); done <- struct{}{} }()
+			go func() { <-start; c.expire(); done <- struct{}{} }()
+			close(start)
+			<-done
+			<-done
+			s.remotes.RLock()
+			n := len(s.remotes.m)
+			s.remotes.RUnlock()
+			if n != 0 {
+				t.Fatalf("remote addresses indexed after a release racing expiry = %d, want 0", n)
+			}
+		}
+	})
+
+	// Closing a connection never released leaves the index alone, so that it doesn't hold the fallback writes up
+	t.Run("UnreleasedClosed", func(t *testing.T) {
 		client, ln := splitTrunk(t, &SplitConfig{FallbackConn: true})
 		send(t, client, local1, 1)
-		c := acceptSplitConn(t, ln).(*splitConn)
+		c := acceptSplitConn(t, ln)
 		s := ln.(*splitter)
-		s.unindexRemote(c) // As if it's expired and been discarded while its handler releases it
-		if err := c.Release(); err != nil {
-			t.Fatal(err)
-		}
-		s.remotes.RLock()
-		n := len(s.remotes.m)
-		s.remotes.RUnlock()
-		if n != 0 {
-			t.Errorf("remote addresses indexed = %d, want 0", n)
+		s.remotes.Lock() // As a long search of the index would
+		defer s.remotes.Unlock()
+		closed := make(chan error, 1)
+		go func() { closed <- c.Close() }()
+		select {
+		case err := <-closed:
+			if err != nil {
+				t.Errorf("Close() = %v, want nil", err)
+			}
+		case <-time.After(time.Second):
+			t.Error("Close() of a connection never released waits for the index of remote addresses")
 		}
 	})
 }

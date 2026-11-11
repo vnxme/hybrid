@@ -79,29 +79,27 @@ func (s *splitter) lookupRemote(addr net.Addr) *splitConn {
 	return latest
 }
 
-// indexRemote adds a released connection to the index of remote addresses, unless it's been discarded already,
-// e.g. as it's expired while being released, so that the fallback connection writes to its remote address from
-// its local address. Only released flows are indexed, as the fallback connection serves no other flows.
+// indexRemote adds a connection being released to the index of remote addresses, so that the fallback connection
+// writes to its remote address from its local address. Only released flows are indexed, as the fallback connection
+// serves no other flows. A connection is released only while open, so it's never discarded before being indexed.
 func (s *splitter) indexRemote(c *splitConn) {
 	if s.fallback == nil { // Nothing to write from
 		return
 	}
 	s.remotes.Lock()
 	defer s.remotes.Unlock()
-	if !c.discarded {
-		s.remotes.m[c.key.src] = append(s.remotes.m[c.key.src], c)
-	}
+	s.remotes.m[c.key.src] = append(s.remotes.m[c.key.src], c)
 }
 
-// unindexRemote removes a discarded connection from the index of remote addresses, if it's there,
-// and marks it discarded, so that it isn't indexed again.
+// unindexRemote removes a discarded connection from the index of remote addresses, if it's there. As it's closed,
+// so can't be released anymore, it's there only if released, so that closing one never released takes no lock
+// that the writes of the fallback connection wait for.
 func (s *splitter) unindexRemote(c *splitConn) {
-	if s.fallback == nil { // Nothing indexed
+	if s.fallback == nil || !c.released.Load() { // Nothing indexed
 		return
 	}
 	s.remotes.Lock()
 	defer s.remotes.Unlock()
-	c.discarded = true
 	if conns := slices.DeleteFunc(s.remotes.m[c.key.src], func(e *splitConn) bool { return e == c }); len(conns) > 0 {
 		s.remotes.m[c.key.src] = conns
 	} else {

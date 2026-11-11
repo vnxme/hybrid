@@ -122,8 +122,6 @@ type splitConn struct {
 	releaseMu sync.Mutex // Keeps the packets of the flow in order while it's being released
 
 	released atomic.Bool // Set before closing localDone, if the flow goes on to the fallback connection
-
-	discarded bool // Set once the connection is discarded, so that a late Release doesn't index it, guarded by remotes
 }
 
 // newConnection returns a new split connection for the flow of the given packet.
