@@ -29,7 +29,38 @@ import (
 // connection, e.g. those of FromToPacketConn or UDPConn, as forwarding them would bypass the aspect it changes.
 // Hence, a wrapper goes on top: anything that needs such methods, e.g. to enable packet info on a UDPConn,
 // should be given the connection before it's wrapped, and a method unrelated to the aspect changed, e.g.
-// SyscallConn, may still be reached through Unwrap.
+// SyscallConn, may still be reached through Unwrap, or with As, which follows Unwrap down a chain of wrappers.
+
+// maxUnwrapDepth is the most connections As examines, guarding against a chain of wrappers that loops.
+const maxUnwrapDepth = 64
+
+// As finds the first connection in the chain starting at c and following Unwrap that implements T, and returns it,
+// or reports false if none does. The chain may change between packet and stream connections at adapters, e.g.
+// one made by PacketToStreamConn, since As follows both Wrapper[PacketConn] and Wrapper[StreamConn]. The chain
+// ends at an untyped nil or at a connection that wraps nothing, and As gives up after maxUnwrapDepth connections.
+//
+// A connection found below a wrapper bypasses the wrapper: e.g. a UDPConn found under a FakeClosePacketConn
+// really closes the socket, and one under an IdleTimeoutPacketConn reads and writes without restarting
+// the idle time. Hence, As suits setting a connection up, e.g. with SyscallConn, rather than using it.
+func As[T any](c any) (T, bool) {
+	for range maxUnwrapDepth {
+		if c == nil {
+			break
+		}
+		if t, ok := c.(T); ok {
+			return t, true
+		}
+		if w, ok := c.(Wrapper[PacketConn]); ok {
+			c = w.Unwrap()
+		} else if w, ok := c.(Wrapper[StreamConn]); ok {
+			c = w.Unwrap()
+		} else {
+			break
+		}
+	}
+	var zero T
+	return zero, false
+}
 
 // fakeAddressPacketConn is a Wrapper[PacketConn] with customizable local and remote addresses.
 type fakeAddressPacketConn struct {

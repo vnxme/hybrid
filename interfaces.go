@@ -189,7 +189,8 @@ type WrappingStreamConn interface {
 // Wrapper can unwrap the underlying value of type T, e.g. a PacketConn or a StreamConn.
 // T must be the very type Unwrap returns, e.g. a wrapper returning a FromToPacketConn isn't a Wrapper[PacketConn].
 type Wrapper[T any] interface {
-	// Unwrap returns the underlying value as given to the wrapper.
+	// Unwrap returns the underlying value as given to the wrapper. It returns an untyped nil if there's none,
+	// never a typed nil, e.g. a nil pointer, which [As] would call methods on.
 	Unwrap() T
 }
 

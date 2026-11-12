@@ -25,6 +25,7 @@ import (
 
 // TestWrapper runs the tests of the wrappers of connections.
 func TestWrapper(t *testing.T) {
+	t.Run(testWrapperAsName, testWrapperAs)
 	t.Run(testWrapperFakeAddressPacketConnName, testWrapperFakeAddressPacketConn)
 	t.Run(testWrapperFakeAddressStreamConnName, testWrapperFakeAddressStreamConn)
 	t.Run(testWrapperFakeCloseName, testWrapperFakeClose)
@@ -32,6 +33,75 @@ func TestWrapper(t *testing.T) {
 	t.Run(testWrapperPacketToFromToPacketConnName, testWrapperPacketToFromToPacketConn)
 	t.Run(testWrapperPacketToStreamConnName, testWrapperPacketToStreamConn)
 	t.Run(testWrapperStreamToPacketConnName, testWrapperStreamToPacketConn)
+}
+
+// testWrapperAs ensures As returns the outermost connection of a chain that implements the type given, follows
+// both packet and stream wrappers, and reports false with a zero value if none does before the chain ends,
+// at an untyped nil or at a connection that wraps nothing, or before it exceeds maxUnwrapDepth, e.g. as it loops.
+func testWrapperAs(t *testing.T) {
+	c1, c2 := BufferedTrunk(4, nil, nil)
+	p1, p2 := BufferedPipe(4)
+	t.Cleanup(func() { _, _, _, _ = c1.Close(), c2.Close(), p1.Close(), p2.Close() })
+
+	idle := IdleTimeoutPacketConn(c1, 0)
+	top := FakeClosePacketConn(FakeAddressPacketConn(idle, nil, nil), nil)
+
+	ps := PacketToStreamConn(c1, nil, false)
+	cross := FakeClosePacketConn(StreamToPacketConn(ps), nil)
+
+	idleStream := IdleTimeoutStreamConn(p1, 0)
+	stream := FakeCloseStreamConn(idleStream, nil)
+
+	loop := &chainPacketConn{}
+	loop.next = loop
+
+	deepest := chainPacketConns(c1, maxUnwrapDepth-1) // c1 is the last connection As examines
+	tooDeep := chainPacketConns(c1, maxUnwrapDepth)   // c1 is beyond it
+
+	for _, test := range []struct {
+		name string
+		as   func() (got any, ok, zero bool)
+		want any // Nil if As must report false
+	}{
+		{"Nil", as[PacketConn](nil), nil},
+		{"Self", as[FromToPacketConn](c1), c1},
+		{"SelfNotWrapper", as[UDPConn](c1), nil},
+		{"Outermost", as[WrappingPacketConn](top), top},
+		{"Middle", as[Stopper](top), idle},
+		{"Bottom", as[FromToPacketConn](top), c1},
+		{"NotFound", as[UDPConn](top), nil},
+		{"Concrete", as[*pipe](stream), p1},
+		{"StreamMiddle", as[StoppableStreamConn](stream), idleStream},
+		{"PacketOverStream", as[StreamOverPacketConn](cross), ps},
+		{"PacketOverStreamBottom", as[FromToPacketConn](cross), c1},
+		{"StreamOverPacket", as[*pipe](FakeClosePacketConn(StreamToPacketConn(stream), nil)), p1},
+		{"UntypedNilEnd", as[FromToPacketConn](&chainPacketConn{}), nil},
+		{"Loop", as[FromToPacketConn](loop), nil},
+		{"LoopSelf", as[*chainPacketConn](loop), loop},
+		{"MaxDepth", as[FromToPacketConn](deepest[0]), c1},
+		{"TooDeep", as[FromToPacketConn](tooDeep[0]), nil},
+		{"TooDeepAbove", as[*chainPacketConn](tooDeep[0]), tooDeep[0]},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok, zero := test.as()
+			if test.want == nil {
+				if ok || !zero {
+					t.Errorf("As() = %v, %v, want a zero value, false", got, ok)
+				}
+			} else if !ok || got != test.want {
+				t.Errorf("As() = %v, %v, want %v, true", got, ok, test.want)
+			}
+		})
+	}
+}
+
+// as returns a function calling As[T] on c, which reports what As returns, and whether that's a zero value.
+func as[T any](c any) func() (got any, ok, zero bool) {
+	return func() (any, bool, bool) {
+		t, ok := As[T](c)
+		var z T
+		return t, ok, any(t) == any(z)
+	}
 }
 
 // testWrapperFakeAddressPacketConn ensures FakeAddressPacketConn returns the addresses given instead of the real ones,
@@ -634,7 +704,27 @@ func (c *staleSourcePacketConn) ReadFrom([]byte) (int, net.Addr, error) {
 	return c.n, c.src, net.ErrClosed
 }
 
+// chainPacketConn is a Wrapper[PacketConn] whose Unwrap returns next, whatever it is, e.g. nil or the chain itself.
+// It implements nothing else, as its embedded PacketConn is nil.
+type chainPacketConn struct {
+	PacketConn
+	next PacketConn
+}
+
+func (c *chainPacketConn) Unwrap() PacketConn { return c.next }
+
+// chainPacketConns returns n chainPacketConns on top of pc, the outermost first.
+func chainPacketConns(pc PacketConn, n int) []*chainPacketConn {
+	chain := make([]*chainPacketConn, n)
+	for i := n - 1; i >= 0; i-- {
+		chain[i] = &chainPacketConn{next: pc}
+		pc = chain[i]
+	}
+	return chain
+}
+
 const (
+	testWrapperAsName                       = "As"
 	testWrapperFakeAddressPacketConnName    = "FakeAddressPacketConn"
 	testWrapperFakeAddressStreamConnName    = "FakeAddressStreamConn"
 	testWrapperFakeCloseName                = "FakeClose"
